@@ -127,6 +127,9 @@ int add_contact(Geometry& g, std::string name, std::string kind, Pt a, Pt b);
 bool set_contact(Geometry& g, int contact, Pt a, Pt b);
 bool delete_contact(Geometry& g, int contact);
 bool rename_contact(Geometry& g, int contact, std::string name);
+bool set_contact_kind(Geometry& g, int contact, std::string kind);
+// A layered deck's domain (its `domain` line); each contact moves with its side, clipped (refused if one empties).
+bool set_domain(Geometry& g, Rect domain);
 [[nodiscard]] bool on_one_side(const Rect& domain, Pt a, Pt b) noexcept;
 
 // --- undo (GD4): the deck's text before each edit -------------------------------------------------------------

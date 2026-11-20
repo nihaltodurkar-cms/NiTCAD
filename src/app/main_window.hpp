@@ -39,6 +39,7 @@
 #include "NiTCAD/app/integration.hpp"
 #include "NiTCAD/app/live_check.hpp"
 #include "deck_pane.hpp"
+#include "geometry_page.hpp"
 #include "pages.hpp"
 #include "viewport.hpp"
 
@@ -87,9 +88,10 @@ inline constexpr float camera_move_ms = 250.0f;
 class MainWindow final : public Viewport::Host,
                          public DeckPane::Host,
                          public StartPage::Host,
-                         public RunPage::Host {
+                         public RunPage::Host,
+                         public GeometryPage::Host {
 public:
-    enum Tab : int { tab_start = 0, tab_view, tab_curves, tab_deck, tab_run, tab_results, tab_count };
+    enum Tab : int { tab_start = 0, tab_geometry, tab_view, tab_curves, tab_deck, tab_run, tab_results, tab_count };
 
     // nullptr when the window cannot be made (the reason on stderr is not available to a GUI: the
     // caller shows a message box).
@@ -126,6 +128,7 @@ public:
     [[nodiscard]] StartPage& start_page() noexcept { return *start_; }
     [[nodiscard]] RunPage& run_page() noexcept { return *run_page_; }
     [[nodiscard]] ResultsPage& results_page() noexcept { return *results_; }
+    [[nodiscard]] GeometryPage& geometry_page() noexcept { return *geometry_; }
     [[nodiscard]] const std::vector<Example>& examples() const noexcept { return examples_; }
     // Opens a copy of the example (in the copies' directory), as the start page does.
     bool open_example(std::size_t index);
@@ -219,7 +222,8 @@ public:
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
         id_tree = 4000, id_tabs, id_viewport, id_deck, id_metrics, id_inspector, id_toolbar, id_status, id_start,
-        id_run_page, id_results, id_console,
+        id_run_page, id_results, id_console, id_geometry, id_geometry_inspector,
+        id_geometry_controls = 7001,  // the Geometry section's controls (GeometryPage::Control from here)
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
         id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_cut, id_probe_text,
         // Unit 26c (YD1-YD3): arrows, streamlines and their seeds; the exploded view; the curves' pickers.
@@ -351,6 +355,12 @@ private:
     void snap_to(const render::CameraPreset& preset);
     // DeckPane::Host
     void deck_changed() override;
+    // GeometryPage::Host (Unit 26k).
+    [[nodiscard]] std::string geometry_deck() override;
+    void geometry_edited(const std::string& text) override;
+    [[nodiscard]] std::optional<geo::Rect> geometry_bounds() override;
+    void geometry_status(const std::string& cursor) override;
+    void geometry_selected(const std::string& region) override;
     // StartPage::Host and RunPage::Host
     void start_command(int command) override;
     void start_recent(std::size_t index) override;
@@ -381,6 +391,7 @@ private:
     std::unique_ptr<StartPage> start_;
     std::unique_ptr<RunPage> run_page_;
     std::unique_ptr<ResultsPage> results_;
+    std::unique_ptr<GeometryPage> geometry_;
     std::vector<Example> examples_;
     HACCEL accelerators_ = nullptr;
     HFONT font_ = nullptr, bold_ = nullptr;

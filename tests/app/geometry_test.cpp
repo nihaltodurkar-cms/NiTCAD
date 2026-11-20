@@ -569,3 +569,25 @@ TEST_CASE("app geometry: hit tests at 96, 144 and 192 dpi and zooms 1e-2 to 1e4 
         }
     }
 }
+
+TEST_CASE("app geometry: a contact's kind and a layered deck's domain (slice 2)", "[app][geometry]") {
+    Geometry g = must_read(layered_deck);
+    REQUIRE(set_contact_kind(g, 1, "schottky"));
+    CHECK(!set_contact_kind(g, 1, "9x"));
+    // Wider and taller: the contacts stay on their sides.
+    REQUIRE(set_domain(g, {{0, 0}, {3 * um, 15000}}));
+    std::string out = must_write(layered_deck, g);
+    CHECK(out.find("[contact body]\nkind = schottky\npatch = body\n") != std::string::npos);
+    CHECK(out.find("domain = 0 3um 0 1.5um\n") != std::string::npos);
+    CHECK(out.find("patch body = 0.2um 0, 0.8um 0") != std::string::npos);
+    CHECK(strip(must_read(out)) == strip(g));
+    // Narrower: the body contact clipped to it; then too narrow for it: refused, nothing changed.
+    REQUIRE(set_domain(g, {{0, 0}, {5000, um}}));
+    CHECK(g.contacts[1].b == Pt{5000, 0});
+    const Geometry before = g;
+    CHECK(!set_domain(g, {{0, 0}, {1000, um}}));
+    CHECK(g == before);
+    // Only a layered deck's domain is drawn by its line.
+    Geometry t = must_read(example("mosfet_2d.deck"), mosfet_bounds);
+    CHECK(!set_domain(t, {{0, 0}, {um, um}}));
+}

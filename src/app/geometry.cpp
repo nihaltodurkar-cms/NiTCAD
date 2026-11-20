@@ -258,13 +258,14 @@ std::expected<Geometry, std::string> read_geometry(std::string_view text, std::o
     const deck::Entry* type = find_entry(*mesh, "type");
     const std::string kind = type ? std::string(trim(type->value)) : std::string("tensor");
     if (kind == "tensor") {
-        if (find_entry(*mesh, "z")) return refuse("3D devices are edited in a later unit");
+        if (find_entry(*mesh, "z")) return refuse("3D geometry editing is a later unit");
         if (!find_entry(*mesh, "y")) return refuse("a 1D device has no geometry to draw");
         g.mesh = MeshKind::tensor;
     } else if (kind == "generate2d") {
         const deck::Entry* l = find_entry(*mesh, "layered");
         g.mesh = l && on_off(l->value).value_or(false) ? MeshKind::layered : MeshKind::tiled;
     } else {
+        if (kind == "generate3d" || kind == "extrude3d") return refuse("3D geometry editing is a later unit");
         return refuse("a " + kind + " mesh is not drawn in the editor (2D tensor and generate2d decks are)");
     }
     std::map<std::string, std::pair<Pt, Pt>> patches;  // generate2d's named segments
@@ -554,6 +555,11 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
         const deck::Section& s = *contacts[static_cast<std::size_t>(c.origin)];
         Edit e;
         if (c.name != s.name) e.header = "[contact " + c.name + "]";
+        for (std::size_t k = 0; k < s.entries.size(); ++k) {
+            if (s.entries[k].key == "kind" && std::string(trim(s.entries[k].value)) != c.kind && !c.kind.empty()) {
+                e.replace[k] = "kind = " + c.kind;
+            }
+        }
         if (g.mesh == MeshKind::tensor && c.editable) {
             const std::string face = face_of(g.domain, c.a, c.b);
             const auto whole = face_segment(g.domain, face);
@@ -1043,6 +1049,40 @@ Rect drag_handle(const Rect& r, int h, Pt p) noexcept {
     default: break;
     }
     return normalized(lo, hi);
+}
+
+}  // namespace NiTCAD::app::geo
+
+namespace NiTCAD::app::geo {
+
+bool set_contact_kind(Geometry& g, int contact, std::string kind) {
+    if (!editing(g) || contact < 0 || contact >= static_cast<int>(g.contacts.size()) || !identifier(kind)) return false;
+    g.contacts[static_cast<std::size_t>(contact)].kind = std::move(kind);
+    return true;
+}
+
+bool set_domain(Geometry& g, Rect d) {
+    if (!editing(g) || g.mesh != MeshKind::layered || d.lo.x >= d.hi.x || d.lo.y >= d.hi.y) return false;
+    // Each contact moves with its side, clipped to it; refused when one would be empty.
+    std::vector<Contact> moved = g.contacts;
+    for (Contact& c : moved) {
+        const Rect& o = g.domain;
+        const bool vertical = c.a.x == c.b.x;
+        if (vertical) {
+            const Coord x = c.a.x == o.lo.x ? d.lo.x : d.hi.x;
+            c.a = {x, std::max(c.a.y, d.lo.y)};
+            c.b = {x, std::min(c.b.y, d.hi.y)};
+        } else {
+            const Coord y = c.a.y == o.lo.y ? d.lo.y : d.hi.y;
+            c.a = {std::max(c.a.x, d.lo.x), y};
+            c.b = {std::min(c.b.x, d.hi.x), y};
+        }
+        if (c.editable && !on_one_side(d, c.a, c.b)) return false;
+    }
+    g.contacts = std::move(moved);
+    g.domain = d;
+    g.domain_given = true;
+    return true;
 }
 
 }  // namespace NiTCAD::app::geo

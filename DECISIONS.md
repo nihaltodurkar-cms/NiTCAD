@@ -1271,6 +1271,45 @@ the grid, snapping, the Shift constraint, handle drags and hit tests. Coordinate
 - **Found on the way:** slice 0 left `layered` and `domain` out of the app's deck vocabulary (XG2's test caught it
   once the app suite ran); added. The app suite passes (88 cases).
 
+**Slice 2 results (2026-11-20; GD6–GD8):** the Geometry tab (`src/app/geometry_page.{hpp,cpp}`), second after Start
+(Ctrl+2; the other tabs' keys move up one), on Direct2D (an `ID2D1HwndRenderTarget`, software when the window runs on
+WARP) with DirectWrite labels.
+- **Canvas (GD6):** rulers in µm (labels at the 1, 2, 5 step ≥ 60 px apart), the grid, the background and each
+  region's shapes filled by material in layer order, outlines, the domain, contacts as thick segments with their
+  names, the selection (a box's eight handles, a polygon's vertices; the background's handles are the domain's in a
+  layered deck), rubber-band selection (Ctrl adds), wheel zoom at the cursor, pan by middle drag, Space+drag or the
+  Pan tool, Fit (F, Home). The cursor's position in µm is in the status bar's cursor part. 1D and unknown decks show
+  why; 3D decks "3D geometry editing is a later unit"; a deck without `[mesh]` offers **New 2D layout** (a layered
+  template).
+- **Tools (GD7):** a strip of tool buttons and Edit ▸ Geometry tools (keys V R P C H M while the canvas has the focus;
+  no accelerators, so the deck editor keeps its letters). Polygon points are kept horizontal or vertical from the last
+  (slice 4 brings slanted edges); Enter, a double-click or a click on the first point closes it. Double-click on a
+  selected polygon's edge inserts a vertex, on a vertex removes it. Arrows nudge by a grid step (Shift ×10); Delete;
+  Escape cancels or deselects. New Edit commands: Redo (Ctrl+Y), Duplicate (Ctrl+D), Delete (Del); on the Geometry tab
+  Undo, Redo, Cut, Copy, Paste, Duplicate and Delete act on the canvas. Every finished gesture writes the deck at once
+  (minimal edits, then the deck pane's text and the live check); undo and redo step through those texts and start
+  again when the deck is edited elsewhere. A drawn contact is named `contact_<n>`, kind ohmic.
+- **Inspector (GD8):** the Geometry section takes the inspector's place on the Geometry tab: a line on the selection,
+  name, material (the materials the deck build knows), Raise and Lower layer, x/y/width/height (a box; the domain for
+  the background), the vertex list with Apply (a polygon), a contact's kind and its ends, and the material to draw
+  with. Values are in µm unless typed with a unit; Enter takes them; a refused value keeps the deck as it was. A region
+  selected in the tree selects it on the canvas.
+- **GE8 (slice 2's part) met:** a window test drives the canvas by messages: a rectangle drawn, moved right and down,
+  resized by its handle; undo and redo through those; a polygon clicked and closed with Enter, a vertex dragged (its
+  neighbours follow); a contact dragged along the bottom; duplicate and delete; the deck's other lines untouched; and
+  the deck as drawn builds (the live check reports nothing). The inspector test types a height, a name, a bad width
+  (refused), the domain's width and a polygon's vertex list. The MOSFET drawn and run is left to slice 3 with GE7.
+- **GE5 (drag part) met:** 200 shapes and 5598 vertices (199 boxes and a 4802-vertex staircase), a box dragged 60
+  frames on software Direct2D: median 2.5–2.7 ms a frame, slowest 5.3–6.5 ms (three runs; limit 16 ms).
+- **GE9 for slice 2 met:** 11 hand mutants caught: the undo history not recorded; R choosing the polygon tool; a move
+  without its vertical part (survived the first test, which moved only sideways; a downward drag added); a handle drag
+  using the wrong handle; a drawn contact's kind; inspector numbers read as nm; the domain edited as a box; a polygon's
+  last point dropped on closing; Redo undoing; a contact's kind not written; a domain change leaving a contact off its
+  side. New model tests: a contact's kind, the domain widened, narrowed (a contact clipped) and refused.
+- **Not done here, recorded:** the Measure tool draws its own line and readout rather than reusing the probe's ruler;
+  the tree links regions only (contacts are not tree items). The app suite (89 cases) and the window suite (45 cases,
+  the hidden ones not run) pass.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

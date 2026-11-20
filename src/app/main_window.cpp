@@ -208,7 +208,7 @@ bool MainWindow::create_children() {
     // Check boxes for the regions (Unit 26c, YD4): set after creation, as the tree view asks.
     SetWindowLongPtrW(tree_, GWL_STYLE, GetWindowLongPtrW(tree_, GWL_STYLE) | TVS_CHECKBOXES);
     tabs_ = make(WC_TABCONTROLW, L"", WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, hwnd_, id_tabs);
-    for (const wchar_t* t : {L"Start", L"Device view", L"Curves", L"Deck", L"Run monitor", L"Results"}) {
+    for (const wchar_t* t : {L"Start", L"Geometry", L"Device view", L"Curves", L"Deck", L"Run monitor", L"Results"}) {
         TCITEMW item{};
         item.mask = TCIF_TEXT;
         item.pszText = const_cast<wchar_t*>(t);
@@ -221,6 +221,8 @@ bool MainWindow::create_children() {
     run_page_ = std::make_unique<RunPage>(hwnd_, *this, id_run_page);
     results_ = std::make_unique<ResultsPage>(hwnd_, id_results);
     results_->on_pass = [this](std::size_t k) { results_show_pass(k); };
+    geometry_ = std::make_unique<GeometryPage>(hwnd_, *this, id_geometry, id_geometry_controls,
+                                               options_.adapter == render::Adapter::warp);
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
     // Unit 26j: the console along the window's bottom, a classic output window: the tab's text (plain, black on
     // white) or the points table over a tab strip (Output, Points, Messages); right-click for Copy, Save, Clear
@@ -461,6 +463,12 @@ bool MainWindow::pre_translate(MSG& m) {
         commit_box(GetDlgCtrlID(m.hwnd));
         return true;
     }
+    // Unit 26k: Enter in a Geometry section box takes its value (the vertex list keeps Enter for its lines).
+    if (m.message == WM_KEYDOWN && m.wParam == VK_RETURN && m.hwnd && GetParent(m.hwnd) == geometry_->inspector() &&
+        GetDlgCtrlID(m.hwnd) != static_cast<int>(id_geometry_controls) + static_cast<int>(GeometryPage::c_vertices)) {
+        geometry_->commit(GetDlgCtrlID(m.hwnd) - id_geometry_controls);
+        return true;
+    }
     return IsDialogMessageW(hwnd_, &m) != FALSE;
 }
 
@@ -525,6 +533,7 @@ void MainWindow::apply_dpi(int dpi) {
     start_->set_dpi(dpi, font_, bold_);
     run_page_->set_dpi(dpi, font_);
     results_->set_dpi(dpi, font_, bold_);
+    geometry_->set_dpi(dpi, font_, bold_);
     layout();
 }
 
@@ -561,6 +570,12 @@ void MainWindow::layout() {
     ShowWindow(start_->hwnd(), tab_ == tab_start ? SW_SHOW : SW_HIDE);
     ShowWindow(run_page_->hwnd(), tab_ == tab_run ? SW_SHOW : SW_HIDE);
     ShowWindow(results_->hwnd(), tab_ == tab_results ? SW_SHOW : SW_HIDE);
+    // Unit 26k: the Geometry tab's page, and its section in the inspector's place.
+    place(geometry_->hwnd(), whole);
+    place(geometry_->inspector(), panes_.inspector);
+    ShowWindow(geometry_->hwnd(), tab_ == tab_geometry ? SW_SHOW : SW_HIDE);
+    ShowWindow(geometry_->inspector(), tab_ == tab_geometry && panes_.inspector.width > 0 ? SW_SHOW : SW_HIDE);
+    ShowWindow(inspector_, tab_ == tab_geometry || panes_.inspector.width <= 0 ? SW_HIDE : SW_SHOW);
     // The tab strip is drawn over the page's top: keep the page above it in Z order.
     SetWindowPos(tabs_, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     layout_inspector();
@@ -1263,6 +1278,10 @@ void MainWindow::select_tab(int tab) {
     case tab_run:
         run_page_->plot().prepare(renderer());  // its swap chain before a run, not during it
         run_page_->update(runner_, renderer(), true);
+        break;
+    case tab_geometry:
+        geometry_->reload();
+        SetFocus(geometry_->canvas());
         break;
     case tab_results:
         results_->show(workspace(), run_b());
@@ -2224,6 +2243,12 @@ void MainWindow::set_region_shown(const std::string& name, bool shown) {
 void MainWindow::on_tree_selection(LPARAM data) {
     if (!workspace_) return;
     const int kind = static_cast<int>(data >> 16), index = static_cast<int>(data & 0xFFFF);
+    if (kind == tree_region && tab_ == tab_geometry) {
+        if (index < static_cast<int>(workspace_->device->regions().size())) {
+            geometry_->select_region(workspace_->device->regions()[static_cast<std::size_t>(index)].name);
+        }
+        return;
+    }
     if (kind == tree_field) {
         const auto names = available_fields(*workspace_);
         if (index >= static_cast<int>(names.size())) return;
@@ -2540,6 +2565,34 @@ void MainWindow::deck_changed() {
     SetTimer(hwnd_, live_timer, live_delay_ms, nullptr);
 }
 
+// --- the Geometry tab (Unit 26k) -------------------------------------------------------------------
+
+std::string MainWindow::geometry_deck() { return deck_->text(); }
+
+void MainWindow::geometry_edited(const std::string& text) {
+    deck_->set_text(text);
+    deck_changed();  // the title, and the live check a pause later (XD1): the build's own messages
+}
+
+std::optional<geo::Rect> MainWindow::geometry_bounds() {
+    if (!workspace_ || workspace_->device->mesh().dimension() != 2) return std::nullopt;
+    const auto pts = workspace_->device->mesh().points();
+    if (pts.empty()) return std::nullopt;
+    double x0 = pts[0][0], x1 = x0, y0 = pts[0][1], y1 = y0;
+    for (const auto& p : pts) {
+        x0 = std::min(x0, p[0]);
+        x1 = std::max(x1, p[0]);
+        y0 = std::min(y0, p[1]);
+        y1 = std::max(y1, p[1]);
+    }
+    const auto q = [](double cm) { return static_cast<geo::Coord>(std::llround(cm / geo::quantum_cm)); };
+    return geo::Rect{{q(x0), q(y0)}, {q(x1), q(y1)}};
+}
+
+void MainWindow::geometry_status(const std::string& cursor) { set_status(status_cursor, cursor); }
+
+void MainWindow::geometry_selected(const std::string&) {}
+
 void MainWindow::on_live_check() {
     if (!live_.process()) return;
     // Edited since: the next check (its timer is running) will tell.
@@ -2574,6 +2627,7 @@ void MainWindow::show_structure(Workspace w) {
     set_workspace(std::move(w), keep);
     preview_ = true;
     fill_tree();  // marked as a preview
+    if (tab_ == tab_geometry && geometry_->geometry().mesh == geo::MeshKind::tensor) geometry_->reload(false, true);  // its domain
 }
 
 void MainWindow::go_to_section(std::string_view kind) {
@@ -2616,6 +2670,7 @@ void MainWindow::focus_next_pane() {
                       : tab_ == tab_start   ? start_->hwnd()
                       : tab_ == tab_run     ? run_page_->hwnd()
                       : tab_ == tab_results ? results_->hwnd()
+                      : tab_ == tab_geometry ? geometry_->canvas()
                                             : viewport_->hwnd();
     const HWND order[] = {tree_, page, child(id_view)};
     std::size_t k = 0;
@@ -2692,10 +2747,42 @@ void MainWindow::execute(Command c) {
     case Command::save: save(false); return;
     case Command::save_as: save(true); return;
     case Command::exit: PostMessageW(hwnd_, WM_CLOSE, 0, 0); return;
-    case Command::undo: forward_edit(EM_UNDO); return;
-    case Command::cut: forward_edit(WM_CUT); return;
-    case Command::copy: forward_edit(WM_COPY); return;
-    case Command::paste: forward_edit(WM_PASTE); return;
+    // Unit 26k: on the Geometry tab, the edit commands act on the canvas's model (a box of its section keeps them).
+    case Command::undo:
+    case Command::redo:
+    case Command::cut:
+    case Command::copy:
+    case Command::paste:
+    case Command::duplicate:
+    case Command::delete_selection:
+        if (tab_ == tab_geometry && GetParent(GetFocus()) != geometry_->inspector()) {
+            if (c == Command::undo) geometry_->undo();
+            else if (c == Command::redo) geometry_->redo();
+            else if (c == Command::cut) {
+                if (geometry_->copy()) geometry_->remove();
+            } else if (c == Command::copy) geometry_->copy();
+            else if (c == Command::paste) geometry_->paste();
+            else if (c == Command::duplicate) geometry_->duplicate();
+            else geometry_->remove();
+            return;
+        }
+        if (c == Command::redo) forward_edit(EM_REDO);
+        else if (c == Command::undo) forward_edit(EM_UNDO);
+        else if (c == Command::cut) forward_edit(WM_CUT);
+        else if (c == Command::copy) forward_edit(WM_COPY);
+        else if (c == Command::paste) forward_edit(WM_PASTE);
+        else if (c == Command::delete_selection) forward_edit(WM_CLEAR);
+        return;
+    case Command::tool_select:
+    case Command::tool_rectangle:
+    case Command::tool_polygon:
+    case Command::tool_contact:
+    case Command::tool_pan:
+    case Command::tool_measure:
+        select_tab(tab_geometry);
+        geometry_->set_tool(static_cast<GeometryPage::Tool>(static_cast<int>(c) - static_cast<int>(Command::tool_select)));
+        SetFocus(geometry_->canvas());
+        return;
     case Command::select_all: forward_edit(EM_SETSEL); return;
     case Command::find_error:
         if (!deck_->diagnostics().empty()) {
@@ -2850,6 +2937,7 @@ void MainWindow::execute(Command c) {
     case Command::tab_start: select_tab(tab_start); return;
     case Command::tab_run: select_tab(tab_run); return;
     case Command::tab_results: select_tab(tab_results); return;
+    case Command::tab_geometry: select_tab(tab_geometry); return;
     default: return;
     }
 }
