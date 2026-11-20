@@ -308,7 +308,8 @@ polygon = 1um 0, 2um 0, 2um 0.8um, 1um 0.8um
 [region oxide]
 material = sio2
 polygon = 0 0.8um, 1um 0.8um, 2um 0.8um, 2um 1um, 0 1um
-)" + tail;    const deck::Plan a = must(layered), b = must(tiled);
+)" + tail;
+    const deck::Plan a = must(layered), b = must(tiled);
     CHECK(io::mesh_digest(a.device.mesh()) == io::mesh_digest(b.device.mesh()));
     CHECK(std::ranges::equal(a.device.node_region(), b.device.node_region()));
 
@@ -326,6 +327,46 @@ polygon = 0 0.8um, 1um 0.8um, 2um 0.8um, 2um 1um, 0 1um
     fails(t.replace(t.find("box = 0 2um 0.8um 1um"), 21, ""), "two regions without a shape");
     t = layered;
     fails(t.replace(t.find("polygon = 1um 0, 2um 0"), 22, "polygon = 1um 0, 2um 0.1um"), "horizontal or vertical");
+}
+
+TEST_CASE("deck build: a layered hole under a full-width contact meshes (Unit 26k slice 1)", "[deck]") {
+    // A buried box in the background: the ring around it is cut by two rays, kept off the body patch along the
+    // whole bottom (a straight cut down through the box would put a vertex inside it).
+    const std::string deck = R"(
+[mesh]
+type = generate2d
+layered = on
+domain = 0 2um 0 1um
+patch body = 0 0, 2um 0
+patch top = 0.8um 1um, 1.2um 1um
+max_size = 0.25um
+interface_resolution = 20nm
+
+[region p]
+material = silicon
+
+[region box]
+material = sio2
+box = 0.8um 1.2um 0.3um 0.6um
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[contact top]
+kind = ohmic
+patch = top
+
+[equilibrium]
+)";
+    const auto p = plan_of(deck);
+    INFO((p ? std::string() : p.error().message));
+    REQUIRE(p);
+    // Every node of the body contact on y = 0, from x = 0 to 2 um.
+    CHECK(p->device.mesh().node_count() > 0);
 }
 
 TEST_CASE("deck build: generated 2D and 3D meshes and mesh files", "[deck]") {

@@ -93,7 +93,8 @@ TEST_CASE("mesh layered: a junction under an oxide resolves into a tiling that m
     o.max_size = 0.25e-4;
     o.interface_resolution = 20e-7;
     const auto m = generate_mesh(*t, o);
-    if (!m) FAIL(m.error().message);    CHECK(m->simplices.points.size() > 100);
+    if (!m) FAIL(m.error().message);
+    CHECK(m->simplices.points.size() > 100);
 }
 
 TEST_CASE("mesh layered: a hole and a part touching itself are cut into simple pieces", "[mesh][layered]") {

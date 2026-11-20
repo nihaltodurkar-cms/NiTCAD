@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -159,7 +160,8 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
             nx = cx.size();
             ny = cy.size();
         }
-    }    // Each cell's column and row, looked up (a division per cell per pass costs more than the pass).
+    }
+    // Each cell's column and row, looked up (a division per cell per pass costs more than the pass).
     std::vector<std::uint32_t> col(nx * ny), row(nx * ny);
     for (std::size_t j = 0, c = 0; j < ny; ++j) {
         for (std::size_t i = 0; i < nx; ++i, ++c) {
@@ -211,7 +213,8 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
                 }
             }
         }
-    };    for (std::size_t c = 0; c < nx * ny; ++c) {
+    };
+    for (std::size_t c = 0; c < nx * ny; ++c) {
         if (label[c] != none) continue;
         parts.push_back({owner[c], c, {}});
         flood(c, none, static_cast<std::uint32_t>(parts.size() - 1), 0, nx, nullptr);
@@ -228,12 +231,126 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
     };
     for (std::size_t c = 0; c < nx * ny; ++c) boundary(c);
 
+    // A hole's cut (a ring has no simple outline, Unit 26k slice 1): two rays along grid lines from the hole's
+    // corners out to the part's outer loop. A straight cut across the whole part would also meet the domain's
+    // boundary, and a vertex inside a patch there breaks generate2d's rule that a patch lies inside one boundary
+    // edge, and one ending on an interface makes a corner zone generate2d's P4b check can refuse; so a ray ends, best
+    // first: on the domain's boundary off every patch's inside (a corner, then not), on an interface's corner, on an
+    // interface, inside a patch; then the shorter. The
+    // part's cells, walled along the rays, fall into pieces, each a new part (traced again: other holes, pinches).
+    // 1: cut; 0: fewer than two rays (nothing changed); -1: the rays did not divide the part.
+    std::vector<char> on_outer((nx + 1) * (ny + 1), 0), vwall(nx * ny, 0), hwall(nx * ny, 0);
+    std::vector<std::size_t> cells;
+    const auto in_patch = [&](std::size_t v) {
+        const std::size_t i = v % vx, j = v / vx;
+        if (i != 0 && i != nx && j != 0 && j != ny) return false;
+        const double x = xs[i], y = ys[j];
+        for (const PatchSegment& p : g.patches) {
+            if (p.a[0] == x && p.b[0] == x && y > std::min(p.a[1], p.b[1]) && y < std::max(p.a[1], p.b[1])) return true;
+            if (p.a[1] == y && p.b[1] == y && x > std::min(p.a[0], p.b[0]) && x < std::max(p.a[0], p.b[0])) return true;
+        }
+        return false;
+    };
+    const auto corner_at = [](const std::vector<std::size_t>& l, std::size_t k) {
+        const std::size_t n = l.size();
+        const auto d1 = static_cast<std::ptrdiff_t>(l[k]) - static_cast<std::ptrdiff_t>(l[(k + n - 1) % n]);
+        const auto d2 = static_cast<std::ptrdiff_t>(l[(k + 1) % n]) - static_cast<std::ptrdiff_t>(l[k]);
+        return d1 != d2;
+    };
+    const auto ray_cut = [&](std::size_t q, const std::vector<std::vector<std::size_t>>& ls) -> int {
+        const auto lq = static_cast<std::uint32_t>(q);
+        const auto mine_cell = [&](std::ptrdiff_t i, std::ptrdiff_t j) {
+            return i >= 0 && j >= 0 && i < static_cast<std::ptrdiff_t>(nx) && j < static_cast<std::ptrdiff_t>(ny) &&
+                   label[static_cast<std::size_t>(j) * nx + static_cast<std::size_t>(i)] == lq;
+        };
+        // One unit step from (i, j) in direction d (0 up, 1 down, 2 right, 3 left): whether both cells along it are
+        // the part's; `wall` the wall it sets (`vertical`: a wall on the cell's left side, else on its bottom).
+        const auto step = [&](std::ptrdiff_t& i, std::ptrdiff_t& j, int d, bool set) {
+            std::ptrdiff_t ai = i - 1, aj = j, bi = i, bj = j, ni = i, nj = j + 1;
+            if (d == 1) { aj = j - 1; bj = j - 1; nj = j - 1; }
+            if (d == 2) { ai = i; aj = j - 1; nj = j; ni = i + 1; }
+            if (d == 3) { ai = i - 1; aj = j - 1; bi = i - 1; bj = j; ni = i - 1; nj = j; }
+            if (!mine_cell(ai, aj) || !mine_cell(bi, bj)) return false;
+            if (set) {
+                const std::size_t wc = static_cast<std::size_t>(bj) * nx + static_cast<std::size_t>(bi);
+                (d < 2 ? vwall : hwall)[wc] = 1;
+            }
+            i = ni;
+            j = nj;
+            return true;
+        };
+        const auto& outer = ls[0];
+        const auto& hole = ls[1];
+        for (std::size_t k = 0; k < outer.size(); ++k) on_outer[outer[k]] = corner_at(outer, k) ? 2 : 1;
+        struct Ray {
+            std::size_t start;
+            int dir, score;
+            std::size_t steps;
+        };
+        std::vector<Ray> found;
+        for (std::size_t k = 0; k < hole.size(); ++k) {
+            if (!corner_at(hole, k)) continue;
+            for (int d = 0; d < 4; ++d) {
+                auto i = static_cast<std::ptrdiff_t>(hole[k] % vx), j = static_cast<std::ptrdiff_t>(hole[k] / vx);
+                std::size_t n = 0;
+                while (step(i, j, d, false)) ++n;
+                const std::size_t end = static_cast<std::size_t>(j) * vx + static_cast<std::size_t>(i);
+                if (n == 0 || on_outer[end] == 0) continue;
+                const std::size_t ei = end % vx, ej = end / vx;
+                const bool wall = ei == 0 || ei == nx || ej == 0 || ej == ny, corner = on_outer[end] == 2;
+                const int score = in_patch(end) ? 16 : wall ? (corner ? 0 : 1) : (corner ? 4 : 8);
+                found.push_back({hole[k], d, score, n});
+            }
+        }
+        for (const std::size_t v : outer) on_outer[v] = 0;
+        std::ranges::sort(found, [](const Ray& a, const Ray& b) { return std::tie(a.score, a.steps, a.start, a.dir) < std::tie(b.score, b.steps, b.start, b.dir); });
+        // The best ray, and the best from another corner (two from one corner leave the rest touching itself there).
+        const auto second = std::ranges::find_if(found, [&](const Ray& r) { return found.empty() || r.start != found.front().start; });
+        if (found.empty() || second == found.end()) return 0;
+        for (const Ray* r : {&found.front(), &*second}) {
+            auto i = static_cast<std::ptrdiff_t>(r->start % vx), j = static_cast<std::ptrdiff_t>(r->start / vx);
+            while (step(i, j, r->dir, true)) {}
+        }
+        // The pieces: a plain flood that stops at walls.
+        const std::uint32_t work = none - 1;
+        cells.clear();
+        flood(parts[q].seed, lq, work, 0, nx, &cells);
+        const auto [lo_c, hi_c] = std::ranges::minmax(cells);
+        const std::size_t first = parts.size();
+        for (std::size_t c0 = lo_c; c0 <= hi_c; ++c0) {
+            if (label[c0] != work) continue;
+            const auto to = static_cast<std::uint32_t>(parts.size());
+            parts.push_back({parts[q].region, c0, {}});
+            stack.assign(1, c0);
+            label[c0] = to;
+            while (!stack.empty()) {
+                const std::size_t c = stack.back();
+                stack.pop_back();
+                const std::size_t i = col[c], j = row[c];
+                const auto visit = [&](std::size_t n) {
+                    if (label[n] == work) {
+                        label[n] = to;
+                        stack.push_back(n);
+                    }
+                };
+                if (i > 0 && vwall[c] == 0) visit(c - 1);
+                if (i + 1 < nx && vwall[c + 1] == 0) visit(c + 1);
+                if (j > 0 && hwall[c] == 0) visit(c - nx);
+                if (j + 1 < ny && hwall[c + nx] == 0) visit(c + nx);
+            }
+        }
+        for (const std::size_t c : cells) vwall[c] = hwall[c] = 0;
+        if (parts.size() - first < 2) return -1;
+        for (const std::size_t c : cells) boundary(c);
+        return 1;
+    };
+
     // Grid vertex (i, j) as one key; a loop as its unit steps' vertices.
     std::vector<std::pair<std::int32_t, std::vector<std::size_t>>> loops;  // region, vertices (every unit step)
     constexpr std::size_t npos = SIZE_MAX;
     std::vector<std::size_t> next((nx + 1) * (ny + 1), npos);  // a boundary vertex's outgoing edge's end
     std::vector<char> seen((nx + 1) * (ny + 1), 0);
-    std::vector<std::size_t> touched, cuts, cells;
+    std::vector<std::size_t> touched, cuts;
     for (std::size_t q = 0; q < parts.size(); ++q) {
         // A vertex with two outgoing edges is a pinch: a cut along its column line.
         touched.clear();
@@ -247,9 +364,11 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
             touched.push_back(a);
         }
         std::vector<std::vector<std::size_t>> mine;
+        int rays = 0;
         if (cuts.empty()) {
             // Loops from their lowest-then-leftmost vertex (keys order by row, then column); the first is the outer
-            // one, each other a hole: a cut along its leftmost line.
+            // one, each other a hole: the first hole cut by two rays (ray_cut), or, without two, every hole by a cut
+            // along its leftmost line.
             std::ranges::sort(touched);
             for (const std::size_t s : touched) {
                 if (seen[s] != 0) continue;
@@ -258,12 +377,16 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
                     seen[v] = 1;
                     loop.push_back(v);
                 }
-                if (!mine.empty()) {
+                mine.push_back(std::move(loop));
+            }
+            if (mine.size() > 1) {
+                rays = ray_cut(q, mine);
+                if (rays < 0) return invalid("internal: a layered part's cut did not divide it");
+                for (std::size_t k = 1; rays == 0 && k < mine.size(); ++k) {
                     std::size_t left = npos;
-                    for (const std::size_t v : loop) left = std::min(left, v % vx);
+                    for (const std::size_t v : mine[k]) left = std::min(left, v % vx);
                     cuts.push_back(left);
                 }
-                mine.push_back(std::move(loop));
             }
         }
         for (const std::size_t v : touched) {
@@ -272,6 +395,7 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
         }
         parts[q].edges.clear();
         parts[q].edges.shrink_to_fit();
+        if (rays > 0) continue;
         if (cuts.empty()) {
             loops.emplace_back(parts[q].region, std::move(mine.front()));
             continue;
