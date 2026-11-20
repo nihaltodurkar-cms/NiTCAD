@@ -2620,6 +2620,38 @@ MOS C-V; transient, worst 7.0e-21 of the largest current; small-signal junction 
 The fixture against `cpr` (GMRES iterations, cpr_amg / cpr): 1,728 unknowns 2 / 24 and 36 / 14; 6,912: 27 / 60 and
 39 / 36; 27,648: 40 / 330 and 43 / 120 (bias 0 and 20). MG6–MG8 (3D series, FinFET against PARDISO) are MD5's
 measurements, next.
+
+**MG9 (mutants), 2026-11-20: 11 of 12 caught** (script `C:\Users\disha\ssrun\mut63.sh`, the later ones run one at a
+time, Release, pinned to 4 cores by the owner's word). Caught: M2 every field swept, M3 no retry, M4 the retry keeping
+the sweep, M5 strength decay 1, M6 stage 2 ILUT, M7 the deck refusing `cpr_amg`, M8 the sweep's result scattered at
+half weight, M9 labels not required, M10 Newton giving no labels, M11 the unknowns in no node given zero, M12 complex
+accepted. Two tests were too weak and were strengthened:
+
+- **M11 survived because the retry hid it.** With the bordering unknown left at zero the block sweep misses and the
+  ILUT retry converges (13 iterations against 19), so a solve that never used the sweep passed. The `cpr_amg` tests
+  now require no stage-2 retry (`Solved::stage2_retries`).
+- **M8 survived because only the answer was checked.** The fixture test now bounds GMRES iterations at the counts
+  above plus about a tenth (4, 40; 30, 43; 44, 47); M8 needs 30, 49; 45, 56.
+
+**M1 (the sweep without the field-to-field coupling, block Jacobi) survives, and is a finding, not a test gap.** The
+fixture's carrier blocks have no electron–hole entries, so M1 is equivalent there. With a recombination term r on
+each interior node (r on both diagonals and both off-diagonals, `with_recombination`; probe
+`[.cpr_amg_recombination]`), GMRES iterations, forward sweep (as built) / M1 Jacobi / `cpr` (– = missed in 1000):
+
+| unknowns, bias | r = 0.5 | r = 0.05 | r = 0.005 |
+|---|---|---|---|
+| 1,728, 0 | 90 / 77 / – | 21 / 25 / – | 13 / 10 / 109 |
+| 1,728, 20 | 142 / 75 / 780 | 50 / 48 / 209 | 41 / 40 / 57 |
+| 6,912, 0 | 266 / 180 / – | 56 / 59 / – | 33 / 28 / – |
+| 6,912, 20 | 259 / 120 / – | 58 / 53 / – | 40 / 40 / – |
+| 27,648, 0 | 900 / 660 / – | 300 / 120 / – | 55 / 59 / – |
+| 27,648, 20 | 720 / 531 / – | 210 / 148 / – | 49 / 52 / – |
+
+`cpr_amg` solves every coupled case and `cpr` almost none, but both orderings grow with r and with size (55 → 900
+at 27,648), and the coupling the forward sweep carries makes it worse, not better, from r = 0.05 up. Recombination
+is in every device, so this bears on MD5 (MG6–MG8). Open, for the owner: keep the forward sweep, take block Jacobi
+(M1's form: simpler, better where the coupling is strong), or smooth the electron–hole pair per node together
+(a coupled carrier stage). Not changed in this slice.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

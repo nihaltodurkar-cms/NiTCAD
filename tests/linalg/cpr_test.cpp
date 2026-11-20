@@ -155,6 +155,7 @@ double backward_error(const SparseMatrix& a, std::span<const double> b, std::spa
 struct Solved {
     std::vector<double> x;
     SolveReport report;
+    std::size_t stage2_retries = 0;  // cpr_amg: solves retried with ILUT as stage 2
 };
 
 Solved solve_with(const SparseMatrix& a, std::span<const double> b, const SolverConfig& config,
@@ -169,6 +170,7 @@ Solved solve_with(const SparseMatrix& a, std::span<const double> b, const Solver
     INFO("solve: " << (r ? std::string("ok") : r.error().message));
     REQUIRE(r.has_value());
     s.report = *r;
+    s.stage2_retries = solver.backend_counts().stage2_retries;
     REQUIRE(backward_error(a, b, s.x) <= config.max_backward_error);
     return s;
 }
@@ -580,6 +582,28 @@ constexpr SolverConfig cpr_amg_strict{.backend = SolverBackend::gmres_ilut,
                                       .fallback = LinearFallback::none,
                                       .preconditioner = Preconditioner::cpr_amg};
 
+// The fixture with a recombination term: each interior node's electron and hole rows gain r on
+// the diagonal and r on the other carrier (SRH-like dR/dn, dR/dp > 0), so the block sweep's
+// field-to-field coupling is not zero.
+SparseMatrix with_recombination(const DriftDiffusion& d, double r) {
+    std::vector<Triplet> t;
+    const Index n = d.a.rows();
+    for (Index row = 0; row < n; ++row) {
+        for (Index k = d.a.row_offsets()[row]; k < d.a.row_offsets()[row + 1]; ++k) {
+            t.push_back({row, d.a.col_indices()[k], d.a.values()[k]});
+        }
+    }
+    for (std::size_t k = 0; k < d.contact.size(); ++k) {
+        if (d.contact[k]) continue;
+        const auto e = static_cast<Index>(3 * k + 1), h = static_cast<Index>(3 * k + 2);
+        t.push_back({e, e, r});
+        t.push_back({e, h, r});
+        t.push_back({h, h, r});
+        t.push_back({h, e, r});
+    }
+    return from(n, t);
+}
+
 }  // namespace
 
 TEST_CASE("cpr_amg: the configuration, the blocks and the falling threshold") {
@@ -618,9 +642,44 @@ TEST_CASE("cpr_amg: GMRES with cpr_amg solves drift-diffusion Jacobians, equilib
             CAPTURE(m, bias);
             const Solved s = solve_with(d.a, b, cpr_amg_strict, labels_for(nodes));
             REQUIRE_FALSE(s.report.fell_back);
+            REQUIRE(s.stage2_retries == 0);
+            // The preconditioner's quality: at most the slice 1 counts (2, 36; 27, 39; 40, 43) plus
+            // about a tenth (MG9: a sweep whose result is scattered at half weight needs 30, 49; 45, 56).
+            const std::size_t most = m == 24 ? (bias == 0.0 ? 4 : 40) : m == 48 ? (bias == 0.0 ? 30 : 43)
+                                                                               : (bias == 0.0 ? 44 : 47);
+            REQUIRE(s.report.iterations.value_or(most + 1) <= most);
             const Solved c = solve_with(d.a, b, cpr_strict, labels_for(nodes));
             std::printf("cpr_amg: %zu unknowns, bias %g: GMRES-CPR-AMG %zu, GMRES-CPR %zu iterations\n",
                         b.size(), bias, s.report.iterations.value_or(0), c.report.iterations.value_or(0));
+        }
+    }
+}
+
+// Unit 63 slice 1 finding (hidden measurement): the fixture with an electron-hole coupling r
+// (recombination). GMRES iterations of cpr_amg and cpr, -1 where GMRES missed in 1000.
+TEST_CASE("cpr_amg probe: electron-hole coupling (recombination)", "[.cpr_amg_recombination]") {
+    for (const Index m : {Index{24}, Index{48}, Index{96}}) {
+        for (const double bias : {0.0, 20.0}) {
+            const DriftDiffusion d = drift_diffusion(m, 1e4, 0.05, bias);
+            const auto nodes = static_cast<std::size_t>(m * m);
+            const std::vector<double> b = rhs(3 * nodes);
+            for (const double r : {0.5, 0.05, 0.005}) {
+                const SparseMatrix coupled = with_recombination(d, r);
+                const auto its = [&](const SolverConfig& config) {
+                    auto solver = LinearSolver::create(config).value();
+                    solver.set_field_labels(labels_for(nodes));
+                    REQUIRE(solver.factorize(coupled).has_value());
+                    std::vector<double> x(b.size());
+                    const auto solved = solver.solve(b, x);
+                    return std::pair{solved ? static_cast<long>(solved->iterations.value_or(0)) : -1L,
+                                     solver.backend_counts().stage2_retries};
+                };
+                const auto [amg_its, retries] = its(cpr_amg_strict);
+                const auto [cpr_its, unused] = its(cpr_strict);
+                (void)unused;
+                std::printf("cpr_amg recombination: %zu unknowns, bias %g, r %g: cpr_amg %ld (retries %zu), cpr %ld\n",
+                            b.size(), bias, r, amg_its, retries, cpr_its);
+            }
         }
     }
 }
@@ -643,6 +702,8 @@ TEST_CASE("cpr_amg: an unknown in no node (a bordering row) takes a Gauss-Seidel
     const std::vector<double> b = rhs(static_cast<std::size_t>(n) + 1);
     const Solved s = solve_with(bordered, b, cpr_amg_strict, labels_for(nodes, 1));
     REQUIRE_FALSE(s.report.fell_back);
+    REQUIRE(s.stage2_retries == 0);
+    std::printf("cpr_amg bordered: %zu unknowns, %zu iterations\n", b.size(), s.report.iterations.value_or(0));
 }
 
 TEST_CASE("cpr_amg: every thread count gives the one-thread bits (Unit 63 MG2)") {
