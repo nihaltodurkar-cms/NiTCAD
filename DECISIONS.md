@@ -2648,10 +2648,30 @@ each interior node (r on both diagonals and both off-diagonals, `with_recombinat
 | 27,648, 20 | 720 / 531 / – | 210 / 148 / – | 49 / 52 / – |
 
 `cpr_amg` solves every coupled case and `cpr` almost none, but both orderings grow with r and with size (55 → 900
-at 27,648), and the coupling the forward sweep carries makes it worse, not better, from r = 0.05 up. Recombination
-is in every device, so this bears on MD5 (MG6–MG8). Open, for the owner: keep the forward sweep, take block Jacobi
-(M1's form: simpler, better where the coupling is strong), or smooth the electron–hole pair per node together
-(a coupled carrier stage). Not changed in this slice.
+at 27,648), and the coupling the forward sweep carries makes it worse, not better, from r = 0.05 up. The owner
+chose (2026-11-20, "choose recommended") a coupled carrier stage, on this table.
+
+**The table's coupling is not physical, and SRH's shape reverses the finding (2026-11-20, before any coupled stage
+was built).** A constant r on both rows is not what recombination stamps: SRH, R = (np − 1) / (n + p + 2) (n_i = n_1
+= p_1 = 1, unit lifetimes) times r (`with_srh`), puts r ∂R/∂n on the electron diagonal and the hole row's electron
+column and r ∂R/∂p on the hole diagonal and the electron row's hole column, so each row's coupling follows the other
+carrier's density, as the symmetrization's scaling does. Same probe, GMRES iterations, forward sweep (as built) /
+M1 Jacobi / `cpr`:
+
+| unknowns, bias | r = 1000 | r = 100 | r = 10 | r = 1 | r = 0.1 |
+|---|---|---|---|---|---|
+| 1,728, 0 | 5 / 9 / 22 | 4 / 6 / 22 | 4 / 7 / 22 | 4 / 5 / 17 | 3 / 4 / 23 |
+| 1,728, 20 | 162 / 271 / 11 | 58 / 90 / 13 | 35 / 37 / 14 | 39 / 37 / 14 | 37 / 36 / 15 |
+| 6,912, 0 | 30 / 34 / 53 | 28 / 28 / 61 | 27 / 28 / 55 | 27 / 27 / 58 | 27 / 27 / 60 |
+| 6,912, 20 | 270 / 540 / 36 | 97 / 171 / 34 | 41 / 54 / 31 | 39 / 38 / 34 | 39 / 39 / 36 |
+| 27,648, 0 | 46 / 44 / – | 45 / 43 / – | 40 / 40 / – | 41 / 37 / – | 38 / 39 / – |
+| 27,648, 20 | 660 / 420 / 420 | 180 / 326 / 300 | 55 / 100 / 267 | 49 / 49 / 390 | 44 / 41 / 321 |
+
+Up to r = 10 the counts are the uncoupled fixture's (40–55 at 27,648), and the forward sweep is as good as Jacobi
+or better (55 against 100 at 27,648, bias 20, r = 10): the coupling it carries helps. Only strong recombination
+under bias (r ≥ 100, where h exceeds the diffusion length by a factor of 10) grows, by up to 15 times, and `cpr`
+grows there as well. M1 stays a survivor: Jacobi is the weaker form, but no count bound separates the two
+reliably (they cross at 27,648, bias 20, r = 1000).
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

@@ -604,6 +604,31 @@ SparseMatrix with_recombination(const DriftDiffusion& d, double r) {
     return from(n, t);
 }
 
+// The fixture with SRH recombination R = (np - 1) / (n + p + 2) (n_i = n_1 = p_1 = 1, unit
+// lifetimes) times r on each interior node: the electron row gains r dR/dn on its diagonal and
+// r dR/dp on the hole, the hole row r dR/dp and r dR/dn.
+SparseMatrix with_srh(const DriftDiffusion& d, double r) {
+    std::vector<Triplet> t;
+    const Index n = d.a.rows();
+    for (Index row = 0; row < n; ++row) {
+        for (Index k = d.a.row_offsets()[row]; k < d.a.row_offsets()[row + 1]; ++k) {
+            t.push_back({row, d.a.col_indices()[k], d.a.values()[k]});
+        }
+    }
+    for (std::size_t k = 0; k < d.contact.size(); ++k) {
+        if (d.contact[k]) continue;
+        const double cn = d.n[k], cp = d.p[k], den = cn + cp + 2.0;
+        const double dr_dn = (cp * den - (cn * cp - 1.0)) / (den * den);
+        const double dr_dp = (cn * den - (cn * cp - 1.0)) / (den * den);
+        const auto e = static_cast<Index>(3 * k + 1), h = static_cast<Index>(3 * k + 2);
+        t.push_back({e, e, r * dr_dn});
+        t.push_back({e, h, r * dr_dp});
+        t.push_back({h, h, r * dr_dp});
+        t.push_back({h, e, r * dr_dn});
+    }
+    return from(n, t);
+}
+
 }  // namespace
 
 TEST_CASE("cpr_amg: the configuration, the blocks and the falling threshold") {
@@ -655,16 +680,22 @@ TEST_CASE("cpr_amg: GMRES with cpr_amg solves drift-diffusion Jacobians, equilib
     }
 }
 
-// Unit 63 slice 1 finding (hidden measurement): the fixture with an electron-hole coupling r
-// (recombination). GMRES iterations of cpr_amg and cpr, -1 where GMRES missed in 1000.
+// Unit 63 slice 1 finding (hidden measurement): the fixture with an electron-hole coupling r, constant
+// or SRH-shaped (recombination). GMRES iterations of cpr_amg and cpr, -1 where GMRES missed in 1000.
 TEST_CASE("cpr_amg probe: electron-hole coupling (recombination)", "[.cpr_amg_recombination]") {
     for (const Index m : {Index{24}, Index{48}, Index{96}}) {
         for (const double bias : {0.0, 20.0}) {
             const DriftDiffusion d = drift_diffusion(m, 1e4, 0.05, bias);
             const auto nodes = static_cast<std::size_t>(m * m);
             const std::vector<double> b = rhs(3 * nodes);
-            for (const double r : {0.5, 0.05, 0.005}) {
-                const SparseMatrix coupled = with_recombination(d, r);
+            const struct {
+                const char* shape;
+                double r;
+            } cases[] = {{"constant", 0.5}, {"constant", 0.05}, {"constant", 0.005},
+                         {"srh", 1000.0},   {"srh", 100.0},     {"srh", 10.0},
+                         {"srh", 1.0},      {"srh", 0.1}};
+            for (const auto& [shape, r] : cases) {
+                const SparseMatrix coupled = shape[0] == 'c' ? with_recombination(d, r) : with_srh(d, r);
                 const auto its = [&](const SolverConfig& config) {
                     auto solver = LinearSolver::create(config).value();
                     solver.set_field_labels(labels_for(nodes));
@@ -677,8 +708,8 @@ TEST_CASE("cpr_amg probe: electron-hole coupling (recombination)", "[.cpr_amg_re
                 const auto [amg_its, retries] = its(cpr_amg_strict);
                 const auto [cpr_its, unused] = its(cpr_strict);
                 (void)unused;
-                std::printf("cpr_amg recombination: %zu unknowns, bias %g, r %g: cpr_amg %ld (retries %zu), cpr %ld\n",
-                            b.size(), bias, r, amg_its, retries, cpr_its);
+                std::printf("cpr_amg recombination: %zu unknowns, bias %g, %s r %g: cpr_amg %ld (retries %zu), cpr %ld\n",
+                            b.size(), bias, shape, r, amg_its, retries, cpr_its);
             }
         }
     }
