@@ -328,6 +328,61 @@ TEST_CASE("app window: the console logs the run's banner, Newton table, points a
     REQUIRE(pump_until([&] { return !w->runner().busy(); }));
 }
 
+// Look A: the toolbar's and the tree's icons, the inspector's sections (a label left of its control, a header
+// that folds them, saved with the layout), and the run's progress in the status bar while it runs.
+TEST_CASE("app window look A: icons, the inspector's folding sections, the status bar's progress", "[app]") {
+    const fs::path dir = app_test::scratch("window_look_a");
+    const fs::path deck = app_test::write(dir, "m.deck", app_test::mosfet2d);
+    auto w = window();
+    CHECK(w->has_icons());
+    CHECK(w->missing_icons() == 0);
+    CHECK(SendMessageW(w->child(MainWindow::id_toolbar), TB_GETIMAGELIST, 0, 0) != 0);
+    const auto shown = [&](int id) { return (GetWindowLongPtrW(w->child(id), GWL_STYLE) & WS_VISIBLE) != 0; };
+    const auto rect = [&](int id) {
+        RECT r{};
+        GetWindowRect(w->child(id), &r);
+        return r;
+    };
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    CHECK(TreeView_GetImageList(w->child(MainWindow::id_tree), TVSIL_NORMAL) != nullptr);
+
+    w->execute(Command::run);
+    bool progress_seen = false;
+    REQUIRE(pump_until([&] {
+        progress_seen = progress_seen || (GetWindowLongPtrW(w->status_progress(), GWL_STYLE) & WS_VISIBLE) != 0;
+        return !w->runner().busy() && w->workspace() && w->workspace()->has_results();
+    }));
+    if (!progress_seen) WARN("the run ended before the status bar's progress was shown");
+    CHECK((GetWindowLongPtrW(w->status_progress(), GWL_STYLE) & WS_VISIBLE) == 0);
+
+    // The device view: Display's header, then the view's label left of its list on one row.
+    w->execute(Command::tab_view);
+    const int display = MainWindow::id_section_first;
+    CHECK(shown(display));
+    CHECK(shown(MainWindow::id_view));
+    const RECT label = rect(MainWindow::id_first_label), view = rect(MainWindow::id_view), head = rect(display);
+    CHECK(label.right <= view.left);
+    CHECK(label.top == view.top);
+    CHECK(head.bottom <= view.top);
+    const RECT colour_open = rect(display + 1);
+    // A click on the header folds the section: its header alone, the next section moved up, saved.
+    SendMessageW(w->child(MainWindow::id_inspector), WM_COMMAND, MAKEWPARAM(display, BN_CLICKED),
+                 reinterpret_cast<LPARAM>(w->child(display)));
+    CHECK(w->section_folded(0));
+    CHECK(shown(display));
+    CHECK_FALSE(shown(MainWindow::id_view));
+    CHECK_FALSE(shown(MainWindow::id_first_label));
+    CHECK(rect(display + 1).top < colour_open.top);
+    CHECK(w->app_state().layout.inspector_folded == 1);
+    w->set_section_folded(0, false);
+    CHECK(shown(MainWindow::id_view));
+    CHECK(rect(display + 1).top == colour_open.top);
+    // A section the view does not use is hidden, header and all: Curves on the device view.
+    CHECK_FALSE(shown(display + 5));
+    CHECK_FALSE(shown(MainWindow::id_swept));
+}
+
 // The speed pass (hidden: run by name): the window's creation, the largest example opened, and the UI thread's
 // time on runs that make many points and many steps (the console, the Points table, the run monitor).
 TEST_CASE("app window perf: startup, open, and the UI's time on runs", "[.perf]") {

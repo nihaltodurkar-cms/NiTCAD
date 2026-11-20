@@ -9,6 +9,7 @@
 
 #include <windows.h>
 #include <shellapi.h>  // HDROP (ZD4)
+#include <commctrl.h>  // HIMAGELIST (look A)
 
 #include <array>
 #include <chrono>
@@ -17,6 +18,7 @@
 #include <memory>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -197,6 +199,18 @@ public:
     [[nodiscard]] int console_row_count() const;
     [[nodiscard]] int console_line_count() const;
     [[nodiscard]] bool console_collapsed() const noexcept { return state_.layout.console_collapsed; }
+    // Look A: the inspector's sections (Display, Colour, Show, Slice and clip, Vectors, Curves, Playback, Probe),
+    // each under a header that folds it; the folded ones saved with the layout. A section whose controls the view
+    // does not use is hidden, header and all.
+    static constexpr int section_count = 8;
+    void set_section_folded(int section, bool folded);
+    [[nodiscard]] bool section_folded(int section) const noexcept {
+        return (state_.layout.inspector_folded >> section & 1) != 0;
+    }
+    // The toolbar's and the tree's icons drawn from the system's icon font (false: none found).
+    [[nodiscard]] bool has_icons() const noexcept { return toolbar_images_ != nullptr; }
+    [[nodiscard]] int missing_icons() const noexcept { return missing_icons_; }  // glyphs the font lacks
+    [[nodiscard]] HWND status_progress() const noexcept { return status_progress_; }
     void set_console_collapsed(bool collapsed);
     bool copy_console();
     bool save_console(const std::filesystem::path& path);
@@ -221,6 +235,8 @@ public:
         id_axis_box,
         // Unit 26j: the console's rich edit and tool strip.
         id_console_text, id_console_tabs, id_console_points,
+        // Look A: the inspector's section headers, a section each.
+        id_section_first, id_section_last = id_section_first + section_count - 1,
         id_first_label = 5100,
     };
 
@@ -237,6 +253,9 @@ private:
     void apply_dpi(int dpi);
     void layout();
     void layout_inspector();
+    void draw_section_header(const DRAWITEMSTRUCT& d);
+    void make_icons();
+    void update_status_progress();
     void update_title();
     // The state part's messages also go to the console, at the level given (Unit 26j); show_status only shows
     // them (the run's live progress).
@@ -342,6 +361,12 @@ private:
     HWND hwnd_ = nullptr;
     HWND toolbar_ = nullptr, status_ = nullptr, tree_ = nullptr, tabs_ = nullptr, metrics_ = nullptr,
          inspector_ = nullptr, console_panel_ = nullptr, console_ = nullptr, console_points_ = nullptr;
+    // Look A: the icons' image lists (made per DPI), the status bar's progress bar, and the inspector's
+    // controls the view does not use (show_inspector_groups; layout_inspector shows the others not folded).
+    HIMAGELIST toolbar_images_ = nullptr, toolbar_disabled_ = nullptr, tree_images_ = nullptr;
+    HWND status_progress_ = nullptr;
+    int missing_icons_ = 0;
+    std::set<int> unused_controls_;
     ConsoleLog console_log_;
     UiTimings timings_;
     PointsTable points_;
