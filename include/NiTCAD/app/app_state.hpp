@@ -21,6 +21,9 @@ struct Layout {
     int tree_width = 0;       // the scene tree's width, 96-DPI pixels (0: the default)
     int inspector_width = 0;  // the inspector's
     int deck_height = 0;      // the deck pane's share, unused when 0
+    int console_height = 0;   // the console's height along the bottom, 96-DPI pixels (0: the default)
+    bool console_collapsed = false;  // the console folded to its tab strip
+    int inspector_folded = 0;        // the inspector's folded sections, a bit each (look A)
 };
 
 struct AppState {

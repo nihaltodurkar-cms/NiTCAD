@@ -57,6 +57,9 @@ std::string serialize(const AppState& s) {
     out += "tree_width = " + std::to_string(l.tree_width) + "\n";
     out += "inspector_width = " + std::to_string(l.inspector_width) + "\n";
     out += "deck_height = " + std::to_string(l.deck_height) + "\n";
+    out += "console_height = " + std::to_string(l.console_height) + "\n";
+    out += "console_collapsed = " + std::string(l.console_collapsed ? "1" : "0") + "\n";
+    out += "inspector_folded = " + std::to_string(l.inspector_folded) + "\n";
     out += "hover_readout = " + std::string(s.hover_readout ? "1" : "0") + "\n";
     out += "enhanced_look = " + std::string(s.enhanced_look ? "1" : "0") + "\n";
     out += "axis_box = " + std::string(s.axis_box ? "1" : "0") + "\n";
@@ -90,7 +93,9 @@ AppState parse_state(std::string_view text) {
                 rest = sp == std::string_view::npos ? std::string_view{} : rest.substr(sp + 1);
             }
             if (ok && r[2] >= 0 && r[3] >= 0) s.layout = {r[0], r[1], r[2], r[3], s.layout.maximized, s.layout.tree_width,
-                                                          s.layout.inspector_width, s.layout.deck_height};
+                                                          s.layout.inspector_width, s.layout.deck_height,
+                                                          s.layout.console_height, s.layout.console_collapsed,
+                                                          s.layout.inspector_folded};
         } else if (key == "maximized" && integer(value, v)) {
             s.layout.maximized = v != 0;
         } else if (key == "tree_width" && integer(value, v) && v >= 0) {
@@ -99,6 +104,12 @@ AppState parse_state(std::string_view text) {
             s.layout.inspector_width = v;
         } else if (key == "deck_height" && integer(value, v) && v >= 0) {
             s.layout.deck_height = v;
+        } else if (key == "console_height" && integer(value, v) && v >= 0) {
+            s.layout.console_height = v;
+        } else if (key == "inspector_folded" && integer(value, v) && v >= 0) {
+            s.layout.inspector_folded = v;
+        } else if (key == "console_collapsed" && integer(value, v)) {
+            s.layout.console_collapsed = v != 0;
         } else if (key == "hover_readout" && integer(value, v)) {
             s.hover_readout = v != 0;
         } else if (key == "enhanced_look" && integer(value, v)) {

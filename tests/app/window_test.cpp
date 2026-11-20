@@ -16,8 +16,12 @@
 #include <dxgidebug.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <format>
+#include <fstream>
+#include <iterator>
 #include <functional>
 #include <set>
 #include <string>
@@ -242,6 +246,178 @@ TEST_CASE("app window: a deck opened, run, shown, probed; the deck menus (WG7)",
     CHECK(w->tab() == MainWindow::tab_deck);
     CHECK(w->deck().caret_line() == w->runner().diagnostics()[0].line);
     CHECK(w->runner().diagnostics()[0].line > 0);
+}
+
+TEST_CASE("app window: the console logs the run's banner, Newton table, points and summary; filters, saves (Unit 26j)",
+          "[app]") {
+    const fs::path dir = app_test::scratch("window_console");
+    const fs::path deck = app_test::write(dir, "m.deck", app_test::mosfet2d);
+    auto w = window();
+    // A classic output window along the bottom, full width (Unit 26j), the Output tab first.
+    const app::Rect& c = w->panes().console;
+    CHECK(c.height > 0);
+    CHECK(c.x == 0);
+    CHECK(c.width == w->panes().status.width);
+    CHECK(c.y > w->panes().page.y);
+    CHECK(w->console_tab() == 0);
+    CHECK(w->console_body_shown());
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr; }));
+    CHECK(w->console_log().text().find("Open m.deck") != std::string::npos);
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    const std::string ran = w->console_log().text();
+    for (const char* s : {"Run m.deck\n", "   Analysis   bias sweep", "   Device     2D, ", "   Solver     ",
+                          "  Equilibrium\n", "  Bias point 1/", "     Iter      |update|    |residual|",
+                          "     Converged in ", "  Summary\n", " Newton iterations, ", "  Terminal currents (A/cm)",
+                          "  Wrote ", "Done in "}) {
+        CHECK(ran.find(s) != std::string::npos);
+    }
+    // Every iteration of the run is one Newton row; the rich edit shows every line of the log.
+    std::size_t rows = 0;
+    for (const app::LogLine& l : w->console_log().lines()) {
+        if (l.level == app::LogLevel::detail && !l.text.contains("Iter")) ++rows;
+    }
+    CHECK(rows == w->runner().iterations().size());
+    CHECK(static_cast<std::size_t>(w->console_line_count()) == w->console_log().lines().size());
+    // Points: a row per solver point, the currents once done, every point converged; Save writes the table.
+    w->set_console_tab(1);
+    const app::PointsTable& pts = w->points();
+    CHECK(static_cast<std::size_t>(w->console_row_count()) == pts.rows.size());
+    CHECK(pts.rows.size() == w->runner().points().size());
+    CHECK(std::ranges::all_of(pts.states, [](app::PointState s) { return s == app::PointState::done; }));
+    CHECK(std::ranges::any_of(pts.columns, [](const std::string& s) { return s.starts_with("I(drain)"); }));
+    CHECK(pts.progress.contains(" Newton iterations · "));
+    const fs::path csv = dir / "points.csv";
+    REQUIRE(w->save_console(csv));
+    {
+        std::ifstream in(csv, std::ios::binary);
+        CHECK(std::string{std::istreambuf_iterator<char>(in), {}} == app::points_text(pts, ','));
+    }
+    // Output: every line; Messages: warnings and errors only.
+    w->set_console_tab(0);
+    CHECK(w->console_body_shown());
+    CHECK(static_cast<std::size_t>(w->console_line_count()) == w->console_log().lines().size());
+    w->set_console_tab(2);
+    const std::string messages = w->console_log().text(app::LogFilter::warnings);
+    CHECK(static_cast<std::size_t>(w->console_line_count()) == static_cast<std::size_t>(std::ranges::count(messages, '\n')));
+    const fs::path log = dir / "run.log";
+    REQUIRE(w->save_console(log));
+    {
+        std::ifstream in(log, std::ios::binary);
+        CHECK(std::string{std::istreambuf_iterator<char>(in), {}} == messages);
+    }
+    // Hidden, the console is its tab strip alone; a run opens it again.
+    w->set_console_collapsed(true);
+    CHECK(w->panes().console.height == app::scaled(app::console_strip_96, w->dpi()));
+    CHECK_FALSE(w->console_body_shown());
+    w->set_console_tab(0);
+    std::string bad = app_test::mosfet2d;
+    bad.insert(bad.find("[contact source]"), "[bogus]\n");
+    w->deck().set_text(bad);
+    w->execute(Command::check);
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    REQUIRE(w->runner().diagnostics().size() == 1);
+    const std::string errors = w->console_log().text(app::LogFilter::errors);
+    CHECK(errors.find(std::format("  line {}: ", w->runner().diagnostics()[0].line)) != std::string::npos);
+    CHECK(errors.find("The deck does not build: ") != std::string::npos);
+    CHECK(w->console_log().text().find("Check m.deck") != std::string::npos);
+    w->set_console_collapsed(true);
+    w->execute(Command::run);  // a run opens the folded console (the bad deck fails at once)
+    CHECK_FALSE(w->console_collapsed());
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+}
+
+// Look A: the toolbar's and the tree's icons, the inspector's sections (a label left of its control, a header
+// that folds them, saved with the layout), and the run's progress in the status bar while it runs.
+TEST_CASE("app window look A: icons, the inspector's folding sections, the status bar's progress", "[app]") {
+    const fs::path dir = app_test::scratch("window_look_a");
+    const fs::path deck = app_test::write(dir, "m.deck", app_test::mosfet2d);
+    auto w = window();
+    CHECK(w->has_icons());
+    CHECK(w->missing_icons() == 0);
+    CHECK(SendMessageW(w->child(MainWindow::id_toolbar), TB_GETIMAGELIST, 0, 0) != 0);
+    const auto shown = [&](int id) { return (GetWindowLongPtrW(w->child(id), GWL_STYLE) & WS_VISIBLE) != 0; };
+    const auto rect = [&](int id) {
+        RECT r{};
+        GetWindowRect(w->child(id), &r);
+        return r;
+    };
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    CHECK(TreeView_GetImageList(w->child(MainWindow::id_tree), TVSIL_NORMAL) != nullptr);
+
+    w->execute(Command::run);
+    bool progress_seen = false;
+    REQUIRE(pump_until([&] {
+        progress_seen = progress_seen || (GetWindowLongPtrW(w->status_progress(), GWL_STYLE) & WS_VISIBLE) != 0;
+        return !w->runner().busy() && w->workspace() && w->workspace()->has_results();
+    }));
+    if (!progress_seen) WARN("the run ended before the status bar's progress was shown");
+    CHECK((GetWindowLongPtrW(w->status_progress(), GWL_STYLE) & WS_VISIBLE) == 0);
+
+    // The device view: Display's header, then the view's label left of its list on one row.
+    w->execute(Command::tab_view);
+    const int display = MainWindow::id_section_first;
+    CHECK(shown(display));
+    CHECK(shown(MainWindow::id_view));
+    const RECT label = rect(MainWindow::id_first_label), view = rect(MainWindow::id_view), head = rect(display);
+    CHECK(label.right <= view.left);
+    CHECK(label.top == view.top);
+    CHECK(head.bottom <= view.top);
+    const RECT colour_open = rect(display + 1);
+    // A click on the header folds the section: its header alone, the next section moved up, saved.
+    SendMessageW(w->child(MainWindow::id_inspector), WM_COMMAND, MAKEWPARAM(display, BN_CLICKED),
+                 reinterpret_cast<LPARAM>(w->child(display)));
+    CHECK(w->section_folded(0));
+    CHECK(shown(display));
+    CHECK_FALSE(shown(MainWindow::id_view));
+    CHECK_FALSE(shown(MainWindow::id_first_label));
+    CHECK(rect(display + 1).top < colour_open.top);
+    CHECK(w->app_state().layout.inspector_folded == 1);
+    w->set_section_folded(0, false);
+    CHECK(shown(MainWindow::id_view));
+    CHECK(rect(display + 1).top == colour_open.top);
+    // A section the view does not use is hidden, header and all: Curves on the device view.
+    CHECK_FALSE(shown(display + 5));
+    CHECK_FALSE(shown(MainWindow::id_swept));
+}
+
+// The speed pass (hidden: run by name): the window's creation, the largest example opened, and the UI thread's
+// time on runs that make many points and many steps (the console, the Points table, the run monitor).
+TEST_CASE("app window perf: startup, open, and the UI's time on runs", "[.perf]") {
+    using clock = std::chrono::steady_clock;
+    const auto secs = [](clock::time_point t0) { return std::chrono::duration<double>(clock::now() - t0).count(); };
+    auto t0 = clock::now();
+    auto w = window();
+    WARN(std::format("create: {:.1f} ms", 1e3 * secs(t0)));
+    t0 = clock::now();
+    REQUIRE(w->open_deck(fs::path(NITCAD_EXAMPLES_DIR) / "mosfet_3d.deck"));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    WARN(std::format("open mosfet_3d (built, shown): {:.1f} ms", 1e3 * secs(t0)));
+
+    const fs::path dir = app_test::scratch("window_perf");
+    const auto run = [&](const std::string& name, const std::string& text) {
+        const fs::path deck = app_test::write(dir, name, text);
+        REQUIRE(w->open_deck(deck));
+        REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+        const auto r0 = clock::now();
+        w->execute(Command::run);
+        REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+        const double wall = secs(r0);
+        const auto& u = w->ui_timings();
+        WARN(std::format("{}: run {:.2f} s, {} points, {} iterations, {} log lines; events {} ({:.1f} ms); updates {} "
+                         "({:.1f} ms, max {:.2f} ms: console {:.1f}, points {:.1f}, monitor {:.1f}); end {:.1f} ms, "
+                         "results {:.1f} ms; UI share {:.1f}%",
+                         name, wall, w->runner().points().size(), w->runner().iterations().size(),
+                         w->console_log().lines().size(), u.events, 1e3 * u.events_s, u.updates, 1e3 * u.update_s,
+                         1e3 * u.update_max_s, 1e3 * u.console_s, 1e3 * u.points_s, 1e3 * u.monitor_s, 1e3 * u.finish_s,
+                         1e3 * u.results_s, 100.0 * (u.events_s + u.update_s + u.finish_s + u.results_s) / wall));
+    };
+    std::string sweep = app_test::mosfet2d;
+    sweep.replace(sweep.find("contact gate = 0 : 1.5 : 0.25"), 29, "contact gate = 0 : 1.5 : 0.01");
+    run("sweep151.deck", sweep);
+    run("transient.deck", app_test::transient_diode());
 }
 
 TEST_CASE("app window: the start page, the run monitor, Stop and the results (WG1, WG8, VA3, VA5)", "[app]") {

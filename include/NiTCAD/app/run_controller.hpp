@@ -62,7 +62,19 @@ struct Iteration {
     std::size_t number = 0;
     double update = 0.0;
     std::size_t row = 0;
+    double residual = 0.0;  // Unit 26j: the largest |F| before the correction
+    int in_row = 0;         // its number within its point (from 1)
 };
+
+// Unit 26j: what the console says of a built plan, sent to the UI thread when the deck builds (the plan
+// itself comes with the run's end): its description (analysis and equations, device, linear solver and
+// Newton tolerances, points planned), the contacts' names and a sweep's or small-signal run's points.
+struct PlanSummary {
+    std::vector<std::string> description;
+    std::vector<std::string> contacts;
+    std::vector<std::vector<double>> points;  // one bias per contact, contact order
+};
+[[nodiscard]] PlanSummary summarize_plan(const deck::Plan& plan);
 
 class RunController {
 public:
@@ -94,6 +106,8 @@ public:
     [[nodiscard]] const std::vector<Diagnostic>& diagnostics() const noexcept { return diagnostics_; }
     // The plan the last check or run built (kept after the run).
     [[nodiscard]] const std::optional<deck::Plan>& plan() const noexcept { return plan_; }
+    // The summary of the plan the current or last check or run built (Unit 26j), from the moment it built.
+    [[nodiscard]] const std::optional<PlanSummary>& plan_summary() const noexcept { return summary_; }
     // The last run's report (done) or the error it failed with (failed).
     [[nodiscard]] const std::optional<deck::RunReport>& report() const noexcept { return report_; }
     [[nodiscard]] const std::optional<base::Error>& error() const noexcept { return error_; }
@@ -126,6 +140,7 @@ private:
     RunState state_ = RunState::idle;
     std::vector<Diagnostic> diagnostics_;
     std::optional<deck::Plan> plan_;
+    std::optional<PlanSummary> summary_;
     std::optional<deck::RunReport> report_;
     std::optional<base::Error> error_;
     std::vector<PointRow> points_;

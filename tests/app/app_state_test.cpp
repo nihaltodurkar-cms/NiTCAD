@@ -29,6 +29,7 @@ TEST_CASE("app state: written and read back; damaged lines ignored", "[app]") {
     s.add_recent(fs::path(u8"C:/decks/b\u00e4nder.deck"));
     s.add_recent("C:/decks/a.deck");
     s.layout = {10, 20, 1280, 800, true, 230, 270, 0};
+    s.layout.inspector_folded = 0b1010;  // look A: the Colour and Slice sections folded
     const app::AppState r = app::parse_state(app::serialize(s));
     CHECK(r.recent == s.recent);
     CHECK(r.layout.x == 10);
@@ -38,6 +39,7 @@ TEST_CASE("app state: written and read back; damaged lines ignored", "[app]") {
     CHECK(r.layout.maximized);
     CHECK(r.layout.tree_width == 230);
     CHECK(r.layout.inspector_width == 270);
+    CHECK(r.layout.inspector_folded == 0b1010);
     // Unknown keys, bad numbers and lines without '=' change nothing.
     const app::AppState d = app::parse_state("window = 1 2 x 4\nunknown = 3\ngarbage\ntree_width = -5\nrecent = a.deck\n"
                                              "recent = a.deck\nmaximized = 1\n");

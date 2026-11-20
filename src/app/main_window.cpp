@@ -2,6 +2,8 @@
 #include "main_window.hpp"
 
 #include <commctrl.h>
+#include <span>
+#include <richedit.h>  // Unit 26j: the console
 #include <dwmapi.h>     // ZD6: the title bar's theme
 #include <shobjidl.h>   // ZD5: ITaskbarList3
 #include <windowsx.h>
@@ -9,8 +11,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <charconv>
 #include <format>
+#include <fstream>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -153,6 +157,9 @@ MainWindow::~MainWindow() {
     renderer_.reset();
     if (taskbar_list_) taskbar_list_->Release();
     if (accelerators_) DestroyAcceleratorTable(accelerators_);
+    for (HIMAGELIST l : {toolbar_images_, toolbar_disabled_, tree_images_}) {
+        if (l) ImageList_Destroy(l);
+    }
     if (font_) DeleteObject(font_);
     if (bold_) DeleteObject(bold_);
     if (com_) CoUninitialize();  // after the taskbar list's release
@@ -164,7 +171,6 @@ bool MainWindow::create_children() {
                     hwnd_, id_toolbar);
     SendMessageW(toolbar_, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
     SendMessageW(toolbar_, TB_SETEXTENDEDSTYLE, 0, TBSTYLE_EX_MIXEDBUTTONS);
-    SendMessageW(toolbar_, TB_SETBITMAPSIZE, 0, MAKELPARAM(0, 0));
     struct Button {
         Command id;
         const wchar_t* text;
@@ -177,9 +183,10 @@ bool MainWindow::create_children() {
                               {Command::fit, L"Fit", false},           {Command::probe_mode, L"Probe", true},
                               {Command::measure_mode, L"Measure", true}, {Command::cut_line_mode, L"Cut line", true},
                               {Command::perspective, L"Perspective", true}};
+    int image = 0;  // look A: each button's icon, in order (make_icons)
     for (const Button& b : buttons) {
         TBBUTTON t{};
-        t.iBitmap = I_IMAGENONE;
+        t.iBitmap = b.text ? image++ : I_IMAGENONE;
         if (!b.text) {
             t.fsStyle = BTNS_SEP;
         } else {
@@ -191,6 +198,10 @@ bool MainWindow::create_children() {
         SendMessageW(toolbar_, TB_ADDBUTTONSW, 1, reinterpret_cast<LPARAM>(&t));
     }
     status_ = make(STATUSCLASSNAMEW, L"", WS_VISIBLE | SBARS_SIZEGRIP, hwnd_, id_status);
+    // Look A: a run's progress at the right of the status bar's first part, shown while it runs.
+    status_progress_ = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD | PBS_SMOOTH, 0, 0, 10, 10, status_, nullptr,
+                                       GetModuleHandleW(nullptr), nullptr);
+    SendMessageW(status_progress_, PBM_SETRANGE32, 0, 1000);
     tree_ = make(WC_TREEVIEWW, L"", WS_VISIBLE | WS_TABSTOP | TVS_HASLINES | TVS_HASBUTTONS | TVS_LINESATROOT |
                                         TVS_SHOWSELALWAYS,
                  hwnd_, id_tree, WS_EX_CLIENTEDGE);
@@ -211,13 +222,40 @@ bool MainWindow::create_children() {
     results_ = std::make_unique<ResultsPage>(hwnd_, id_results);
     results_->on_pass = [this](std::size_t k) { results_show_pass(k); };
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
+    // Unit 26j: the console along the window's bottom, a classic output window: the tab's text (plain, black on
+    // white) or the points table over a tab strip (Output, Points, Messages); right-click for Copy, Save, Clear
+    // and Hide.
+    console_panel_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
+                                     10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_console)),
+                                     GetModuleHandleW(nullptr), this);
+    {
+        HWND tabs = make(WC_TABCONTROLW, L"", WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | TCS_BOTTOM, console_panel_,
+                         id_console_tabs);
+        for (const wchar_t* t : {L"Output", L"Points", L"Messages"}) {
+            TCITEMW item{};
+            item.mask = TCIF_TEXT;
+            item.pszText = const_cast<wchar_t*>(t);
+            SendMessageW(tabs, TCM_INSERTITEMW, static_cast<WPARAM>(SendMessageW(tabs, TCM_GETITEMCOUNT, 0, 0)),
+                         reinterpret_cast<LPARAM>(&item));
+        }
+    }
+    console_points_ = make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                           console_panel_, id_console_points, WS_EX_CLIENTEDGE);
+    SendMessageW(console_points_, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    LoadLibraryW(L"Msftedit.dll");
+    console_ = make(MSFTEDIT_CLASS, L"",
+                    WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
+                        ES_NOHIDESEL,
+                    console_panel_, id_console_text, WS_EX_CLIENTEDGE);
+    SendMessageW(console_, EM_EXLIMITTEXT, 0, 0x7FFFFFFE);
+    SendMessageW(console_, EM_SETTARGETDEVICE, 0, 1);  // no wrapping: the tables keep their columns
     inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
                                  10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_inspector)),
                                  GetModuleHandleW(nullptr), this);
     // The inspector's controls, each after its label.
     int label = id_first_label;
     const auto labelled = [&](const wchar_t* text, const wchar_t* cls, DWORD style, int id) {
-        make(L"STATIC", text, WS_VISIBLE, inspector_, label++);
+        make(L"STATIC", text, WS_VISIBLE | SS_CENTERIMAGE | SS_ENDELLIPSIS, inspector_, label++);
         make(cls, L"", WS_VISIBLE | WS_TABSTOP | style, inspector_, id, cls == std::wstring_view(L"EDIT") ? WS_EX_CLIENTEDGE : 0);
     };
     const DWORD drop = CBS_DROPDOWNLIST | WS_VSCROLL;
@@ -244,10 +282,10 @@ bool MainWindow::create_children() {
         labelled(text, L"COMBOBOX", drop, list);
         make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, box, WS_EX_CLIENTEDGE);
     };
-    paired(L"Arrows (count)", id_arrows, id_arrow_count);
-    paired(L"Streamlines (count)", id_lines, id_line_count);
-    paired(L"Seeds from (or typed, µm)", id_from, id_seeds);
-    paired(L"Exploded along (gap, µm)", id_axis, id_gap);
+    paired(L"Arrows", id_arrows, id_arrow_count);
+    paired(L"Streamlines", id_lines, id_line_count);
+    paired(L"Seeds (µm)", id_from, id_seeds);
+    paired(L"Explode (µm)", id_axis, id_gap);
     make(L"BUTTON", L"Sho&w the field", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_exploded_field);
     labelled(L"Swept contact", L"COMBOBOX", drop, id_swept);
     labelled(L"Sensed contact", L"COMBOBOX", drop, id_sensed);
@@ -255,14 +293,14 @@ bool MainWindow::create_children() {
     make(L"BUTTON", L"Lo&g axis", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_log);
     // Unit 26c (YD5): the snapshot slider, its time and Play; (YD6) a low and a high slider per axis of the box.
     const DWORD bar = WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS;
-    make(L"STATIC", L"Snapshot", WS_VISIBLE, inspector_, label++);
+    make(L"STATIC", L"Snapshot", WS_VISIBLE | SS_CENTERIMAGE, inspector_, label++);
     make(TRACKBAR_CLASSW, L"", bar, inspector_, id_time);
     make(L"STATIC", L"", WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, inspector_, id_time_text);
     make(L"BUTTON", L"Pla&y", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, inspector_, id_play);
-    for (const auto& [text, low, high] : {std::tuple{L"Clip x, low and high", id_clip_x0, id_clip_x1},
-                                          std::tuple{L"Clip y, low and high", id_clip_y0, id_clip_y1},
-                                          std::tuple{L"Clip z, low and high", id_clip_z0, id_clip_z1}}) {
-        make(L"STATIC", text, WS_VISIBLE, inspector_, label++);
+    for (const auto& [text, low, high] : {std::tuple{L"Clip x", id_clip_x0, id_clip_x1},
+                                          std::tuple{L"Clip y", id_clip_y0, id_clip_y1},
+                                          std::tuple{L"Clip z", id_clip_z0, id_clip_z1}}) {
+        make(L"STATIC", text, WS_VISIBLE | SS_CENTERIMAGE, inspector_, label++);
         for (const int id : {low, high}) {
             make(TRACKBAR_CLASSW, L"", bar, inspector_, id);
             SendMessageW(child(id), TBM_SETRANGE, FALSE, MAKELPARAM(0, clip_steps));
@@ -270,7 +308,7 @@ bool MainWindow::create_children() {
         }
     }
     // Unit 26d (ZD3): the colour range, its two boxes and Auto side by side, after the colormap in tab order.
-    make(L"STATIC", L"Range (min, max)", WS_VISIBLE, inspector_, label++);
+    make(L"STATIC", L"Range", WS_VISIBLE | SS_CENTERIMAGE, inspector_, label++);
     make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_range_min, WS_EX_CLIENTEDGE);
     make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_range_max, WS_EX_CLIENTEDGE);
     make(L"BUTTON", L"&Auto", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_range_auto);
@@ -281,6 +319,8 @@ bool MainWindow::create_children() {
         after = child(id);
     }
     make(L"STATIC", L"", WS_VISIBLE | SS_LEFT, inspector_, id_probe_text);
+    // Look A: the sections' headers (drawn by draw_section_header; a click folds the section).
+    for (int k = 0; k < section_count; ++k) make(L"BUTTON", L"", WS_VISIBLE | BS_OWNERDRAW, inspector_, id_section_first + k);
     combo_fill(child(id_scale), {scale_names.begin(), scale_names.end()}, 0);
     combo_fill(child(id_colormap), {colormap_names.begin(), colormap_names.end()}, 0);
     combo_fill(child(id_slice_axis), {"none", "x", "y", "z"}, 0);
@@ -476,6 +516,10 @@ void MainWindow::apply_dpi(int dpi) {
     const auto set = [&](HWND h) { SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE); };
     for (HWND h : {toolbar_, status_, tree_, tabs_, metrics_}) set(h);
     for (HWND c = GetWindow(inspector_, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) set(c);
+    for (HWND c = GetWindow(console_panel_, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        if (c != console_) set(c);
+    }
+    make_icons();
     SendMessageW(toolbar_, TB_AUTOSIZE, 0, 0);
     deck_->set_dpi(dpi);
     start_->set_dpi(dpi, font_, bold_);
@@ -503,6 +547,7 @@ void MainWindow::layout() {
     place(tree_, panes_.tree);
     place(tabs_, panes_.tabs);
     place(inspector_, panes_.inspector);
+    place(console_panel_, panes_.console);
     const bool view = tab_ == tab_view || tab_ == tab_curves;
     Rect page = panes_.page;
     if (tab_ != tab_view) page.height += panes_.metrics.height;  // the metrics strip is the device view's
@@ -521,94 +566,352 @@ void MainWindow::layout() {
     layout_inspector();
 }
 
+namespace {
+
+// Look A: the inspector's sections, each the controls it lays out (and hides when folded), labels too.
+constexpr int first_label = MainWindow::id_first_label;
+constexpr int sec_display = 0, sec_colour = 1, sec_show = 2, sec_slice = 3, sec_vectors = 4, sec_curves = 5,
+              sec_playback = 6, sec_probe = 7;
+constexpr std::array<const wchar_t*, MainWindow::section_count> section_titles{
+    L"DISPLAY", L"COLOUR", L"SHOW", L"SLICE AND CLIP", L"VECTORS", L"CURVES", L"PLAYBACK", L"PROBE"};
+using M = MainWindow;
+const std::array<std::vector<int>, MainWindow::section_count>& section_members() {
+    static const std::array<std::vector<int>, MainWindow::section_count> m{
+        std::vector<int>{first_label + 0, M::id_view, first_label + 1, M::id_field, first_label + 2, M::id_point},
+        std::vector<int>{first_label + 3, M::id_scale, first_label + 4, M::id_colormap, label_range, M::id_range_min,
+                         M::id_range_max, M::id_range_auto, first_label + 7, M::id_levels},
+        std::vector<int>{M::id_contours, M::id_edges, M::id_contacts, M::id_opaque, M::id_perspective, M::id_enhanced,
+                         M::id_axis_box},
+        std::vector<int>{first_label + 5, M::id_slice_axis, first_label + 6, M::id_slice_at, M::id_clip, M::id_clip_box,
+                         label_clip_x, M::id_clip_x0, M::id_clip_x1, label_clip_x + 1, M::id_clip_y0, M::id_clip_y1,
+                         label_clip_x + 2, M::id_clip_z0, M::id_clip_z1},
+        std::vector<int>{label_arrows, M::id_arrows, M::id_arrow_count, label_lines, M::id_lines, M::id_line_count,
+                         label_from, M::id_from, M::id_seeds, label_axis, M::id_axis, M::id_gap, M::id_exploded_field},
+        std::vector<int>{label_swept, M::id_swept, label_sensed, M::id_sensed, label_frequency, M::id_frequency,
+                         M::id_log},
+        std::vector<int>{label_time, M::id_time, M::id_time_text, M::id_play},
+        std::vector<int>{first_label + 8, M::id_cut, M::id_probe_text}};
+    return m;
+}
+
+// A glyph of the system's icon font (Segoe Fluent Icons, else Segoe MDL2 Assets) in a colour, or a filled
+// square (a region's swatch) when the glyph is 0.
+struct Icon {
+    wchar_t glyph;
+    COLORREF colour;
+};
+
+// The icons drawn at `size` pixels into a 32-bit image list: the glyph's grey coverage as the alpha, the colour
+// premultiplied. Null when no icon font is installed.
+HIMAGELIST icon_list(int size, std::span<const Icon> icons, bool grey, int* missing = nullptr) {
+    HDC dc = CreateCompatibleDC(nullptr);
+    HFONT font = nullptr;
+    for (const wchar_t* face : {L"Segoe Fluent Icons", L"Segoe MDL2 Assets"}) {
+        font = CreateFontW(-size, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, face);
+        HGDIOBJ old = SelectObject(dc, font);
+        wchar_t got[LF_FACESIZE]{};
+        GetTextFaceW(dc, LF_FACESIZE, got);
+        SelectObject(dc, old);
+        if (std::wstring_view(got) == face) break;
+        DeleteObject(font);
+        font = nullptr;
+    }
+    if (!font) {
+        DeleteDC(dc);
+        return nullptr;
+    }
+    HIMAGELIST list = ImageList_Create(size, size, ILC_COLOR32, static_cast<int>(icons.size()), 0);
+    BITMAPINFO bi{};
+    bi.bmiHeader = {sizeof(BITMAPINFOHEADER), size, -size, 1, 32, BI_RGB};
+    for (const Icon& icon : icons) {
+        void* bits = nullptr;
+        HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        auto* px = static_cast<std::uint32_t*>(bits);
+        const std::size_t n = static_cast<std::size_t>(size) * static_cast<std::size_t>(size);
+        std::fill(px, px + n, 0u);
+        HGDIOBJ old_bmp = SelectObject(dc, bmp);
+        const COLORREF c = grey ? RGB(160, 164, 170) : icon.colour;
+        if (icon.glyph != 0) {
+            WORD index = 0;
+            HGDIOBJ old = SelectObject(dc, font);
+            GetGlyphIndicesW(dc, &icon.glyph, 1, &index, GGI_MARK_NONEXISTING_GLYPHS);
+            if (index == 0xFFFF && missing) ++*missing;
+            if (index != 0xFFFF) {
+                SetBkMode(dc, TRANSPARENT);
+                SetTextColor(dc, RGB(255, 255, 255));
+                RECT r{0, 0, size, size};
+                DrawTextW(dc, &icon.glyph, 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            }
+            SelectObject(dc, old);
+            GdiFlush();
+            for (std::size_t k = 0; k < n; ++k) {
+                const std::uint32_t a = (px[k] >> 8) & 0xFF;  // the green channel: the glyph's coverage
+                px[k] = a << 24 | (GetRValue(c) * a / 255) << 16 | (GetGValue(c) * a / 255) << 8 | (GetBValue(c) * a / 255);
+            }
+        } else {  // a swatch: a rounded-off square with a darker edge
+            const int m = std::max(size / 8, 1);
+            for (int y = m + 1; y < size - m; ++y) {
+                for (int x = m; x < size - m; ++x) {
+                    const bool edge = x == m || x == size - m - 1 || y == m + 1 || y == size - m - 1;
+                    const int f = edge ? 70 : 100;
+                    px[static_cast<std::size_t>(y * size + x)] =
+                        0xFFu << 24 | static_cast<std::uint32_t>(GetRValue(c) * f / 100) << 16 |
+                        static_cast<std::uint32_t>(GetGValue(c) * f / 100) << 8 | static_cast<std::uint32_t>(GetBValue(c) * f / 100);
+                }
+            }
+        }
+        SelectObject(dc, old_bmp);
+        ImageList_Add(list, bmp, nullptr);
+        DeleteObject(bmp);
+    }
+    DeleteObject(font);
+    DeleteDC(dc);
+    return list;
+}
+
+constexpr COLORREF icon_ink = RGB(45, 50, 58);
+// The toolbar's buttons in order: New, Open, Save, Check, Run, Stop, Fit, Probe, Measure, Cut line, Perspective.
+constexpr std::array<Icon, 11> toolbar_icons{{{0xE8A5, icon_ink}, {0xE838, icon_ink}, {0xE74E, icon_ink},
+                                              {0xE73E, icon_ink}, {0xE768, RGB(46, 157, 79)}, {0xE71A, RGB(196, 43, 28)},
+                                              {0xE740, icon_ink}, {0xE81D, icon_ink}, {0xED5E, icon_ink},
+                                              {0xE9D9, icon_ink}, {0xE7B8, icon_ink}}};
+// The tree's: the device, a semiconductor's and an insulator's swatch, a contact, the mesh, the views, a view,
+// the fields, a field, the results.
+constexpr int tree_icon_device = 0, tree_icon_semiconductor = 1, tree_icon_insulator = 2, tree_icon_contact = 3,
+              tree_icon_mesh = 4, tree_icon_views = 5, tree_icon_view = 6, tree_icon_fields = 7, tree_icon_field = 8,
+              tree_icon_results = 9;
+constexpr COLORREF icon_soft = RGB(105, 112, 124);
+constexpr std::array<Icon, 10> tree_icons{{{0xE950, RGB(47, 111, 214)}, {0, RGB(155, 183, 217)}, {0, RGB(233, 215, 168)},
+                                           {0xE945, RGB(176, 120, 20)}, {0xE80A, icon_ink}, {0xE890, icon_ink},
+                                           {0xE7B3, icon_soft}, {0xE9D9, icon_ink}, {0xE76C, icon_soft},
+                                           {0xE9F9, icon_ink}}};
+
+}  // namespace
+
+void MainWindow::make_icons() {
+    for (HIMAGELIST* l : {&toolbar_images_, &toolbar_disabled_, &tree_images_}) {
+        if (*l) ImageList_Destroy(*l);
+        *l = nullptr;
+    }
+    const int size = scaled(16, dpi_);
+    missing_icons_ = 0;
+    toolbar_images_ = icon_list(size, toolbar_icons, false, &missing_icons_);
+    toolbar_disabled_ = icon_list(size, toolbar_icons, true);
+    tree_images_ = icon_list(size, tree_icons, false, &missing_icons_);
+    SendMessageW(toolbar_, TB_SETBITMAPSIZE, 0, toolbar_images_ ? MAKELPARAM(size, size) : MAKELPARAM(0, 0));
+    SendMessageW(toolbar_, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(toolbar_images_));
+    SendMessageW(toolbar_, TB_SETDISABLEDIMAGELIST, 0, reinterpret_cast<LPARAM>(toolbar_disabled_));
+    TreeView_SetImageList(tree_, tree_images_, TVSIL_NORMAL);
+}
+
+void MainWindow::set_section_folded(int section, bool folded) {
+    if (section < 0 || section >= section_count) return;
+    const int bit = 1 << section;
+    state_.layout.inspector_folded = folded ? state_.layout.inspector_folded | bit : state_.layout.inspector_folded & ~bit;
+    layout_inspector();
+    InvalidateRect(GetDlgItem(inspector_, id_section_first + section), nullptr, TRUE);
+}
+
+// A section's header: its title in small capitals on a light band, a chevron (down open, right folded).
+void MainWindow::draw_section_header(const DRAWITEMSTRUCT& d) {
+    const int section = static_cast<int>(d.CtlID) - id_section_first;
+    HDC dc = d.hDC;
+    RECT r = d.rcItem;
+    HBRUSH band = CreateSolidBrush(RGB(244, 245, 248));
+    FillRect(dc, &r, band);
+    DeleteObject(band);
+    RECT line{r.left, r.bottom - 1, r.right, r.bottom};
+    HBRUSH edge = CreateSolidBrush(RGB(217, 221, 227));
+    FillRect(dc, &line, edge);
+    line = {r.left, r.top, r.right, r.top + 1};
+    FillRect(dc, &line, edge);
+    DeleteObject(edge);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(80, 87, 98));
+    HGDIOBJ old = SelectObject(dc, bold_);
+    RECT text{r.left + scaled(10, dpi_), r.top, r.right - scaled(24, dpi_), r.bottom};
+    DrawTextW(dc, section_titles[static_cast<std::size_t>(section)], -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, font_);
+    RECT chevron{r.right - scaled(24, dpi_), r.top, r.right - scaled(8, dpi_), r.bottom};
+    DrawTextW(dc, section_folded(section) ? L"▸" : L"▾", 1, &chevron, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, old);
+    if ((d.itemState & ODS_FOCUS) != 0) {
+        RECT f = r;
+        InflateRect(&f, -2, -2);
+        DrawFocusRect(dc, &f);
+    }
+}
+
+// Look A: the sections one under the other, each under its header; in a section a label left of its control
+// (a drop-down list, a box, a pair side by side, a slider), the check boxes two to a row where they fit. A section
+// folded shows its header alone; one whose controls the view does not use is hidden. The probe's text fills the
+// rest.
 void MainWindow::layout_inspector() {
     RECT r{};
     GetClientRect(inspector_, &r);
-    const int pad = scaled(10, dpi_), row = scaled(23, dpi_), gap = scaled(4, dpi_), label_h = scaled(16, dpi_);
+    const int pad = scaled(8, dpi_), row = scaled(23, dpi_), gap = scaled(4, dpi_), head = scaled(22, dpi_);
     const int w = std::max<int>(r.right - 2 * pad, 0);
-    int y = pad;
-    int label = id_first_label;
-    const auto put = [&](int id, int height) {
-        MoveWindow(child(id), pad, y, w, height, TRUE);
-        y += height + gap;
+    const int lw = std::min(scaled(84, dpi_), w / 2);  // the label column
+    const int cx = pad + lw + gap, cw = std::max(w - lw - gap, 0);
+    const int half = std::max((cw - gap) / 2, 0);
+    const auto used = [&](int id) { return !unused_controls_.contains(id); };
+    const auto show = [&](int id, bool on) {
+        HWND h = child(id);
+        const bool visible = (GetWindowLongPtrW(h, GWL_STYLE) & WS_VISIBLE) != 0;
+        if (visible != on) ShowWindow(h, on ? SW_SHOWNA : SW_HIDE);
     };
-    const auto put_label = [&]() {
-        MoveWindow(GetDlgItem(inspector_, label++), pad, y, w, label_h, TRUE);
-        y += label_h;
+    const auto move = [&](int id, int x, int y, int width, int height) {
+        MoveWindow(child(id), x, y, std::max(width, 0), height, TRUE);
+        show(id, true);
     };
-    const auto shown = [&](int id) { return (GetWindowLongPtrW(child(id), GWL_STYLE) & WS_VISIBLE) != 0; };
-    const auto put_at = [&](int label_id) {
-        MoveWindow(GetDlgItem(inspector_, label_id), pad, y, w, label_h, TRUE);
-        y += label_h;
+    int y = 0;
+    // A label and its control; a combo box's height includes its list.
+    const auto field = [&](int label, int id, bool combo) {
+        move(label, pad, y, lw, row);
+        move(id, cx, y, cw, combo ? row * 8 : row);
+        y += row + gap;
     };
-    for (int id : {id_view, id_field, id_point, id_scale, id_colormap}) {
-        put_label();
-        put(id, row * 8);  // a drop-down list's height includes its list
-        y -= row * 8 - row;
-    }
-    // ZD3: the range's minimum, maximum and Auto in a row.
-    if (shown(id_range_min)) {
-        put_at(label_range);
-        const int third = std::max((w - 2 * gap) / 3, 0);
-        MoveWindow(child(id_range_min), pad, y, third, row, TRUE);
-        MoveWindow(child(id_range_max), pad + third + gap, y, third, row, TRUE);
-        MoveWindow(child(id_range_auto), pad + 2 * (third + gap), y, std::max(w - 2 * (third + gap), 0), row, TRUE);
+    const auto pair = [&](int label, int a, int b, bool combo) {
+        move(label, pad, y, lw, row);
+        move(a, cx, y, half, combo ? row * 8 : row);
+        move(b, cx + half + gap, y, cw - half - gap, row);
         y += row + gap;
-    }
-    for (int id : {id_contours, id_edges, id_contacts, id_opaque, id_perspective}) put(id, row);
-    if (shown(id_enhanced)) put(id_enhanced, row);  // 3D views only (Unit 26f, KD5)
-    if (shown(id_axis_box)) put(id_axis_box, row);  // 3D views only (Unit 26h, JQ3)
-    put_label();
-    put(id_slice_axis, row * 6);
-    y -= row * 6 - row;
-    put_label();
-    put(id_slice_at, row);
-    put(id_clip, row);
-    put(id_clip_box, row);
-    put_label();
-    put(id_levels, row);
-    put_label();
-    put(id_cut, row);
-    // Unit 26c: the groups shown for the active view (show_inspector_groups), one under the other.
-    const int half = std::max((w - gap) / 2, 0);
-    for (const auto& [label_id, list, box] : {std::tuple{label_arrows, id_arrows, id_arrow_count},
-                                             std::tuple{label_lines, id_lines, id_line_count},
-                                             std::tuple{label_from, id_from, id_seeds},
-                                             std::tuple{label_axis, id_axis, id_gap}}) {
-        if (!shown(list)) continue;
-        put_at(label_id);
-        MoveWindow(child(list), pad, y, half, row * 8, TRUE);
-        MoveWindow(child(box), pad + half + gap, y, w - half - gap, row, TRUE);
+    };
+    const auto full = [&](int id) {
+        move(id, pad, y, w, row);
         y += row + gap;
-    }
-    if (shown(id_exploded_field)) put(id_exploded_field, row);
-    for (const auto& [label_id, list] : {std::pair{label_swept, id_swept}, std::pair{label_sensed, id_sensed},
-                                        std::pair{label_frequency, id_frequency}}) {
-        if (!shown(list)) continue;
-        put_at(label_id);
-        put(list, row * 8);
-        y -= row * 8 - row;
-    }
-    if (shown(id_log)) put(id_log, row);
-    // YD5: the snapshot slider, then its time beside Play; YD6: per axis the low and the high slider side by side.
-    if (shown(id_time)) {
-        put_at(label_time);
-        put(id_time, row);
-        const int button = scaled(80, dpi_);
-        MoveWindow(child(id_time_text), pad, y, std::max(w - button - gap, 0), row, TRUE);
-        MoveWindow(child(id_play), pad + std::max(w - button, 0), y, std::min(button, w), row, TRUE);
-        y += row + gap;
-    }
-    if (shown(id_clip_x0)) {
-        for (int axis = 0; axis < 3; ++axis) {
-            put_at(label_clip_x + axis);
-            MoveWindow(child(id_clip_x0 + 2 * axis), pad, y, half, row, TRUE);
-            MoveWindow(child(id_clip_x1 + 2 * axis), pad + half + gap, y, w - half - gap, row, TRUE);
-            y += row + gap;
+    };
+    const auto& members = section_members();
+    for (int k = 0; k < section_count; ++k) {
+        const auto& ids = members[static_cast<std::size_t>(k)];
+        const bool any = std::ranges::any_of(ids, used);
+        const int header = id_section_first + k;
+        if (!any || section_folded(k)) {
+            for (const int id : ids) show(id, false);
         }
+        if (!any) {
+            show(header, false);
+            continue;
+        }
+        move(header, 0, y, r.right, head);
+        y += head;
+        if (section_folded(k)) continue;
+        y += gap + gap / 2;
+        // Every member hidden first: each placement below shows the ones in use.
+        for (const int id : ids) {
+            if (!used(id)) show(id, false);
+        }
+        switch (k) {
+        case sec_display:
+            field(first_label + 0, id_view, true);
+            field(first_label + 1, id_field, true);
+            field(first_label + 2, id_point, true);
+            break;
+        case sec_colour:
+            field(first_label + 3, id_scale, true);
+            field(first_label + 4, id_colormap, true);
+            if (used(id_range_min)) {  // ZD3: the minimum, the maximum and Auto in a row
+                const int third = std::max((cw - 2 * gap) / 3, 0);
+                move(label_range, pad, y, lw, row);
+                move(id_range_min, cx, y, third, row);
+                move(id_range_max, cx + third + gap, y, third, row);
+                move(id_range_auto, cx + 2 * (third + gap), y, cw - 2 * (third + gap), row);
+                y += row + gap;
+            }
+            field(first_label + 7, id_levels, false);
+            break;
+        case sec_show: {
+            std::vector<int> boxes;
+            for (const int id : ids) {
+                if (used(id)) boxes.push_back(id);
+            }
+            const int col = (w - gap) / 2;
+            const bool two = col >= scaled(108, dpi_);
+            for (std::size_t j = 0; j < boxes.size(); ++j) {
+                if (two) {
+                    move(boxes[j], pad + (j % 2 == 0 ? 0 : col + gap), y, j % 2 == 0 ? col : w - col - gap, row);
+                    if (j % 2 == 1 || j + 1 == boxes.size()) y += row + gap / 2;
+                } else {
+                    move(boxes[j], pad, y, w, row);
+                    y += row + gap / 2;
+                }
+            }
+            break;
+        }
+        case sec_slice:
+            field(first_label + 5, id_slice_axis, true);
+            field(first_label + 6, id_slice_at, false);
+            full(id_clip);
+            move(id_clip_box, cx, y, cw, row);
+            y += row + gap;
+            if (used(id_clip_x0)) {  // YD6: per axis the low and the high slider side by side
+                for (int axis = 0; axis < 3; ++axis) pair(label_clip_x + axis, id_clip_x0 + 2 * axis, id_clip_x1 + 2 * axis, false);
+            }
+            break;
+        case sec_vectors:
+            for (const auto& [label, list, box] : {std::tuple{label_arrows, id_arrows, id_arrow_count},
+                                                   std::tuple{label_lines, id_lines, id_line_count},
+                                                   std::tuple{label_from, id_from, id_seeds},
+                                                   std::tuple{label_axis, id_axis, id_gap}}) {
+                if (used(list)) pair(label, list, box, true);
+            }
+            if (used(id_exploded_field)) move(id_exploded_field, cx, y, cw, row), y += row + gap;
+            break;
+        case sec_curves:
+            for (const auto& [label, list] : {std::pair{label_swept, id_swept}, std::pair{label_sensed, id_sensed},
+                                              std::pair{label_frequency, id_frequency}}) {
+                if (used(list)) field(label, list, true);
+            }
+            if (used(id_log)) move(id_log, cx, y, cw, row), y += row + gap;
+            break;
+        case sec_playback: {  // YD5: the snapshot slider, then its time beside Play
+            field(label_time, id_time, false);
+            const int button = std::min(scaled(72, dpi_), cw);
+            move(id_time_text, cx, y, cw - button - gap, row);
+            move(id_play, cx + cw - button, y, button, row);
+            y += row + gap;
+            break;
+        }
+        case sec_probe:
+            field(first_label + 8, id_cut, false);
+            move(id_probe_text, pad, y, w, std::max<int>(r.bottom - y - pad, row * 3));
+            y += std::max<int>(r.bottom - y - pad, row * 3);
+            break;
+        default:
+            break;
+        }
+        y += gap;
     }
-    y += gap;
-    MoveWindow(child(id_probe_text), pad, y, w, std::max<int>(r.bottom - y - pad, 0), TRUE);
+}
+
+// Look A: the run's progress at the right of the status bar's first part while it runs (a marquee when the
+// points are not counted), hidden otherwise.
+void MainWindow::update_status_progress() {
+    if (!status_progress_) return;
+    const RunState s = runner_.state();
+    const bool running = s == RunState::running || s == RunState::stopping;
+    if (!running) {
+        if (IsWindowVisible(status_progress_) || (GetWindowLongPtrW(status_progress_, GWL_STYLE) & WS_VISIBLE) != 0) {
+            ShowWindow(status_progress_, SW_HIDE);
+        }
+        return;
+    }
+    RECT part{};
+    SendMessageW(status_, SB_GETRECT, status_state, reinterpret_cast<LPARAM>(&part));
+    const int width = std::min<int>(scaled(110, dpi_), (part.right - part.left) / 3);
+    const int height = std::min<int>(scaled(10, dpi_), part.bottom - part.top);
+    MoveWindow(status_progress_, part.right - width - scaled(6, dpi_), part.top + (part.bottom - part.top - height) / 2,
+               width, height, TRUE);
+    const double f = progress_fraction(runner_.points(), runner_.planned_points());
+    const bool marquee = f < 0.0;
+    const LONG_PTR style = GetWindowLongPtrW(status_progress_, GWL_STYLE);
+    if (((style & PBS_MARQUEE) != 0) != marquee) {
+        SetWindowLongPtrW(status_progress_, GWL_STYLE, marquee ? style | PBS_MARQUEE : style & ~static_cast<LONG_PTR>(PBS_MARQUEE));
+        SendMessageW(status_progress_, PBM_SETMARQUEE, marquee, 30);
+    }
+    if (!marquee) SendMessageW(status_progress_, PBM_SETPOS, static_cast<WPARAM>(std::lround(1000.0 * f)), 0);
+    if ((style & WS_VISIBLE) == 0) ShowWindow(status_progress_, SW_SHOWNA);
 }
 
 void MainWindow::update_title() {
@@ -617,8 +920,320 @@ void MainWindow::update_title() {
     set_status(status_file, document_.is_untitled() ? std::string("untitled deck") : document_.path().string());
 }
 
-void MainWindow::set_status(int part, const std::string& text) {
+void MainWindow::set_status(int part, const std::string& text, LogLevel level) {
+    show_status(part, text);
+    if (part == status_state && !text.empty()) log_line(level, text);
+}
+
+void MainWindow::show_status(int part, const std::string& text) {
     SendMessageW(status_, SB_SETTEXTW, static_cast<WPARAM>(part), reinterpret_cast<LPARAM>(win32::widen(text).c_str()));
+}
+
+void MainWindow::log_line(LogLevel level, const std::string& text) {
+    console_log_.add(level, text);
+    flush_console();
+}
+
+namespace {
+
+// EM_STREAMIN's reader over a string.
+struct RtfSource {
+    const std::string* text;
+    std::size_t at = 0;
+};
+
+DWORD CALLBACK read_rtf(DWORD_PTR cookie, LPBYTE buffer, LONG size, LONG* read) {
+    auto* s = reinterpret_cast<RtfSource*>(cookie);
+    const std::size_t n = std::min(static_cast<std::size_t>(size), s->text->size() - s->at);
+    std::memcpy(buffer, s->text->data() + s->at, n);
+    s->at += n;
+    *read = static_cast<LONG>(n);
+    return 0;
+}
+
+constexpr int tab_output = 0, tab_points = 1, tab_messages = 2;  // the console's tabs
+constexpr int menu_copy = 1, menu_save = 2, menu_clear = 3, menu_fold = 4;
+
+}  // namespace
+
+LogFilter MainWindow::console_text_filter() const noexcept {
+    return console_tab_ == tab_messages ? LogFilter::warnings : LogFilter::all;
+}
+
+// The log's lines since the last flush, appended to the rich edit (the whole text again when lines it shows
+// were dropped, or rebuild); it follows the end while the view is at the bottom, and stays put scrolled up.
+// Output shows every line, Messages the warnings and errors, plain black text. The Messages count too.
+void MainWindow::flush_console(bool rebuild) {
+    if (!console_) return;
+    update_console_footer();
+    // Hidden (folded, or the Points tab shown), the text waits: it is appended when the tab is shown.
+    if (rebuild) console_rebuild_ = true;
+    if (state_.layout.console_collapsed || console_tab_ == tab_points) return;
+    rebuild = std::exchange(console_rebuild_, false);
+    const LogFilter filter = console_text_filter();
+    if (filter != console_filter_shown_) rebuild = true;  // the other text tab's lines are shown
+    console_filter_shown_ = filter;
+    if (console_shown_ < console_log_.dropped()) rebuild = true;
+    if (!rebuild && console_shown_ == console_log_.total()) return;
+    const std::size_t from = rebuild ? 0 : console_shown_ - console_log_.dropped();
+    const bool any_before = !rebuild && console_lines_shown_ > 0;
+    std::size_t adding = 0;
+    for (std::size_t k = from; k < console_log_.lines().size(); ++k) {
+        if (shows(filter, console_log_.lines()[k].level)) ++adding;
+    }
+    console_shown_ = console_log_.total();
+    if (!rebuild && adding == 0) return;
+    const std::string rtf = console_rtf(console_log_.lines(), from, filter, any_before, 9, true);
+    console_lines_shown_ = (rebuild ? 0 : console_lines_shown_) + adding;
+
+    SCROLLINFO si{sizeof(si), SIF_ALL};
+    GetScrollInfo(console_, SB_VERT, &si);
+    const bool at_bottom = rebuild || si.nMax <= 0 || si.nPos + static_cast<int>(si.nPage) >= si.nMax;
+    CHARRANGE selection{};
+    SendMessageW(console_, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&selection));
+    const auto first = SendMessageW(console_, EM_GETFIRSTVISIBLELINE, 0, 0);
+    SendMessageW(console_, WM_SETREDRAW, FALSE, 0);
+    RtfSource source{&rtf};
+    EDITSTREAM stream{reinterpret_cast<DWORD_PTR>(&source), 0, read_rtf};
+    if (rebuild) {
+        SendMessageW(console_, EM_STREAMIN, SF_RTF, reinterpret_cast<LPARAM>(&stream));
+    } else {
+        CHARRANGE end{-1, -1};
+        SendMessageW(console_, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&end));
+        SendMessageW(console_, EM_STREAMIN, SF_RTF | SFF_SELECTION, reinterpret_cast<LPARAM>(&stream));
+    }
+    if (at_bottom) {
+        const auto last = SendMessageW(console_, EM_GETLINECOUNT, 0, 0) - 1;
+        const auto start = static_cast<LONG>(SendMessageW(console_, EM_LINEINDEX, static_cast<WPARAM>(last), 0));
+        CHARRANGE caret{start, start};
+        SendMessageW(console_, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&caret));
+        SendMessageW(console_, WM_VSCROLL, SB_BOTTOM, 0);
+    } else {
+        SendMessageW(console_, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&selection));
+        const auto now = SendMessageW(console_, EM_GETFIRSTVISIBLELINE, 0, 0);
+        SendMessageW(console_, EM_LINESCROLL, 0, static_cast<LPARAM>(first - now));
+    }
+    SendMessageW(console_, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(console_, nullptr, TRUE);
+}
+
+// The Points tab from the controller's state (before a run's results are taken: its currents). Hidden, it
+// waits until shown, unless forced (a run's end: the results are taken next).
+void MainWindow::update_points(bool force) {
+    if (!force && (state_.layout.console_collapsed || console_tab_ != tab_points)) {
+        points_stale_ = true;
+        return;
+    }
+    points_stale_ = false;
+    const RunState s = runner_.state();
+    const auto stopped = runner_.stopped_early();
+    PointsTable t = points_table(RunView{.rows = runner_.points(),
+                                         .iterations = runner_.iterations(),
+                                         .summary = runner_.plan_summary() ? &*runner_.plan_summary() : nullptr,
+                                         .plan = runner_.plan() ? &*runner_.plan() : nullptr,
+                                         .report = runner_.report() ? &*runner_.report() : nullptr,
+                                         .seconds = runner_.elapsed_seconds(),
+                                         .diagnostics = runner_.diagnostics(),
+                                         .stopped = stopped ? &*stopped : nullptr,
+                                         .running = s == RunState::running || s == RunState::stopping});
+    if (t == points_) return;
+    if (t.columns != points_.columns) {
+        SendMessageW(console_points_, WM_SETREDRAW, FALSE, 0);
+        while (SendMessageW(console_points_, LVM_DELETECOLUMN, 0, 0)) {
+        }
+        for (std::size_t c = 0; c < t.columns.size(); ++c) {
+            std::wstring name = win32::widen(t.columns[c]);
+            LVCOLUMNW col{};
+            col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+            col.fmt = t.numeric[c] ? LVCFMT_RIGHT : LVCFMT_LEFT;
+            const int chars = c == 0 ? 6 : c + 1 == t.columns.size() ? 13 : std::max<int>(static_cast<int>(name.size()) + 2, 10);
+            col.cx = scaled(7 * chars + 8, dpi_);
+            col.pszText = name.data();
+            SendMessageW(console_points_, LVM_INSERTCOLUMNW, c, reinterpret_cast<LPARAM>(&col));
+        }
+        SendMessageW(console_points_, WM_SETREDRAW, TRUE, 0);
+    }
+    points_ = std::move(t);
+    SendMessageW(console_points_, LVM_SETITEMCOUNT, points_.rows.size(), LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+    InvalidateRect(console_points_, nullptr, FALSE);
+    // While a run goes, its point in view.
+    const auto live = std::ranges::find(points_.states, PointState::live);
+    if (live != points_.states.end()) {
+        SendMessageW(console_points_, LVM_ENSUREVISIBLE, static_cast<WPARAM>(live - points_.states.begin()), FALSE);
+    }
+    update_console_footer();
+}
+
+void MainWindow::update_console_footer() {
+    // The Messages tab carries the count of warnings and errors.
+    const std::size_t n = console_log_.count(LogLevel::warning) + console_log_.count(LogLevel::error);
+    if (n == messages_shown_) return;  // the label only when the count changes
+    messages_shown_ = n;
+    const std::wstring label = n == 0 ? std::wstring(L"Messages") : std::format(L"Messages ({})", n);
+    TCITEMW item{};
+    item.mask = TCIF_TEXT;
+    item.pszText = const_cast<wchar_t*>(label.c_str());
+    SendMessageW(GetDlgItem(console_panel_, id_console_tabs), TCM_SETITEMW, tab_messages, reinterpret_cast<LPARAM>(&item));
+}
+// The tab's text or table over the tab strip along the bottom (Output, Points, Messages); folded, the strip alone.
+void MainWindow::layout_console() {
+    RECT r{};
+    GetClientRect(console_panel_, &r);
+    const int strip = std::min<int>(scaled(22, dpi_), r.bottom);
+    const int body = std::max<int>(r.bottom - strip, 0);
+    const bool open = !state_.layout.console_collapsed;
+    MoveWindow(console_points_, 0, 0, r.right, body, TRUE);
+    MoveWindow(console_, 0, 0, r.right, body, TRUE);
+    MoveWindow(GetDlgItem(console_panel_, id_console_tabs), 0, body, r.right, strip, TRUE);
+    ShowWindow(console_points_, open && console_tab_ == tab_points ? SW_SHOW : SW_HIDE);
+    ShowWindow(console_, open && console_tab_ != tab_points ? SW_SHOW : SW_HIDE);
+}
+
+void MainWindow::console_menu(int x, int y) {
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, menu_copy, console_tab_ == tab_points ? L"Copy table" : L"Copy all");
+    AppendMenuW(m, MF_STRING, menu_save, console_tab_ == tab_points ? L"Save table..." : L"Save output...");
+    AppendMenuW(m, MF_STRING | (console_tab_ == tab_points ? MF_GRAYED : 0), menu_clear, L"Clear");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, menu_fold, state_.layout.console_collapsed ? L"Show" : L"Hide");
+    if (x == -1 && y == -1) {  // the keyboard's menu key: at the pane's corner
+        RECT r{};
+        GetWindowRect(console_panel_, &r);
+        x = r.left + scaled(8, dpi_);
+        y = r.top + scaled(8, dpi_);
+    }
+    const int chosen = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hwnd_, nullptr);
+    DestroyMenu(m);
+    on_console(chosen, BN_CLICKED);
+}
+
+void MainWindow::on_console(int id, int code) {
+    if (code != BN_CLICKED) return;
+    if (id == menu_clear) {
+        console_log_.clear();
+        console_lines_shown_ = 0;
+        flush_console(true);
+    } else if (id == menu_copy) {
+        copy_console();
+    } else if (id == menu_save) {
+        const bool table = console_tab_ == tab_points;
+        const fs::path p = table ? win32::save_dialog(hwnd_, L"CSV (*.csv)\0*.csv\0All files\0*.*\0", L"Save the points table", L"csv")
+                                 : win32::save_dialog(hwnd_, L"Logs (*.log)\0*.log\0Text (*.txt)\0*.txt\0All files\0*.*\0",
+                                                      L"Save the output", L"log");
+        if (!p.empty()) save_console(p);
+    } else if (id == menu_fold) {
+        set_console_collapsed(!state_.layout.console_collapsed);
+    }
+}
+LRESULT MainWindow::on_console_notify(const NMHDR& n, LPARAM l) {
+    if (n.idFrom == static_cast<UINT_PTR>(id_console_tabs) && n.code == TCN_SELCHANGE) {
+        set_console_tab(static_cast<int>(SendMessageW(n.hwndFrom, TCM_GETCURSEL, 0, 0)));
+        set_console_collapsed(false);  // a tab clicked on the folded console opens it
+        return 0;
+    }
+    if (n.hwndFrom != console_points_) return 0;
+    if (n.code == LVN_GETDISPINFOW) {
+        auto& d = reinterpret_cast<NMLVDISPINFOW*>(l)->item;
+        if ((d.mask & LVIF_TEXT) && d.iItem >= 0 && static_cast<std::size_t>(d.iItem) < points_.rows.size()) {
+            const auto& cells = points_.rows[static_cast<std::size_t>(d.iItem)];
+            const std::wstring w = d.iSubItem >= 0 && static_cast<std::size_t>(d.iSubItem) < cells.size()
+                                       ? win32::widen(cells[static_cast<std::size_t>(d.iSubItem)])
+                                       : std::wstring();
+            if (d.cchTextMax > 0) {
+                const auto n2 = std::min<std::size_t>(w.size(), static_cast<std::size_t>(d.cchTextMax - 1));
+                std::wmemcpy(d.pszText, w.data(), n2);
+                d.pszText[n2] = L'\0';
+            }
+        }
+        return 0;
+    }
+    if (n.code == NM_CUSTOMDRAW) {
+        // The rows coloured by state: the point being solved on light blue, an unconverged point amber, the
+        // points not yet solved grey; "converged" in green.
+        auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(l);
+        switch (cd->nmcd.dwDrawStage) {
+        case CDDS_PREPAINT: return CDRF_NOTIFYITEMDRAW;
+        case CDDS_ITEMPREPAINT: return CDRF_NOTIFYSUBITEMDRAW;
+        case CDDS_ITEMPREPAINT | CDDS_SUBITEM: {
+            const auto k = static_cast<std::size_t>(cd->nmcd.dwItemSpec);
+            if (k >= points_.states.size()) return CDRF_DODEFAULT;
+            const PointState st = points_.states[k];
+            const bool status = static_cast<std::size_t>(cd->iSubItem) + 1 == points_.columns.size();
+            cd->clrTextBk = st == PointState::live ? RGB(232, 241, 254) : GetSysColor(COLOR_WINDOW);
+            cd->clrText = st == PointState::pending ? RGB(160, 166, 174)
+                          : st == PointState::warning ? RGB(168, 115, 12)
+                          : st == PointState::live    ? RGB(31, 95, 191)
+                          : status                    ? RGB(46, 138, 70)
+                                                      : GetSysColor(COLOR_WINDOWTEXT);
+            return CDRF_NEWFONT;
+        }
+        default: return CDRF_DODEFAULT;
+        }
+    }
+    return 0;
+}
+
+void MainWindow::set_console_tab(int tab) {
+    if (tab < tab_output || tab > tab_messages) return;
+    console_tab_ = tab;
+    SendMessageW(GetDlgItem(console_panel_, id_console_tabs), TCM_SETCURSEL, static_cast<WPARAM>(tab), 0);
+    layout_console();
+    // What waited while hidden.
+    if (tab != tab_points) flush_console();
+    else if (points_stale_) update_points();
+}
+
+void MainWindow::set_console_collapsed(bool collapsed) {
+    if (state_.layout.console_collapsed == collapsed) return;
+    state_.layout.console_collapsed = collapsed;
+    layout();
+    if (!collapsed) {
+        if (console_tab_ == tab_points && points_stale_) update_points();
+        else flush_console();
+    }
+}
+
+bool MainWindow::copy_console() {
+    const std::wstring text = win32::widen(console_tab_ == tab_points ? points_text(points_, '\t')
+                                                                          : console_log_.text(console_text_filter()));
+    if (!OpenClipboard(hwnd_)) return false;
+    EmptyClipboard();
+    bool ok = false;
+    if (HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t))) {
+        if (void* p = GlobalLock(g)) {
+            std::memcpy(p, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+            GlobalUnlock(g);
+            ok = SetClipboardData(CF_UNICODETEXT, g) != nullptr;
+        }
+        if (!ok) GlobalFree(g);
+    }
+    CloseClipboard();
+    return ok;
+}
+
+bool MainWindow::save_console(const fs::path& path) {
+    const bool table = console_tab_ == tab_points;
+    std::ofstream out(path, std::ios::binary);
+    out << (table ? points_text(points_, ',') : console_log_.text(console_text_filter()));
+    out.close();
+    if (!out) {
+        set_status(status_state, "Could not write " + path.filename().string(), LogLevel::error);
+        return false;
+    }
+    set_status(status_state, (table ? "Saved the points table to " : "Saved the output to ") + path.filename().string());
+    return true;
+}
+
+int MainWindow::console_line_count() const {
+    return console_lines_shown_ == 0 ? 0 : static_cast<int>(SendMessageW(console_, EM_GETLINECOUNT, 0, 0));
+}
+
+int MainWindow::console_row_count() const {
+    return static_cast<int>(SendMessageW(console_points_, LVM_GETITEMCOUNT, 0, 0));
+}
+
+bool MainWindow::console_body_shown() const {
+    return (GetWindowLongPtrW(console_tab_ == tab_points ? console_points_ : console_, GWL_STYLE) & WS_VISIBLE) != 0;
 }
 
 std::string MainWindow::status(int part) const {
@@ -1161,8 +1776,12 @@ void MainWindow::show_inspector_groups() {
     const bool vectors = tab_ == tab_view && dim >= 2 && workspace_->has_results() && takes_vectors(s.kind);
     const bool exploded = tab_ == tab_view && s.kind == ViewKind::exploded;
     const bool curves = tab_ == tab_curves && (s.kind == ViewKind::iv || s.kind == ViewKind::cv || s.kind == ViewKind::current);
+    // Look A: recorded as used or not; layout_inspector shows the used ones whose section is open.
     const auto show = [&](std::initializer_list<int> ids, bool on) {
-        for (const int id : ids) ShowWindow(child(id), on ? SW_SHOW : SW_HIDE);  // the labels too (in the inspector)
+        for (const int id : ids) {
+            if (on) unused_controls_.erase(id);
+            else unused_controls_.insert(id);
+        }
     };
     show({label_arrows, id_arrows, id_arrow_count, label_lines, id_lines, id_line_count, label_from, id_from, id_seeds}, vectors);
     show({label_axis, id_axis, id_gap, id_exploded_field}, exploded);
@@ -1510,11 +2129,13 @@ void MainWindow::fill_tree() {
     if (!workspace_) return;
     // Only the regions of a 2D or 3D device have a check box (YD4): checked while shown. The tree gives every
     // new item one, so the others' is taken away.
-    const auto add = [&](HTREEITEM parent, const std::string& text, LPARAM data, int check = 0) {
+    // Look A: each item's icon (a region's swatch in its material's colour).
+    const auto add = [&](HTREEITEM parent, const std::string& text, LPARAM data, int check = 0, int icon = tree_icon_view) {
         TVINSERTSTRUCTW t{};
         t.hParent = parent;
         t.hInsertAfter = TVI_LAST;
-        t.item.mask = TVIF_TEXT | TVIF_PARAM;
+        t.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+        t.item.iImage = t.item.iSelectedImage = icon;
         const std::wstring w = win32::widen(text);
         t.item.pszText = const_cast<wchar_t*>(w.c_str());
         t.item.lParam = data;
@@ -1524,34 +2145,40 @@ void MainWindow::fill_tree() {
     };
     const auto& d = *workspace_->device;
     const bool boxes = d.mesh().dimension() >= 2;
-    HTREEITEM device = add(TVI_ROOT, preview_ ? "Device (preview, not solved)" : "Device", tree_data(tree_none, 0));
+    HTREEITEM device = add(TVI_ROOT, preview_ ? "Device (preview, not solved)" : "Device", tree_data(tree_none, 0), 0,
+                           tree_icon_device);
     for (std::size_t k = 0; k < d.regions().size(); ++k) {
         const auto& r = d.regions()[k];
         const bool hidden = std::ranges::find(device_view_.hidden, r.name) != device_view_.hidden.end();
         add(device, r.name + (device::is_insulator(r) ? " (insulator)" : " (semiconductor)"),
-            boxes ? tree_data(tree_region, static_cast<int>(k)) : tree_data(tree_none, 0), boxes ? (hidden ? 1 : 2) : 0);
+            boxes ? tree_data(tree_region, static_cast<int>(k)) : tree_data(tree_none, 0), boxes ? (hidden ? 1 : 2) : 0,
+            device::is_insulator(r) ? tree_icon_insulator : tree_icon_semiconductor);
     }
     for (const auto& c : d.contacts()) {
         const char* kind = c.kind == device::ContactKind::ohmic      ? "ohmic"
                            : c.kind == device::ContactKind::gate     ? "gate"
                            : c.kind == device::ContactKind::schottky ? "schottky"
                                                                      : "electrode";
-        add(device, "contact " + c.name + " (" + kind + ")", tree_data(tree_none, 0));
+        add(device, "contact " + c.name + " (" + kind + ")", tree_data(tree_none, 0), 0, tree_icon_contact);
     }
     TreeView_Expand(tree_, device, TVE_EXPAND);
-    add(TVI_ROOT, "Mesh: " + std::to_string(d.mesh().node_count()) + " nodes", tree_data(tree_none, 0));
-    HTREEITEM views = add(TVI_ROOT, "Views", tree_data(tree_none, 0));
+    add(TVI_ROOT, "Mesh: " + std::to_string(d.mesh().node_count()) + " nodes", tree_data(tree_none, 0), 0, tree_icon_mesh);
+    HTREEITEM views = add(TVI_ROOT, "Views", tree_data(tree_none, 0), 0, tree_icon_views);
     const auto kinds = available_views(*workspace_, run_b());
     for (std::size_t k = 0; k < kinds.size(); ++k) add(views, std::string(to_string(kinds[k])), tree_data(tree_view, static_cast<int>(k)));
     TreeView_Expand(tree_, views, TVE_EXPAND);
-    HTREEITEM fields = add(TVI_ROOT, "Fields", tree_data(tree_none, 0));
+    HTREEITEM fields = add(TVI_ROOT, "Fields", tree_data(tree_none, 0), 0, tree_icon_fields);
     const auto names = available_fields(*workspace_);
     for (std::size_t k = 0; k < names.size(); ++k) {
         const auto f = render::find_field(names[k]);
-        add(fields, std::string(f ? render::field_info(*f).title : names[k]), tree_data(tree_field, static_cast<int>(k)));
+        add(fields, std::string(f ? render::field_info(*f).title : names[k]), tree_data(tree_field, static_cast<int>(k)), 0,
+            tree_icon_field);
     }
     TreeView_Expand(tree_, fields, TVE_EXPAND);
-    if (workspace_->has_results()) add(TVI_ROOT, "Results: " + std::to_string(workspace_->points.size()) + " points", tree_data(tree_none, 0));
+    if (workspace_->has_results()) {
+        add(TVI_ROOT, "Results: " + std::to_string(workspace_->points.size()) + " points", tree_data(tree_none, 0), 0,
+            tree_icon_results);
+    }
 }
 
 void MainWindow::sync_region_boxes() {
@@ -1669,9 +2296,11 @@ bool MainWindow::open_deck(const fs::path& path) {
     scene_.reset();
     fill_tree();
     pending_ = Pending::open;
+    console_log_.begin_run();
+    log_line(LogLevel::header, "Open " + document_.path().filename().string());
     runner_.start_check(document_.text(), document_.path());
     update_taskbar(false);  // ZD5: a check clears a failed run's state
-    set_status(status_state, "Building the deck...");
+    show_status(status_state, "Building the deck...");
     refresh();
     update_command_states();
     return true;
@@ -1714,8 +2343,17 @@ bool MainWindow::compare_result(const fs::path& result, const fs::path& device, 
     return true;
 }
 
+// The seconds since a time point (the UI timings).
+static double since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
 void MainWindow::on_run_events() {
+    const auto t0 = std::chrono::steady_clock::now();
     if (!runner_.process()) return;
+    console_log_.follow(runner_);  // the text only: shown with the status, at most every 50 ms
+    ++timings_.events;
+    timings_.events_s += since(t0);
     const RunState s = runner_.state();
     if (s == RunState::running || s == RunState::stopping) {
         // The events of a fast solve arrive as fast as the window takes them; showing them costs more than
@@ -1727,9 +2365,16 @@ void MainWindow::on_run_events() {
     }
     KillTimer(hwnd_, run_timer);
     const Pending pending = std::exchange(pending_, Pending::none);
+    const auto t1 = std::chrono::steady_clock::now();
     run_page_->update(runner_, renderer(), true);  // before the results are taken: how the run ended
+    console_log_.finish(runner_);
+    flush_console();
+    update_points(true);  // before the results are taken: their currents
     deck_->set_diagnostics(runner_.diagnostics());
+    timings_.finish_s = since(t1);
+    const auto t2 = std::chrono::steady_clock::now();
     on_run_finished(pending, s);
+    timings_.results_s = since(t2);
 }
 
 // The run's progress in the status bar and the run monitor: on its events (at most every 50 ms) and on
@@ -1752,17 +2397,31 @@ void MainWindow::on_run_timer() {
             else text += std::format(": point {}", r.point + 1);
             text += std::format(", iteration {}, update {:.2g}", r.iterations, r.update);
         }
-        set_status(status_state, text);
-        run_page_->update(runner_, renderer());
+        const auto t0 = std::chrono::steady_clock::now();
+        show_status(status_state, text);
+        auto t = std::chrono::steady_clock::now();
+        flush_console();
+        timings_.console_s += since(t);
+        t = std::chrono::steady_clock::now();
+        update_points();
+        timings_.points_s += since(t);
+        t = std::chrono::steady_clock::now();
+        if (tab_ == tab_run) run_page_->update(runner_, renderer());  // hidden, it catches up when shown
+        timings_.monitor_s += since(t);
         update_command_states();
         update_taskbar(pending_ == Pending::run);
+        const double spent = since(t0);
+        ++timings_.updates;
+        timings_.update_s += spent;
+        timings_.update_max_s = std::max(timings_.update_max_s, spent);
     }
 }
 
 void MainWindow::on_run_finished(Pending pending, RunState s) {
     if (s == RunState::failed) {
         const std::string why = runner_.error() ? runner_.error()->message : std::string("failed");
-        set_status(status_state, (pending == Pending::run ? "The run failed: " : "The deck does not build: ") + why);
+        set_status(status_state, (pending == Pending::run ? "The run failed: " : "The deck does not build: ") + why,
+                   LogLevel::error);
         if (!runner_.diagnostics().empty()) {
             select_tab(tab_deck);
             deck_->go_to_line(runner_.diagnostics().front().line);
@@ -1780,7 +2439,7 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
             }
         }
     } else if (pending == Pending::check && s == RunState::idle) {
-        set_status(status_state, "The deck builds.");
+        set_status(status_state, "The deck builds.", LogLevel::success);
     } else if (pending == Pending::run && s == RunState::done) {
         const auto stopped = runner_.stopped_early();
         const double seconds = runner_.elapsed_seconds();
@@ -1795,7 +2454,8 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
             }
         }
         set_status(status_state, stopped ? std::format("Stopped early after {:.1f} s: {}", seconds, stopped->message)
-                                         : std::format("Done in {:.1f} s", seconds));
+                                         : std::format("Done in {:.1f} s", seconds),
+                   stopped ? LogLevel::warning : LogLevel::success);
     }
     update_command_states();
     update_taskbar(pending == Pending::run);
@@ -1838,6 +2498,7 @@ void MainWindow::on_drop(HDROP drop) {
 }
 
 void MainWindow::update_taskbar(bool run) {
+    update_status_progress();
     const RunState s = runner_.state();
     const double fraction = s == RunState::running || s == RunState::stopping
                                 ? progress_fraction(runner_.points(), runner_.planned_points())
@@ -2051,9 +2712,11 @@ void MainWindow::execute(Command c) {
         if (runner_.busy()) return;
         document_.set_text(deck_->text());
         pending_ = Pending::check;
+        console_log_.begin_run();
+        log_line(LogLevel::header, "Check " + (document_.is_untitled() ? std::string("Untitled") : document_.path().filename().string()));
         runner_.start_check(document_.text(), document_.path());
         update_taskbar(false);
-        set_status(status_state, "Checking...");
+        show_status(status_state, "Checking...");
         update_command_states();
         return;
     case Command::run:
@@ -2062,9 +2725,14 @@ void MainWindow::execute(Command c) {
         if (document_.is_untitled() && !save(true)) return;  // a run writes its outputs beside the deck
         select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
         pending_ = Pending::run;
+        console_log_.begin_run();
+        timings_ = {};
+        set_console_collapsed(false);  // Unit 26j: the console opens for a run
+        log_line(LogLevel::header, "Run " + document_.path().filename().string());
         runner_.start_run(document_.text(), document_.path());
+        update_points();  // the last run's rows cleared
         update_taskbar(true);
-        set_status(status_state, "Running...");
+        show_status(status_state, "Running...");
         SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
         run_page_->update(runner_, renderer(), true);  // the last run's rows cleared
         update_command_states();
@@ -2505,17 +3173,44 @@ LRESULT CALLBACK MainWindow::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARA
     if (self) {
         switch (message) {
         case WM_COMMAND:
+            if (hwnd == self->console_panel_) {  // Unit 26j
+                self->on_console(LOWORD(w), HIWORD(w));
+                return 0;
+            }
+            if (LOWORD(w) >= id_section_first && LOWORD(w) <= id_section_last && HIWORD(w) == BN_CLICKED) {  // look A
+                const int k = LOWORD(w) - id_section_first;
+                self->set_section_folded(k, !self->section_folded(k));
+                return 0;
+            }
             if (LOWORD(w) == id_play && HIWORD(w) == BN_CLICKED) {
                 self->execute(Command::play_pause);
                 return 0;
             }
             self->on_inspector(LOWORD(w), HIWORD(w));
             return 0;
+        case WM_NOTIFY:
+            if (hwnd == self->console_panel_) return self->on_console_notify(*reinterpret_cast<const NMHDR*>(l), l);
+            break;
+        case WM_CONTEXTMENU:
+            if (hwnd == self->console_panel_) {
+                self->console_menu(GET_X_LPARAM(l), GET_Y_LPARAM(l));
+                return 0;
+            }
+            break;
+        case WM_DRAWITEM: {
+            const auto& d = *reinterpret_cast<const DRAWITEMSTRUCT*>(l);
+            if (hwnd == self->inspector_ && d.CtlID >= id_section_first && d.CtlID <= id_section_last) {
+                self->draw_section_header(d);
+                return TRUE;
+            }
+            break;
+        }
         case WM_HSCROLL:  // a slider (Unit 26c, YD5, YD6)
             if (l != 0) self->on_slider(reinterpret_cast<HWND>(l));
             return 0;
         case WM_SIZE:
-            self->layout_inspector();
+            if (hwnd == self->console_panel_) self->layout_console();
+            else if (hwnd == self->inspector_) self->layout_inspector();
             return 0;
         case WM_CTLCOLORSTATIC:
             SetBkMode(reinterpret_cast<HDC>(w), TRANSPARENT);
@@ -2681,22 +3376,36 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
                 SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
                 return TRUE;
             }
+            const Rect& c = panes_.console_splitter;  // Unit 26j: the console's, along y
+            if (p.x >= c.x && p.x < c.right() && p.y >= c.y - 2 && p.y < c.bottom() + 2) {
+                SetCursor(LoadCursorW(nullptr, IDC_SIZENS));
+                return TRUE;
+            }
         }
         break;
     }
     case WM_LBUTTONDOWN: {
         const int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
         const auto in = [&](const Rect& r) { return x >= r.x - 2 && x < r.right() + 2 && y >= r.y && y < r.bottom(); };
-        dragging_splitter_ = in(panes_.left_splitter) ? 1 : in(panes_.right_splitter) ? 2 : 0;
+        const Rect& c = panes_.console_splitter;
+        const bool console = x >= c.x && x < c.right() && y >= c.y - 2 && y < c.bottom() + 2;
+        dragging_splitter_ = in(panes_.left_splitter) ? 1 : in(panes_.right_splitter) ? 2 : console ? 3 : 0;
         if (dragging_splitter_) {
             SetCapture(hwnd_);
-            drag_origin_ = x;
-            drag_width_ = dragging_splitter_ == 1 ? panes_.tree.width : panes_.inspector.width;
+            drag_origin_ = dragging_splitter_ == 3 ? y : x;
+            drag_width_ = dragging_splitter_ == 1   ? panes_.tree.width
+                          : dragging_splitter_ == 2 ? panes_.inspector.width
+                                                    : panes_.console.height;
         }
         return 0;
     }
     case WM_MOUSEMOVE:
-        if (dragging_splitter_) {
+        if (dragging_splitter_ == 3) {  // up makes the console taller (and opens it); never under 40 px
+            state_.layout.console_collapsed = false;
+            const int height = std::max(drag_width_ - (GET_Y_LPARAM(l) - drag_origin_), scaled(40, dpi_));
+            state_.layout.console_height = MulDiv(height, 96, dpi_);
+            layout();
+        } else if (dragging_splitter_) {
             const int dx = GET_X_LPARAM(l) - drag_origin_;
             const int width = std::max(drag_width_ + (dragging_splitter_ == 1 ? dx : -dx), scaled(min_side_96, dpi_));
             (dragging_splitter_ == 1 ? state_.layout.tree_width : state_.layout.inspector_width) = MulDiv(width, 96, dpi_);

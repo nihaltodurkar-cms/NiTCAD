@@ -1040,6 +1040,7 @@ add_library(nitcad_app STATIC
   src/app/probe.cpp
   src/app/examples.cpp
   src/app/run_monitor.cpp
+  src/app/console_log.cpp
   src/app/deck_vocabulary.cpp
   src/app/live_check.cpp
   src/app/compare.cpp
@@ -1060,6 +1061,7 @@ add_executable(nitcad_app_test
   tests/app/probe_test.cpp
   tests/app/examples_test.cpp
   tests/app/run_monitor_test.cpp
+  tests/app/console_log_test.cpp
   tests/app/deck_vocabulary_test.cpp
   tests/app/live_check_test.cpp
   tests/app/compare_test.cpp

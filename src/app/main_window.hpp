@@ -9,6 +9,7 @@
 
 #include <windows.h>
 #include <shellapi.h>  // HDROP (ZD4)
+#include <commctrl.h>  // HIMAGELIST (look A)
 
 #include <array>
 #include <chrono>
@@ -17,12 +18,14 @@
 #include <memory>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "NiTCAD/app/app_state.hpp"
 #include "NiTCAD/app/commands.hpp"
+#include "NiTCAD/app/console_log.hpp"
 #include "NiTCAD/app/deck_sections.hpp"
 #include "NiTCAD/app/document.hpp"
 #include "NiTCAD/app/layout.hpp"
@@ -175,11 +178,48 @@ public:
     [[nodiscard]] const std::string& readout_text() const noexcept { return readout_text_; }
     [[nodiscard]] bool hover_readout() const noexcept { return state_.hover_readout; }
     [[nodiscard]] const AppState& app_state() const noexcept { return state_; }
+    // Unit 26j: the console along the bottom, a classic output window: its log; the tab shown (0 Output,
+    // 1 Points, 2 Messages, as clicking the tab strip sets it); the points table and the rows its list shows; the
+    // lines the log's rich edit shows; folded or not (Hide on its menu); Copy and Save (the table, or the
+    // tab's lines); whether the tab's body is shown.
+    [[nodiscard]] const ConsoleLog& console_log() const noexcept { return console_log_; }
+    // The UI thread's time on a run (the speed pass): taking its events; the progress updates (at most every
+    // 50 ms), and within them the console, the Points table and the run monitor; at its end, the console,
+    // table and monitor, then the results shown. Reset when a run starts.
+    struct UiTimings {
+        std::size_t events = 0, updates = 0;
+        double events_s = 0.0, update_s = 0.0, update_max_s = 0.0;
+        double console_s = 0.0, points_s = 0.0, monitor_s = 0.0;
+        double finish_s = 0.0, results_s = 0.0;
+    };
+    [[nodiscard]] const UiTimings& ui_timings() const noexcept { return timings_; }
+    [[nodiscard]] int console_tab() const noexcept { return console_tab_; }
+    void set_console_tab(int tab);
+    [[nodiscard]] const PointsTable& points() const noexcept { return points_; }
+    [[nodiscard]] int console_row_count() const;
+    [[nodiscard]] int console_line_count() const;
+    [[nodiscard]] bool console_collapsed() const noexcept { return state_.layout.console_collapsed; }
+    // Look A: the inspector's sections (Display, Colour, Show, Slice and clip, Vectors, Curves, Playback, Probe),
+    // each under a header that folds it; the folded ones saved with the layout. A section whose controls the view
+    // does not use is hidden, header and all.
+    static constexpr int section_count = 8;
+    void set_section_folded(int section, bool folded);
+    [[nodiscard]] bool section_folded(int section) const noexcept {
+        return (state_.layout.inspector_folded >> section & 1) != 0;
+    }
+    // The toolbar's and the tree's icons drawn from the system's icon font (false: none found).
+    [[nodiscard]] bool has_icons() const noexcept { return toolbar_images_ != nullptr; }
+    [[nodiscard]] int missing_icons() const noexcept { return missing_icons_; }  // glyphs the font lacks
+    [[nodiscard]] HWND status_progress() const noexcept { return status_progress_; }
+    void set_console_collapsed(bool collapsed);
+    bool copy_console();
+    bool save_console(const std::filesystem::path& path);
+    [[nodiscard]] bool console_body_shown() const;
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
         id_tree = 4000, id_tabs, id_viewport, id_deck, id_metrics, id_inspector, id_toolbar, id_status, id_start,
-        id_run_page, id_results,
+        id_run_page, id_results, id_console,
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
         id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_cut, id_probe_text,
         // Unit 26c (YD1-YD3): arrows, streamlines and their seeds; the exploded view; the curves' pickers.
@@ -193,6 +233,10 @@ public:
         id_enhanced,
         // Unit 26h (JD1): the axis box.
         id_axis_box,
+        // Unit 26j: the console's rich edit and tool strip.
+        id_console_text, id_console_tabs, id_console_points,
+        // Look A: the inspector's section headers, a section each.
+        id_section_first, id_section_last = id_section_first + section_count - 1,
         id_first_label = 5100,
     };
 
@@ -209,8 +253,25 @@ private:
     void apply_dpi(int dpi);
     void layout();
     void layout_inspector();
+    void draw_section_header(const DRAWITEMSTRUCT& d);
+    void make_icons();
+    void update_status_progress();
     void update_title();
-    void set_status(int part, const std::string& text);
+    // The state part's messages also go to the console, at the level given (Unit 26j); show_status only shows
+    // them (the run's live progress).
+    void set_status(int part, const std::string& text, LogLevel level = LogLevel::info);
+    void show_status(int part, const std::string& text);
+    // Unit 26j: a timestamped line in the console; the console's new lines into its rich edit (all of them
+    // again on rebuild); its tool strip laid out; its controls' notifications.
+    void log_line(LogLevel level, const std::string& text);
+    void flush_console(bool rebuild = false);
+    void layout_console();
+    void on_console(int id, int code);
+    void console_menu(int x, int y);  // the right-click menu at a screen point (-1, -1: the menu key)
+    LRESULT on_console_notify(const NMHDR& n, LPARAM l);
+    void update_points(bool force = false);
+    void update_console_footer();
+    [[nodiscard]] LogFilter console_text_filter() const noexcept;
     void on_run_events();
     void on_run_timer();
     void on_live_check();
@@ -299,7 +360,22 @@ private:
     WindowOptions options_;
     HWND hwnd_ = nullptr;
     HWND toolbar_ = nullptr, status_ = nullptr, tree_ = nullptr, tabs_ = nullptr, metrics_ = nullptr,
-         inspector_ = nullptr;
+         inspector_ = nullptr, console_panel_ = nullptr, console_ = nullptr, console_points_ = nullptr;
+    // Look A: the icons' image lists (made per DPI), the status bar's progress bar, and the inspector's
+    // controls the view does not use (show_inspector_groups; layout_inspector shows the others not folded).
+    HIMAGELIST toolbar_images_ = nullptr, toolbar_disabled_ = nullptr, tree_images_ = nullptr;
+    HWND status_progress_ = nullptr;
+    int missing_icons_ = 0;
+    std::set<int> unused_controls_;
+    ConsoleLog console_log_;
+    UiTimings timings_;
+    PointsTable points_;
+    int console_tab_ = 0;
+    bool console_rebuild_ = false, points_stale_ = false;  // what waits while the console's tab is hidden
+    LogFilter console_filter_shown_ = LogFilter::all;      // the lines the rich edit holds
+    std::size_t messages_shown_ = static_cast<std::size_t>(-1);  // the count on the Messages tab
+    std::size_t console_shown_ = 0;        // the log's lines (by number, ConsoleLog::total) flushed so far
+    std::size_t console_lines_shown_ = 0;  // of those, the lines the filter shows in the rich edit
     std::unique_ptr<Viewport> viewport_;
     std::unique_ptr<DeckPane> deck_;
     std::unique_ptr<StartPage> start_;
@@ -381,7 +457,7 @@ private:
     std::vector<KeyItem> key_items_;
 
     // Splitters.
-    int dragging_splitter_ = 0;  // 1 left, 2 right
+    int dragging_splitter_ = 0;  // 1 left, 2 right, 3 the console's (a height, along y)
     int drag_origin_ = 0, drag_width_ = 0;
 };
 
