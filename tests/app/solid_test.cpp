@@ -681,3 +681,56 @@ TEST_CASE("app solid: the model names no Win32 type (SE10)", "[app][solid]") {
         }
     }
 }
+
+TEST_CASE("app solid: the build's errors placed on the model; the region at a point (SD5)", "[app][solid][check]") {
+    const Model m = must_read(well_deck);
+    const std::string t = lf(well_deck);
+    const auto line_of = [&](const std::string& what) {
+        const auto at = t.find(what);
+        REQUIRE(at != std::string::npos);
+        return 1 + static_cast<int>(std::count(t.begin(), t.begin() + static_cast<std::ptrdiff_t>(at), '\n'));
+    };
+    using K = Marker::Kind;
+    // A region's solid line: that solid; another line of the region: all its solids; the background: the domain.
+    Problem p = locate_problem(m, t, line_of("box = 0   1um"), "a box");
+    REQUIRE(p.markers.size() == 1);
+    CHECK(p.markers[0] == Marker{K::solid, {1, 0}, -1, {}});
+    p = locate_problem(m, t, line_of("material = sio2"), "a material");
+    REQUIRE(p.markers.size() == 1);
+    CHECK(p.markers[0] == Marker{K::solid, {1, -1}, -1, {}});
+    p = locate_problem(m, t, line_of("[region si]") + 1, "the background");
+    REQUIRE(p.markers.size() == 1);
+    CHECK(p.markers[0].kind == K::domain);
+    // A contact's section; a [mesh] patch line: the contacts using it; another [mesh] line: the domain.
+    p = locate_problem(m, t, line_of("[contact gate]") + 1, "a contact");
+    REQUIRE(p.markers.size() == 1);
+    CHECK(p.markers[0] == Marker{K::contact, {}, 1, {}});
+    p = locate_problem(m, t, line_of("patch body"), "a patch");
+    REQUIRE(p.markers.size() == 1);
+    CHECK(p.markers[0] == Marker{K::contact, {}, 0, {}});
+    p = locate_problem(m, t, line_of("max_size"), "a size");
+    REQUIRE(p.markers.size() == 1);
+    CHECK(p.markers[0].kind == K::domain);
+    // A point the message names (cm): marked, with the solids whose bounds hold it; the message unchanged.
+    const std::string named = "an interface piece has holes (unsupported) near (5e-05, 1e-05, 4e-05)";
+    p = locate_problem(m, t, 2, named);
+    CHECK(p.message == named);
+    CHECK(std::ranges::count(p.markers, Marker{K::point, {}, -1, {5000, 1000, 4000}}) == 1);
+    CHECK(std::ranges::count(p.markers, Marker{K::solid, {1, 0}, -1, {}}) == 1);  // the oxide's lower face
+    CHECK(std::ranges::count(p.markers, K::solid, &Marker::kind) == 1);  // the well (z up to 0.2 um) does not hold it
+    // Outside the geometry: none.
+    CHECK(locate_problem(m, t, line_of("profile = acceptor"), "a profile").markers.empty());
+    CHECK(locate_problem(m, t, 0, "no line").markers.empty());
+
+    // The region at a point: the last solid holding it strictly, else the background.
+    CHECK(region_at(m, {5000, 3000, 5000}) == 1);  // in the oxide
+    CHECK(region_at(m, {5000, 1000, 1000}) == 2);  // in the well (over the substrate)
+    CHECK(region_at(m, {5000, 1000, 4000}) == 0);  // on the oxide's lower face: not strictly inside it
+    CHECK(region_at(m, {9000, 5000, 1000}) == 0);  // the substrate
+    // Overlapping solids: the later one.
+    Model over = m;
+    REQUIRE(add_box(over, {{4000, 0, 3000}, {6000, 6000, 5000}}, "silicon") == 3);
+    CHECK(region_at(over, {5000, 3000, 4500}) == 3);  // in the oxide too
+    CHECK(region_at(over, {5000, 3000, 3500}) == 3);
+    CHECK(region_at(over, {7000, 3000, 4500}) == 1);
+}

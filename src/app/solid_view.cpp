@@ -405,7 +405,7 @@ std::vector<Handle> handles(const Model& m, const ViewState& v, SolidRef ref) {
     return out;
 }
 
-render::FieldScene solid_scene(const Model& m, const ViewState& v, const Selection& sel, const Preview& pv) {
+render::FieldScene solid_scene(const Model& m, const ViewState& v, const Selection& sel, const Preview& pv, const Overlay& ov) {
     render::FieldScene scene = frame_scene(m, v);
     const double push = layer_push(m);
     const bool one = sel.solids.size() == 1 && sel.solids[0].solid >= 0;
@@ -504,10 +504,39 @@ render::FieldScene solid_scene(const Model& m, const ViewState& v, const Selecti
             }
         }
     }
+    // The live check's mesh preview and problems.
+    render::LineBatch mesh_lines{"mesh", {0.10f, 0.10f, 0.12f, 0.8f}, 1.0f, false, {}};
+    for (std::size_t k = 0; k + 1 < ov.mesh.size(); k += 2) add_segment(mesh_lines, v, ov.mesh[k], ov.mesh[k + 1]);
+    render::LineBatch marks{"problems", {0.90f, 0.05f, 0.05f, 1.0f}, 3.0f, true, {}};
+    for (const Marker& mk : ov.markers) {
+        switch (mk.kind) {
+        case Marker::Kind::solid: {
+            if (mk.solid.region < 0 || mk.solid.region >= static_cast<int>(m.regions.size())) break;
+            const Region& reg = m.regions[static_cast<std::size_t>(mk.solid.region)];
+            for (std::size_t k = 0; k < reg.solids.size(); ++k) {
+                if (mk.solid.solid < 0 || mk.solid.solid == static_cast<int>(k)) add_edges(marks, v, reg.solids[k]);
+            }
+            if (reg.solids.empty()) add_edges(marks, v, box_solid(m.domain));
+            break;
+        }
+        case Marker::Kind::contact:
+            if (mk.contact >= 0 && mk.contact < static_cast<int>(m.contacts.size())) {
+                const Box3& b = m.contacts[static_cast<std::size_t>(mk.contact)].box;
+                const auto fs = contact_faces(m.domain, b);
+                for (const Face& f : fs) {
+                    for (std::size_t i = 0; i < f.poly.size(); ++i) add_segment(marks, v, f.poly[i], f.poly[(i + 1) % f.poly.size()]);
+                }
+                if (fs.empty()) add_edges(marks, v, box_solid(b));  // a patch box on no boundary face: the box itself
+            }
+            break;
+        case Marker::Kind::point: add_square(marks, scene, v, um_of(mk.at), 9.0 * v.dpi / 96.0); break;
+        case Marker::Kind::domain: add_edges(marks, v, box_solid(m.domain)); break;
+        }
+    }
     for (render::TriangleBatch* b : {&opaque, &pads, &glass, &ghost}) {
         if (!b->vertices.empty()) scene.triangles.push_back(std::move(*b));
     }
-    for (render::LineBatch* b : {&edges, &pad_edges, &picked, &ghost_edges, &gizmo[0], &gizmo[1], &gizmo[2], &knobs, &corners}) {
+    for (render::LineBatch* b : {&mesh_lines, &edges, &pad_edges, &picked, &ghost_edges, &marks, &gizmo[0], &gizmo[1], &gizmo[2], &knobs, &corners}) {
         if (!b->points.empty()) scene.lines.push_back(std::move(*b));
     }
     return scene;

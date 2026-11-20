@@ -1035,4 +1035,129 @@ Snap snap(const Model& m, const WorkPlane& plane, P3 raw, Coord tolerance, std::
     return {raw, SnapKind::none};
 }
 
+
+// --- validation (slice 3, SD5) -------------------------------------------------------------------------------------
+
+namespace {
+
+// The points "(x, y, z)" in cm a message names, in quanta.
+std::vector<P3> named_points(std::string_view m) {
+    std::vector<P3> out;
+    for (std::size_t open = m.find('('); open != std::string_view::npos; open = m.find('(', open + 1)) {
+        const std::size_t close = m.find(')', open);
+        if (close == std::string_view::npos) break;
+        std::vector<double> v;
+        std::string_view inner = m.substr(open + 1, close - open - 1);
+        bool ok = true;
+        while (ok && !inner.empty()) {
+            const std::size_t comma = inner.find(',');
+            const std::string t(trim(inner.substr(0, comma)));
+            char* end = nullptr;
+            const double x = t.empty() ? 0.0 : std::strtod(t.c_str(), &end);
+            ok = !t.empty() && end == t.c_str() + t.size() && std::isfinite(x);
+            if (ok) v.push_back(x);
+            inner = comma == std::string_view::npos ? std::string_view{} : inner.substr(comma + 1);
+        }
+        if (ok && v.size() == 3) {
+            out.push_back({static_cast<Coord>(std::llround(v[0] / geo::quantum_cm)), static_cast<Coord>(std::llround(v[1] / geo::quantum_cm)),
+                           static_cast<Coord>(std::llround(v[2] / geo::quantum_cm))});
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+Problem locate_problem(const Model& m, std::string_view text, int line, std::string message) {
+    Problem out{line, std::move(message), {}};
+    const auto d = deck::parse(text);
+    if (!d || line <= 0) return out;
+    const deck::Section* at = nullptr;
+    int region_index = -1, contact_index = -1, ri = 0, ci = 0;
+    for (const auto& s : d->sections) {
+        if (s.line > line) break;
+        at = &s;
+        region_index = s.kind == "region" ? ri : -1;
+        contact_index = s.kind == "contact" ? ci : -1;
+        ri += s.kind == "region" ? 1 : 0;
+        ci += s.kind == "contact" ? 1 : 0;
+    }
+    if (!at) return out;
+    const auto add = [&](const Marker& mk) {
+        if (std::ranges::find(out.markers, mk) == out.markers.end()) out.markers.push_back(mk);
+    };
+    const auto contact_of = [&](int origin) {
+        for (std::size_t k = 0; k < m.contacts.size(); ++k) {
+            if (m.contacts[k].origin == origin) return static_cast<int>(k);
+        }
+        return -1;
+    };
+    if (region_index >= 0) {
+        for (std::size_t r = 0; r < m.regions.size(); ++r) {
+            if (m.regions[r].origin != region_index) continue;
+            int solid = -1, n = 0;
+            if (m.mesh == MeshKind::layered) {
+                for (const auto& e : at->entries) {
+                    if (!is_solid_key(e.key)) continue;
+                    if (e.line == line) solid = n;
+                    ++n;
+                }
+            }
+            if (solid >= static_cast<int>(m.regions[r].solids.size())) solid = -1;
+            add({m.regions[r].solids.empty() ? Marker::Kind::domain : Marker::Kind::solid, {static_cast<int>(r), solid}, -1, {}});
+        }
+    } else if (contact_index >= 0) {
+        if (const int k = contact_of(contact_index); k >= 0) add({Marker::Kind::contact, {}, k, {}});
+    } else if (at->kind == "mesh") {
+        const deck::Entry* patch = nullptr;
+        for (const auto& e : at->entries) {
+            if (e.line == line && e.key.starts_with("patch ")) patch = &e;
+        }
+        if (patch) {
+            const std::string_view name = trim(std::string_view(patch->key).substr(6));
+            int c = 0;
+            for (const auto& s : d->sections) {
+                if (s.kind != "contact") continue;
+                const deck::Entry* p = find_entry(s, "patch");
+                if (p && trim(p->value) == name) {
+                    if (const int k = contact_of(c); k >= 0) add({Marker::Kind::contact, {}, k, {}});
+                }
+                ++c;
+            }
+        }
+    } else {
+        return out;  // outside the geometry
+    }
+    const auto points = named_points(out.message);
+    for (const P3 p : points) {
+        add({Marker::Kind::point, {}, -1, p});
+        for (std::size_t r = 0; r < m.regions.size(); ++r) {
+            for (std::size_t k = 0; k < m.regions[r].solids.size(); ++k) {
+                const Box3 b = m.regions[r].solids[k].bounds();
+                bool in = true;
+                for (int a = 0; a < 3; ++a) in = in && p[a] >= b.lo[a] - 1 && p[a] <= b.hi[a] + 1;
+                if (in) add({Marker::Kind::solid, {static_cast<int>(r), static_cast<int>(k)}, -1, {}});
+            }
+        }
+    }
+    if (at->kind == "mesh" && out.markers.empty()) add({Marker::Kind::domain, {}, -1, {}});
+    return out;
+}
+
+
+int region_at(const Model& m, P3 p) {
+    for (std::size_t r = m.regions.size(); r-- > 0;) {
+        for (const Solid& s : m.regions[r].solids) {
+            if (s.kind == SolidKind::box) {
+                if (p.x > s.box.lo.x && p.x < s.box.hi.x && p.y > s.box.lo.y && p.y < s.box.hi.y && p.z > s.box.lo.z && p.z < s.box.hi.z) {
+                    return static_cast<int>(r);
+                }
+            } else if (p[s.axis] > s.from && p[s.axis] < s.to && inside(s.polygon, uv_of(s.axis, p))) {
+                return static_cast<int>(r);
+            }
+        }
+    }
+    return m.background();
+}
+
 }  // namespace NiTCAD::app::solid

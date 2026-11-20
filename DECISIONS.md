@@ -1697,6 +1697,66 @@ editor's model one dimension up. Run under the owner's 4-core cap: builds `-j 4`
   the same parity. It was replaced by the forced-parity mutant. The edit guard's mutant survived at first: the writer
   also leaves an unconverted extrusion unchanged. A check on the refusal message now catches it.
 
+**Slice 3 results (2026-11-21; SD5):** live validation and the mesh preview. Run first on the 4-core cap; the owner
+lifted it to 6 cores during the slice, and the mutants and final runs used 6.
+- **Where an interface fails:** the generator's interface and patch-edge rules name a facet of the complex (its
+  index). For a layered `generate3d` deck the build now ends such a message with `near (x, y, z)`: the facet's vertex
+  centroid in cm. Only that path changes; other decks' messages and every mesh are as before.
+- **Problems placed (`solid::locate_problem`, no Win32):** the 2D editor's rules, one dimension up:
+  - a region's `box` or `prism` line marks that solid, another line of the region all its solids, and the
+    background the domain;
+  - a contact's section marks its contact, and a `[mesh]` patch line the contacts using it;
+  - a named point is marked, with the solids whose closed bounds hold it;
+  - another `[mesh]` line marks the domain. Nothing is marked outside the geometry.
+- **On the page:** the problems' markers are drawn in red over everything. A patch box on no boundary face is
+  outlined as a box. The first problem heads the inspector with "Run is off until the layout builds"; Run is
+  disabled with that reason, and the console's Messages get the line (the main window's existing path). The page
+  shows the check state of the text shown (pending, valid, invalid), as the 2D page does. The tab starts a check when
+  it opens on an unchecked deck.
+- **Mesh preview:** a Mesh button on the tool strip. The live check's generated tets give the surface: the faces on
+  the boundary and those between tets of different regions. Each tet's region is where the model puts its centroid
+  (`solid::region_at`). The preview shows only for the text it was built from. Interface nodes come in pairs either
+  side of the interface (FD7), so the interface faces straddle it rather than lie in it.
+- **SE7 met:** a window-test table through the live check covers:
+  - two valid layouts (the stack, and a box reaching the boundary), each checked valid and built with Run on;
+  - four invalid ones: a flat box (its solid marked), a patch box on no boundary face (its contact), a degenerate
+    domain (the domain), and a box inside the oxide's interface plane (a hole: the named point on z = 0.4 µm, and the
+    oxide whose face it is).
+
+  For each, the page's message equals `check_deck`'s byte for byte, the markers are as listed and drawn, Run is off
+  with the reason, and asking for Run starts nothing. A model test covers `locate_problem` (each marker kind) and
+  `region_at` (the later solid wins an overlap; boundary points count as outside).
+- **SE8 met (run part):** a 3D MOSFET drawn on the page runs. The substrate is the opened deck's background. The
+  oxide is drawn as a box on a work plane, given its height, and has its bottom typed as 0.55 µm. Source, drain, gate
+  (set to electrode) and body are dragged on the domain's faces, each seen straight on, and named. The gate's metal,
+  the source and drain pockets' doping and the sweep are typed, as 26k's GE8 does. The check is valid and Run is on.
+  The mesh has 3930 nodes (limit 20k). It runs the equilibrium and the gate at 0 and 0.5 V, all converged, in
+  5.8 s on 6 threads.
+- **Mesh preview test:** the preview shows the built mesh, including interface edges near z = 0.4 µm away from the
+  boundary. After an edit it shows "Building the mesh..." until the next check. A mesh tagged with other text is not
+  shown.
+- **SE1:** the deck tests for layered decks pass. The hidden `[.benchmark]` reduced-FinFET test fails before
+  building: the worktree's CRLF deck defeats its text replacement. That test was not run in slice 0 either.
+- **Suites:** the app test executable passes 105 cases; the app window test executable passes 55. On 6 cores SE5's
+  frame medians read 5.0 ms (orbit) and 4.9 ms (drag). Full ctest suites were not run.
+- **Mutants (SE9):** 12 run, all caught:
+  - the solid line's index shifted;
+  - the contact's section origin shifted;
+  - the named point's units;
+  - `region_at`'s order reversed;
+  - the `[mesh]` fallback to the domain removed;
+  - the check state ignoring the text;
+  - Run not gated by the 3D page;
+  - interface faces left out of the preview;
+  - markers not drawn;
+  - the build's facet point dropped;
+  - the mesh tagged with the wrong text;
+  - the patch-box outline removed.
+
+  Three survived at first, until tests gained a solid overlap, an interior interface edge and a mismatched mesh text:
+  `region_at`'s order, interface faces left out, and the wrong mesh tag. One first failed to build and was rerun as
+  a compiling equivalent: the facet point dropped.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

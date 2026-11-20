@@ -23,9 +23,11 @@
 #include <windows.h>
 
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
+#include "NiTCAD/app/document.hpp"
 #include "NiTCAD/app/solid.hpp"
 #include "NiTCAD/app/solid_view.hpp"
 #include "NiTCAD/render/image.hpp"
@@ -94,6 +96,24 @@ public:
     [[nodiscard]] const render::FieldScene& scene() const noexcept { return scene_; }
     [[nodiscard]] double scene_ms() const noexcept { return scene_ms_; }  // the last render's scene build
     [[nodiscard]] const std::optional<std::string>& error() const noexcept { return error_; }
+
+    // --- live validation and the mesh preview (slice 3, SD5; as the 2D page's GD9) ---
+    // A live check of `text` ended: its diagnostics (empty: the deck builds). Kept while `text` is the text shown.
+    void checked(const std::string& text, std::span<const Diagnostic> diagnostics);
+    enum class Check { pending, valid, invalid };
+    [[nodiscard]] Check check() const noexcept;
+    [[nodiscard]] const std::vector<solid::Problem>& problems() const noexcept { return problems_; }
+    // Why Run is off on this tab ("" when it is not): the layout's first problem.
+    [[nodiscard]] std::string run_blocked() const;
+    // The surface mesh (boundary and interface triangles' edges, pairs of points in µm) a live check of `text` built.
+    void set_mesh(const std::string& text, std::vector<solid::V3> edges);
+    void set_mesh_preview(bool on);
+    [[nodiscard]] bool mesh_preview() const noexcept { return mesh_preview_; }
+    [[nodiscard]] bool mesh_shown() const noexcept { return mesh_preview_ && !mesh_text_.empty() && mesh_text_ == text_seen_; }
+    [[nodiscard]] std::size_t mesh_segments() const noexcept { return mesh_.size() / 2; }
+    [[nodiscard]] const std::vector<solid::V3>& mesh() const noexcept { return mesh_; }
+    // The problem or mesh line shown at the inspector's top ("" none).
+    [[nodiscard]] std::string banner() const;
 
     enum Control : int {
         c_heading = 0, c_hint, c_name_label, c_name, c_material_label, c_material, c_raise, c_lower,
@@ -166,6 +186,15 @@ private:
     solid::Preview preview_;
     double last_x_ = 0, last_y_ = 0;
     bool space_ = false, alone_ = false;
+
+    // The live check.
+    std::string checked_text_, mesh_text_;
+    std::vector<Diagnostic> diagnostics_;
+    std::vector<solid::Problem> problems_;
+    std::vector<solid::V3> mesh_;
+    bool mesh_preview_ = false;
+    HWND mesh_button_ = nullptr;
+    void locate_problems();
 };
 
 }  // namespace NiTCAD::app

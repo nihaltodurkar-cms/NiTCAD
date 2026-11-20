@@ -59,7 +59,14 @@ struct Preview {
 
 // A scene with only the camera and bounds (the domain, padded by 5 %): what picking and the handles project with.
 [[nodiscard]] render::FieldScene frame_scene(const Model& m, const ViewState& v);
-[[nodiscard]] render::FieldScene solid_scene(const Model& m, const ViewState& v, const Selection& s, const Preview& p = {});
+// What the live check found (slice 3, SD5): the problems' markers (red, over everything) and the mesh preview's
+// surface edges (pairs of points, µm).
+struct Overlay {
+    std::vector<Marker> markers;
+    std::vector<V3> mesh;
+};
+[[nodiscard]] render::FieldScene solid_scene(const Model& m, const ViewState& v, const Selection& s, const Preview& p = {},
+                                           const Overlay& o = {});
 
 // Where a point lands on the screen (pixels), and the ray under a pixel.
 [[nodiscard]] std::array<double, 2> screen_of(const Model& m, const ViewState& v, const V3& p);

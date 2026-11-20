@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <limits>
 #include <map>
 #include <optional>
@@ -788,7 +789,23 @@ std::expected<void, base::Error> Builder::layered_3d(const Section& s) {
         return std::unexpected(located(line, "[mesh] layered", std::move(complex.error())));
     }
     auto m = mesh::generate_mesh(*complex, o);
-    if (!m) return std::unexpected(located(s.line, "[mesh] generate3d", std::move(m.error())));
+    if (!m) {
+        // Unit 26l (SD5): the generator's interface and patch-edge rules name the facet they fail on; a layered
+        // deck says where it is (the facet's vertex centroid, cm), so the modeller can mark it.
+        auto err = std::move(m.error());
+        const std::string_view msg = err.message;
+        const bool of_facet = (msg.find("interface") != std::string_view::npos && !msg.starts_with("interface_resolution")) ||
+                              msg.starts_with("a patch edge") || msg.starts_with("a patch-edge vertex") || msg.starts_with("a domain-edge vertex");
+        if (of_facet && err.context && err.context->index && *err.context->index < complex->facets.size()) {
+            const auto& f = complex->facets[*err.context->index];
+            std::array<double, 3> c{};
+            for (const std::size_t v : f.vertices) {
+                for (std::size_t k = 0; k < 3; ++k) c[k] += complex->vertices[v][k] / static_cast<double>(f.vertices.size());
+            }
+            err.message += std::format(" near ({:.6g}, {:.6g}, {:.6g})", c[0], c[1], c[2]);
+        }
+        return std::unexpected(located(s.line, "[mesh] generate3d", std::move(err)));
+    }
     generated_ = std::move(*m);
     return {};
 }

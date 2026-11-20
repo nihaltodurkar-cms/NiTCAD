@@ -193,3 +193,36 @@ struct Snap {
                         Coord grid = 0);
 
 }  // namespace NiTCAD::app::solid
+
+namespace NiTCAD::app::solid {
+
+// --- validation (Unit 26l slice 3, SD5): the deck build's own error, placed on the model -------------------------
+
+// Where a problem is drawn: a solid ({region, -1}: every solid of the region, or the domain for the background), a
+// contact, a point the message names, or the whole domain.
+struct Marker {
+    enum class Kind : unsigned char { solid, contact, point, domain };
+    Kind kind = Kind::domain;
+    SolidRef solid;
+    int contact = -1;
+    P3 at{};
+    friend bool operator==(const Marker&, const Marker&) = default;
+};
+
+struct Problem {
+    int line = 0;         // the deck line the build named (0: none)
+    std::string message;  // the build's message, unchanged
+    std::vector<Marker> markers;
+};
+
+// The build's error at `line` of `deck` (read into `m`) placed on `m`, as the 2D editor's: the line's region solid
+// (its box, prism or extrude line; the region's solids for another line of it), its contact section, or the contacts
+// of its [mesh] patch line; the points "(x, y, z)" in cm the message names, each with the solids whose closed
+// bounds hold it; the domain for the [mesh] section's other lines. No markers outside the geometry.
+[[nodiscard]] Problem locate_problem(const Model& m, std::string_view deck, int line, std::string message);
+
+// The region a point strictly inside one solid lies in: the last solid in deck order holding it, else the background
+// (-1 when there is none). Points on a solid's boundary count as outside it (the mesh preview asks at tet centroids).
+[[nodiscard]] int region_at(const Model& m, P3 p);
+
+}  // namespace NiTCAD::app::solid

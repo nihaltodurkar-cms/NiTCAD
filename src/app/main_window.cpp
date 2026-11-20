@@ -15,7 +15,9 @@
 #include <charconv>
 #include <format>
 #include <fstream>
+#include <set>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -37,6 +39,68 @@ constexpr const wchar_t* panel_class = L"NiTCADInspector";
 
 // Status bar parts.
 constexpr int status_state = 0, status_file = 1, status_adapter = 2, status_cursor = 3;
+
+// Unit 26l (SD5): a 3D mesh's surface for the modeller's preview: the edges (pairs of points, µm) of the tet faces on
+// the boundary or between tets of different regions (each tet's region where the model puts its centroid).
+std::vector<solid::V3> surface_edges(const solid::Model& model, const mesh::SimplexMesh& s) {
+    const std::size_t tets = s.cells.size() / 4;
+    std::vector<int> region(tets);
+    for (std::size_t t = 0; t < tets; ++t) {
+        std::array<double, 3> c{};
+        for (std::size_t k = 0; k < 4; ++k) {
+            for (std::size_t a = 0; a < 3; ++a) c[a] += s.points[static_cast<std::size_t>(s.cells[4 * t + k])][a] / 4.0;
+        }
+        const auto q = [&](double cm) { return static_cast<solid::Coord>(std::llround(cm / geo::quantum_cm)); };
+        region[t] = solid::region_at(model, {q(c[0]), q(c[1]), q(c[2])});
+    }
+    // Faces keyed by their sorted nodes (21 bits each): the first tet's region, and whether a second differs or is
+    // missing.
+    struct Seen {
+        int region;
+        int count;
+        bool differs;
+    };
+    std::unordered_map<std::uint64_t, Seen> faces;
+    faces.reserve(tets * 3);
+    const auto key = [](std::array<std::int32_t, 3> f) {
+        std::ranges::sort(f);
+        return (static_cast<std::uint64_t>(f[0]) << 42) | (static_cast<std::uint64_t>(f[1]) << 21) | static_cast<std::uint64_t>(f[2]);
+    };
+    for (std::size_t t = 0; t < tets; ++t) {
+        const auto* v = &s.cells[4 * t];
+        for (int omit = 0; omit < 4; ++omit) {
+            std::array<std::int32_t, 3> f{};
+            for (int k = 0, j = 0; k < 4; ++k) {
+                if (k != omit) f[static_cast<std::size_t>(j++)] = v[k];
+            }
+            auto [it, fresh] = faces.try_emplace(key(f), Seen{region[t], 1, false});
+            if (!fresh) {
+                ++it->second.count;
+                it->second.differs = it->second.differs || it->second.region != region[t];
+            }
+        }
+    }
+    std::set<std::uint64_t> edges;
+    const std::uint64_t mask = (std::uint64_t{1} << 21) - 1;
+    for (const auto& [k, f] : faces) {
+        if (f.count != 1 && !f.differs) continue;
+        const std::uint64_t n[3] = {k >> 42, (k >> 21) & mask, k & mask};
+        for (int i = 0; i < 3; ++i) {
+            for (int j = i + 1; j < 3; ++j) edges.insert((n[i] << 21) | n[j]);
+        }
+    }
+    std::vector<solid::V3> out;
+    out.reserve(2 * edges.size());
+    const auto um = [&](std::uint64_t node) {
+        const auto& p = s.points[static_cast<std::size_t>(node)];
+        return solid::V3{p[0] * 1e4, p[1] * 1e4, p[2] * 1e4};
+    };
+    for (const std::uint64_t e : edges) {
+        out.push_back(um(e >> 21));
+        out.push_back(um(e & mask));
+    }
+    return out;
+}
 
 // The tree's item data: a kind in the high word, an index in the low.
 enum TreeKind : int { tree_none = 0, tree_field = 1, tree_view = 2, tree_region = 3 };
@@ -489,7 +553,7 @@ void MainWindow::update_command_states() {
     };
     enable(Command::check, !busy);
     // Unit 26k (GD9): on the Geometry tab, Run is off while the layout does not build.
-    enable(Command::run, !busy && !(tab_ == tab_geometry && geometry_ && !geometry_->run_blocked().empty()));
+    enable(Command::run, !busy && !(tab_ == tab_geometry && geometry_ && !(solid_shown_ ? solid_->run_blocked() : geometry_->run_blocked()).empty()));
     enable(Command::stop, runner_.state() == RunState::running);
     enable(Command::open_deck, !busy);
     enable(Command::new_deck, !busy);
@@ -1298,6 +1362,7 @@ void MainWindow::select_tab(int tab) {
         if (solid_shown_) {
             solid_->reload();
             SetFocus(solid_->canvas());
+            if (solid_->check() == SolidPage::Check::pending && !live_.pending() && live_edits_ == edits_) SetTimer(hwnd_, live_timer, 0, nullptr);
             break;
         }
         geometry_->reload();
@@ -2658,6 +2723,12 @@ void MainWindow::on_live_check() {
     if (!shown.empty()) {
         set_status(status_state, shown.front().message, level);
     } else if (auto plan = live_.take_plan()) {
+        // Unit 26l (SD5): the 3D modeller's mesh preview, the generated tets' boundary and interface faces.
+        if (solid_ && plan->generated && plan->generated->simplices.dimension == 3) {
+            if (const auto model = solid::read_model(text); model && model->mesh != solid::MeshKind::unsupported) {
+                solid_->set_mesh(text, surface_edges(*model, plan->generated->simplices));
+            }
+        }
         // The structure preview (XD4): results stay while the deck keeps their mesh.
         if (workspace_ && workspace_->has_results() && same_mesh(*workspace_, plan->device.mesh())) {
             set_status(status_state, "The deck builds (the results shown are of its last run).");
@@ -2685,6 +2756,7 @@ void MainWindow::on_live_check() {
         geometry_->set_mesh(text, std::move(o));
     }
     geometry_->checked(text, problems);
+    solid_->checked(text, problems);
     update_command_states();
 }
 
@@ -2890,7 +2962,7 @@ void MainWindow::execute(Command c) {
     case Command::run:
         if (runner_.busy()) return;
         if (tab_ == tab_geometry) {
-            if (const std::string why = geometry_->run_blocked(); !why.empty()) {
+            if (const std::string why = (solid_shown_ ? solid_->run_blocked() : geometry_->run_blocked()); !why.empty()) {
                 set_status(status_state, why, LogLevel::warning);
                 return;
             }

@@ -23,7 +23,7 @@ using namespace solid;
 
 constexpr const wchar_t* canvas_class = L"NiTCADSolidCanvas";
 constexpr const wchar_t* panel_class = L"NiTCADSolidPanel";
-constexpr int id_strip = 1, id_canvas = 2, id_tool_first = 10, id_fit = 20;
+constexpr int id_strip = 1, id_canvas = 2, id_tool_first = 10, id_fit = 20, id_mesh = 21;
 constexpr std::array<const wchar_t*, 6> tool_texts{L"Select (V)", L"Box (B)", L"Prism (P)", L"Contact (C)", L"Pan (H)", L"Measure (M)"};
 constexpr std::array<const char*, 3> plane_names{"YZ (normal x)", "ZX (normal y)", "XY (normal z)"};
 
@@ -99,6 +99,8 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
                                      id_tool_first + static_cast<int>(k)));
     }
     tool_buttons_.push_back(make(L"BUTTON", L"Fit (F)", WS_TABSTOP | WS_GROUP | BS_PUSHBUTTON, strip_, id_fit));
+    mesh_button_ = make(L"BUTTON", L"Mesh", WS_TABSTOP | BS_AUTOCHECKBOX | BS_PUSHLIKE, strip_, id_mesh);
+    tool_buttons_.push_back(mesh_button_);
     canvas_ = CreateWindowExW(0, canvas_class, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, panel_,
                               reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_canvas)), GetModuleHandleW(nullptr), this);
 
@@ -217,7 +219,7 @@ void SolidPage::layout_inspector() {
         y += row;
     };
     line(c_heading);
-    line(c_hint, 2 * (row - 6));
+    line(c_hint, 5 * (row - 6));
     pair(c_name_label, c_name);
     pair(c_material_label, c_material, MulDiv(200, dpi_, 96));
     if (visible(c_raise)) {
@@ -269,6 +271,7 @@ void SolidPage::reload(bool fit_view) {
         fit();
     }
     prune_selection();
+    locate_problems();
     update_inspector();
     invalidate();
 }
@@ -290,6 +293,7 @@ void SolidPage::apply_text(const std::string& text) {
         message_ = m_.mesh == MeshKind::unsupported ? m_.why : std::string();
     }
     prune_selection();
+    locate_problems();
     update_inspector();
     invalidate();
 }
@@ -483,7 +487,12 @@ double SolidPage::render() {
     if (!renderer_) renderer_ = host_.solid_renderer();
     if (!renderer_ || c.right < 16 || c.bottom < 16) return -1.0;
     const auto t0 = std::chrono::steady_clock::now();
-    scene_ = solid_scene(m_, v_, sel_, preview_);
+    solid::Overlay overlay;
+    if (check() == Check::invalid) {
+        for (const solid::Problem& p : problems_) overlay.markers.insert(overlay.markers.end(), p.markers.begin(), p.markers.end());
+    }
+    if (mesh_shown()) overlay.mesh = mesh_;
+    scene_ = solid_scene(m_, v_, sel_, preview_, overlay);
     scene_ms_ = 1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!target_) {
         auto t = renderer_->window_target(canvas_, v_.width, v_.height);
@@ -501,6 +510,52 @@ double SolidPage::render() {
     error_.reset();
     ValidateRect(canvas_, nullptr);
     return 1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// --- live validation and the mesh preview (slice 3, SD5) -----------------------------------------------------------
+
+void SolidPage::checked(const std::string& text, std::span<const Diagnostic> diagnostics) {
+    checked_text_ = text;
+    diagnostics_.assign(diagnostics.begin(), diagnostics.end());
+    locate_problems();
+    update_inspector();
+    invalidate();
+}
+
+void SolidPage::locate_problems() {
+    problems_.clear();
+    if (checked_text_.empty() || checked_text_ != text_seen_ || m_.mesh == MeshKind::unsupported) return;
+    for (const Diagnostic& d : diagnostics_) problems_.push_back(locate_problem(m_, text_seen_, d.line, d.message));
+}
+
+SolidPage::Check SolidPage::check() const noexcept {
+    if (checked_text_.empty() || checked_text_ != text_seen_) return Check::pending;
+    return diagnostics_.empty() ? Check::valid : Check::invalid;
+}
+
+std::string SolidPage::run_blocked() const {
+    if (check() != Check::invalid || m_.mesh == MeshKind::unsupported) return {};
+    return "Run is off until the layout builds: " + diagnostics_.front().message;
+}
+
+void SolidPage::set_mesh(const std::string& text, std::vector<V3> edges) {
+    mesh_text_ = text;
+    mesh_ = std::move(edges);
+    if (mesh_preview_) invalidate();
+}
+
+void SolidPage::set_mesh_preview(bool on) {
+    mesh_preview_ = on;
+    if (mesh_button_) SendMessageW(mesh_button_, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+    update_inspector();
+    invalidate();
+}
+
+std::string SolidPage::banner() const {
+    if (m_.mesh == MeshKind::unsupported) return {};
+    if (check() == Check::invalid) return diagnostics_.front().message + "  (Run is off until the layout builds.)";
+    if (mesh_preview_ && !mesh_shown()) return check() == Check::pending ? "Building the mesh..." : "The mesh shows when the layout builds.";
+    return {};
 }
 
 // --- the inspector -------------------------------------------------------------------------------------------------
@@ -576,6 +631,7 @@ void SolidPage::update_inspector() {
     } else {
         hint = "Click a solid to select it; draw on the work plane with the tools above the view.";
     }
+    if (const std::string b = banner(); !b.empty()) hint = b + "\r\n" + hint;
     set(c_hint, hint);
     layout_inspector();
 }
@@ -1159,6 +1215,11 @@ LRESULT CALLBACK SolidPage::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARAM
             const int id = LOWORD(w);
             if (id >= id_tool_first && id < id_tool_first + static_cast<int>(tool_texts.size())) {
                 self->set_tool(static_cast<Tool>(id - id_tool_first));
+                SetFocus(self->canvas_);
+                return 0;
+            }
+            if (id == id_mesh) {
+                self->set_mesh_preview(SendMessageW(self->mesh_button_, BM_GETCHECK, 0, 0) == BST_CHECKED);
                 SetFocus(self->canvas_);
                 return 0;
             }
