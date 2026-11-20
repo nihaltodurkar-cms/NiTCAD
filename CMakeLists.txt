@@ -319,6 +319,7 @@ add_library(nitcad_mesh STATIC
   src/mesh/triangulation2d.cpp
   src/mesh/triangulation3d.cpp
   src/mesh/generate2d.cpp
+  src/mesh/layered2d.cpp
   src/mesh/generate3d.cpp
   src/mesh/polygon2d.cpp
   src/mesh/complex.cpp
@@ -342,6 +343,7 @@ add_executable(nitcad_mesh_test
   tests/mesh/origin_test.cpp
   tests/mesh/generate2d_test.cpp
   tests/mesh/generate2d_layers_test.cpp
+  tests/mesh/layered2d_test.cpp
   tests/mesh/triangulation3d_test.cpp
   tests/mesh/generate3d_test.cpp
   tests/mesh/complex_test.cpp
@@ -1044,7 +1046,8 @@ add_library(nitcad_app STATIC
   src/app/deck_vocabulary.cpp
   src/app/live_check.cpp
   src/app/compare.cpp
-  src/app/integration.cpp)
+  src/app/integration.cpp
+  src/app/geometry.cpp)
 add_library(NiTCAD::app ALIAS nitcad_app)
 target_include_directories(nitcad_app PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_app PUBLIC NiTCAD::deck NiTCAD::render NiTCAD::analysis NiTCAD::io)
@@ -1065,7 +1068,8 @@ add_executable(nitcad_app_test
   tests/app/deck_vocabulary_test.cpp
   tests/app/live_check_test.cpp
   tests/app/compare_test.cpp
-  tests/app/integration_test.cpp)
+  tests/app/integration_test.cpp
+  tests/app/geometry_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
 # The view tests compare the app's images with nitcad plot's (WG4's choices).
 add_dependencies(nitcad_app_test nitcad)
@@ -1081,8 +1085,9 @@ add_library(nitcad_app_window STATIC
   src/app/deck_pane.cpp
   src/app/main_window.cpp
   src/app/pages.cpp
-  src/app/self_test.cpp)
-target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid dwmapi advapi32)
+  src/app/self_test.cpp
+  src/app/geometry_page.cpp)
+target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid dwmapi advapi32 d2d1 dwrite)
 # The start page lists the examples beside the executable, else the source tree's (26-3, VQ11).
 target_compile_definitions(nitcad_app_window PRIVATE NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
 target_include_directories(nitcad_app_window PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/app")
@@ -1090,7 +1095,7 @@ target_include_directories(nitcad_app_window PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}
 add_executable(nitcad-app WIN32 app/main.cpp app/icon/nitcad.rc)
 target_link_libraries(nitcad-app PRIVATE nitcad_app_window)
 add_executable(nitcad_app_window_test tests/app/window_test.cpp tests/app/self_test_test.cpp
-  tests/app/analysis_window_test.cpp tests/app/hover_window_test.cpp)
+  tests/app/analysis_window_test.cpp tests/app/hover_window_test.cpp tests/app/geometry_window_test.cpp)
 target_link_libraries(nitcad_app_window_test PRIVATE nitcad_app_window Catch2::Catch2WithMain dxgi dxguid)
 target_compile_definitions(nitcad_app_window_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
   NITCAD_APP_PATH="$<TARGET_FILE:nitcad-app>" NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")

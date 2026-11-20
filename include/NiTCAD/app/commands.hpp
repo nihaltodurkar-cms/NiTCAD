@@ -14,6 +14,8 @@ enum class Command : std::uint16_t {
     new_deck = 100, open_deck, open_result, save, save_as, recent_first, exit = recent_first + 16, compare_result,
     // Edit
     undo = 200, cut, copy, paste, select_all, find_error, complete,
+    // Unit 26k (GD7): redo, duplicate, delete, and the Geometry tab's tools
+    redo, duplicate, delete_selection, tool_select, tool_rectangle, tool_polygon, tool_contact, tool_pan, tool_measure,
     // Simulation (run)
     check = 300, run, stop, compare_previous, stop_comparing,
     play_pause, snapshot_first, snapshot_previous, snapshot_next, snapshot_last,  // Unit 26c (YD5)
@@ -24,6 +26,7 @@ enum class Command : std::uint16_t {
     show_regions,  // Unit 26c (YD4)
     hover_readout,  // Unit 26e (HD3)
     view_front, view_back, view_left, view_right, view_top, view_bottom, view_isometric,  // Unit 26h (JD4)
+    tab_geometry,  // Unit 26k (GD6)
     // The Device, Mesh, Physics and Simulation menus' sections and keys (VQ13) are numbered from here.
     section_first = 1000,
     key_first = 2000,

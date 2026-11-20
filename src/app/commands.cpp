@@ -13,7 +13,7 @@ constexpr std::uint16_t vk_tab = 0x09, vk_space = 0x20, vk_end = 0x23, vk_home =
 
 constexpr std::array<std::string_view, 7> bar{"&File", "&Edit", "&Device", "&Mesh", "&Physics", "&Simulation", "&View"};
 
-constexpr std::array<CommandInfo, 58> list{{
+constexpr std::array<CommandInfo, 68> list{{
     {Command::new_deck, "&File", "&New deck", {'N', true}, "Ctrl+N"},
     {Command::open_deck, "&File", "&Open deck...", {'O', true}, "Ctrl+O"},
     {Command::open_result, "&File", "Open &result...", {'R', true, true}, "Ctrl+Shift+R"},
@@ -28,6 +28,15 @@ constexpr std::array<CommandInfo, 58> list{{
     {Command::select_all, "&Edit", "Select &all", {'A', true}, "Ctrl+A"},
     {Command::find_error, "&Edit", "Go to the &error", {vk_f8}, "F8"},
     {Command::complete, "&Edit", "Co&mplete", {vk_space, true}, "Ctrl+Space"},
+    {Command::redo, "&Edit", "&Redo", {'Y', true}, "Ctrl+Y"},
+    {Command::duplicate, "&Edit", "&Duplicate", {'D', true}, "Ctrl+D"},
+    {Command::delete_selection, "&Edit", "De&lete", {}, "Del", {}},
+    {Command::tool_select, "&Edit", "&Select", {}, "V", "&Geometry tools"},
+    {Command::tool_rectangle, "&Edit", "&Rectangle", {}, "R", "&Geometry tools"},
+    {Command::tool_polygon, "&Edit", "P&olygon", {}, "P", "&Geometry tools"},
+    {Command::tool_contact, "&Edit", "Co&ntact", {}, "C", "&Geometry tools"},
+    {Command::tool_pan, "&Edit", "&Pan", {}, "H", "&Geometry tools"},
+    {Command::tool_measure, "&Edit", "&Measure", {}, "M", "&Geometry tools"},
     {Command::check, "&Simulation", "&Check deck", {vk_f7}, "F7"},
     {Command::run, "&Simulation", "&Run", {vk_f5}, "F5"},
     {Command::stop, "&Simulation", "S&top", {vk_f5, false, true}, "Shift+F5"},
@@ -70,11 +79,12 @@ constexpr std::array<CommandInfo, 58> list{{
     {Command::previous_tab, "&View", "Pre&vious tab", {vk_tab, true, true}, "Ctrl+Shift+Tab"},
     {Command::next_pane, "&View", "Ne&xt pane", {vk_f6}, "F6"},
     {Command::tab_start, "&View", "Start pa&ge", {'1', true}, "Ctrl+1"},
-    {Command::tab_view, "&View", "Device vie&w", {'2', true}, "Ctrl+2"},
-    {Command::tab_curves, "&View", "&Curves", {'3', true}, "Ctrl+3"},
-    {Command::tab_deck, "&View", "D&eck", {'4', true}, "Ctrl+4"},
-    {Command::tab_run, "&View", "Ru&n monitor", {'5', true}, "Ctrl+5"},
-    {Command::tab_results, "&View", "Re&sults", {'6', true}, "Ctrl+6"},
+    {Command::tab_geometry, "&View", "Geometry editor (&2)", {'2', true}, "Ctrl+2"},
+    {Command::tab_view, "&View", "Device vie&w", {'3', true}, "Ctrl+3"},
+    {Command::tab_curves, "&View", "&Curves", {'4', true}, "Ctrl+4"},
+    {Command::tab_deck, "&View", "D&eck", {'5', true}, "Ctrl+5"},
+    {Command::tab_run, "&View", "Ru&n monitor", {'6', true}, "Ctrl+6"},
+    {Command::tab_results, "&View", "Re&sults", {'7', true}, "Ctrl+7"},
 }};
 
 constexpr std::span<const CommandInfo> fixed{list};

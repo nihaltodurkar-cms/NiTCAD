@@ -250,6 +250,125 @@ recombination_velocity_n = 100
     CHECK(d.acceptors()[corner] == 1e17);
 }
 
+// Unit 26k (GD1, GE2): a layered generate2d deck (a background, boxes and polygons in deck order, each replacing
+// what it covers) builds to the same mesh bits as its hand-tiled equivalent; the errors.
+TEST_CASE("deck build: a layered generate2d deck equals its hand tiling (Unit 26k)", "[deck]") {
+    const std::string tail = R"(
+[doping]
+profile = acceptor constant 1e16
+
+[contact source]
+kind = ohmic
+patch = source
+
+[contact body]
+kind = ohmic
+patch = body
+
+[equilibrium]
+)";
+    const std::string layered = R"(
+[mesh]
+type = generate2d
+layered = on
+domain = 0 2um 0 1um
+patch source = 0 0, 0 0.6um
+patch body = 0.2um 0, 0.8um 0
+max_size = 0.25um
+interface_resolution = 20nm
+
+[region p]
+material = silicon
+
+[region n]
+material = silicon
+polygon = 1um 0, 2um 0, 2um 0.5um, 2um 0.8um, 1um 0.8um
+
+[region oxide]
+material = sio2
+box = 0 2um 0.8um 1um
+)" + tail;
+    // By hand: the junction under the oxide; the oxide carries the junction's end on its lower edge.
+    const std::string tiled = R"(
+[mesh]
+type = generate2d
+patch source = 0 0, 0 0.6um
+patch body = 0.2um 0, 0.8um 0
+max_size = 0.25um
+interface_resolution = 20nm
+
+[region p]
+material = silicon
+polygon = 0 0, 1um 0, 1um 0.8um, 0 0.8um
+
+[region n]
+material = silicon
+polygon = 1um 0, 2um 0, 2um 0.8um, 1um 0.8um
+
+[region oxide]
+material = sio2
+polygon = 0 0.8um, 1um 0.8um, 2um 0.8um, 2um 1um, 0 1um
+)" + tail;
+    const deck::Plan a = must(layered), b = must(tiled);
+    CHECK(io::mesh_digest(a.device.mesh()) == io::mesh_digest(b.device.mesh()));
+    CHECK(std::ranges::equal(a.device.node_region(), b.device.node_region()));
+
+    const auto fails = [](const std::string& text, std::string_view message) {
+        const auto p = plan_of(text);
+        REQUIRE_FALSE(p.has_value());
+        CAPTURE(p.error().message);
+        CHECK(p.error().message.find(message) != std::string::npos);
+    };
+    std::string t = layered;
+    fails(t.replace(t.find("layered = on\n"), 13, ""), "domain is for a layered generate2d mesh");
+    t = tiled;
+    fails(t.replace(t.find("polygon = 0 0.8um, 1um"), 22, "box = 0.5um 1.5um 0.9um 1um\n#"), "box with layered = on");
+    t = layered;
+    fails(t.replace(t.find("box = 0 2um 0.8um 1um"), 21, ""), "two regions without a shape");
+    t = layered;
+    fails(t.replace(t.find("polygon = 1um 0, 2um 0"), 22, "polygon = 1um 0, 2um 0.1um"), "horizontal or vertical");
+}
+
+TEST_CASE("deck build: a layered hole under a full-width contact meshes (Unit 26k slice 1)", "[deck]") {
+    // A buried box in the background: the ring around it is cut by two rays, kept off the body patch along the
+    // whole bottom (a straight cut down through the box would put a vertex inside it).
+    const std::string deck = R"(
+[mesh]
+type = generate2d
+layered = on
+domain = 0 2um 0 1um
+patch body = 0 0, 2um 0
+patch top = 0.8um 1um, 1.2um 1um
+max_size = 0.25um
+interface_resolution = 20nm
+
+[region p]
+material = silicon
+
+[region box]
+material = sio2
+box = 0.8um 1.2um 0.3um 0.6um
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[contact top]
+kind = ohmic
+patch = top
+
+[equilibrium]
+)";
+    const auto p = plan_of(deck);
+    INFO((p ? std::string() : p.error().message));
+    REQUIRE(p);
+    // Every node of the body contact on y = 0, from x = 0 to 2 um.
+    CHECK(p->device.mesh().node_count() > 0);
+}
+
 TEST_CASE("deck build: generated 2D and 3D meshes and mesh files", "[deck]") {
     const fs::path dir = scratch("generated");
     const std::string two_d = R"(

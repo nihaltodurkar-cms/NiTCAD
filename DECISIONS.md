@@ -1151,6 +1151,172 @@ stopped on the owner's word "dont start debug until i say"; the full suites not 
 
 ---
 
+### Unit 26k — interactive device geometry editor (proposed 2026-11-20; on `app/geometry-editor`)
+
+**Owner request (2026-11-20):** "I want to implement a professional, fully interactive Device Geometry Editor in
+NiTCAD. Currently, users cannot create semiconductor device structures directly using the mouse. I want
+functionality similar to commercial TCAD software, where users can draw, select, move, resize, and edit device
+geometries directly in the viewport." The branch starts from `app/console-log` `a25e0da` (Unit 26j and look A,
+unmerged), since the editor sits in the same window code.
+
+**Where things stand.** A device is typed: a tensor deck's regions are a background region plus `box`es in deck
+order, each replacing what it covers; a `generate2d` deck's regions are `polygon`s that must *tile* the domain
+exactly (shared edges with bit-identical vertices, no overlap, no nesting, the interface rules M7/U12). Contacts are
+boundary `patch`es (generated) or `box`es on a named face (tensor). Nothing can be drawn; the Device menu only opens
+the deck at its sections.
+
+**The model the editor uses (the commercial one).** Shapes are layered: a background region fills the domain, and
+every shape after it replaces what it covers ("replace" mode). That is already the tensor deck's rule. A tiling is
+then computed from the layers, never drawn by hand: the user never has to make two polygons share a vertex exactly.
+
+**Standing conditions:** the deck stays the only source of truth (VQ13): the editor reads the deck and writes deck
+text, nothing else, through the deck editor's undo; every deck that builds today builds to the same bits (the new
+deck key is opt-in); Win32 + Direct2D only, no new dependency; the geometry model has no Win32 type (testable);
+criteria fixed before code; targeted Release tests per slice, full suites only on the owner's word; no screen
+automation; nothing pushed or merged without authorization.
+
+**Left out (later units):** 3D editing (extruding the cross-section into a swept or generated 3D deck); drawing
+doping (Gaussian windows, implants); process emulation (etch, deposit); curved shapes (arcs, as polylines only);
+importing GDS/DXF; meshing controls drawn on the canvas (refinement boxes).
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| GD1 | 0 | **Layered generated decks.** `[mesh] type = generate2d` gains `layered = on` (default off: today's tiling rule unchanged). Layered, the domain is `[mesh] domain = x0 x1 y0 y1`; one region without shapes is the background; regions give `box = x0 x1 y0 y1` (as tensor decks) or `polygon`, applied in deck order, each replacing what it covers. | Opt-in: no existing deck changes meaning. |
+| GD2 | 0 | **The partition kernel** (`mesh::layered_partition2d`, mesh layer, exact): the layers resolved into the tiling `generate2d` takes. Rectilinear shapes in slice 0 (an overlay of every shape's x and y breakpoints, each cell to its topmost shape, cells merged per region and connected component into simple polygons, T-junction vertices inserted on shared edges so every edge is conforming). Slanted edges in slice 4. Holes (a region enclosing another) are cut along a breakpoint line into simple polygons, as `generate2d` takes no nesting. | Coordinates are the inputs' own doubles, never recomputed: shared vertices are bit-identical by construction. |
+| GD3 | 1 | **The geometry model** (`app::Geometry`, no Win32): the domain, the shapes (name, material, a rectangle or polygon, order), the contacts (name, kind, segment on the boundary), read from a deck (tensor, generate2d tiled or layered) and written back as deck text by minimal edits (only the `[mesh]` geometry keys and the regions' `box`/`polygon` lines change; comments, order and every other section kept). A tiled `generate2d` deck reads as one shape per polygon (exact; editing it writes it layered). | |
+| GD4 | 1 | **Edits and undo:** add, delete, move, resize, set a vertex, insert/remove a vertex, rename, set material, reorder (bring forward, send back), add/move/resize a contact, duplicate, mirror; each an operation on the model, applied as one deck edit (one undo step in the deck editor; Ctrl+Z in the canvas undoes it). | |
+| GD5 | 1 | **Snapping and hit testing:** a grid (1, 2, 5 × 10ⁿ µm steps chosen from the zoom), vertices, edge midpoints, edges, the domain boundary; Shift constrains to horizontal/vertical; coordinates quantized to 0.1 nm so decimal deck text round-trips exactly. Hit tests in screen pixels (handles 7 px at 96 dpi, scaled). | |
+| GD6 | 2 | **The Geometry tab** (centre, after Start): a Direct2D canvas with rulers in µm, the grid, the shapes filled by material colour (the tree's swatches) in layer order, outlines, contacts as thick coloured segments with their names, the selection with 8 resize handles, rubber-band selection, zoom at the cursor (wheel), pan (middle drag, Space+drag), Fit. The cursor's position in µm in the status bar. | 2D decks only; a 3D deck shows "3D geometry editing is a later unit". |
+| GD7 | 2 | **Tools** (a strip on the canvas and the Edit menu, each with a key): Select (V), Rectangle (R), Polygon (P: click vertices, double-click or Enter closes), Contact (C: drag along the boundary), Pan (H), Measure (M, reuses the probe's ruler). Arrow keys nudge by a grid step (Shift: ×10); Delete; Ctrl+C/V/D; Escape cancels. | |
+| GD8 | 2 | **Inspector, Geometry section:** the selection's name, material (drop-down of the materials the deck build knows), layer order, x/y/width/height (rectangle) or the vertex list (polygon), contact kind and its keys; typed values apply on Enter. The tree's regions and contacts select on the canvas and back. | |
+| GD9 | 3 | **Live validation:** the layout checked as it changes with the build's own checks (the partition, `generate2d`'s interface rules, a contact off the boundary or overlapping another), each problem a marker on the canvas and a line in the console's Messages; Run disabled with the reason while invalid. **Mesh preview** button: builds the mesh in the background (the existing preview path) and overlays it. | |
+| GD10 | 4 | **Slanted edges** in the partition (trapezoids: sidewalls, STI): segment intersections in exact arithmetic (the mesh layer's `exact_integer` / orient2d), intersection points rounded once and shared. | |
+| GD11 | — | **Commits:** one branch, the proposal, then a commit per slice, then ARCHITECTURE (the app's chapter and 11.x row) and the records. The owner may stop after any slice. | |
+
+**Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
+
+| # | Criterion |
+|---|---|
+| GE1 | **Nothing else moves:** every example and test deck builds to the same bits as before (the existing deck and mesh tests unchanged and passing). |
+| GE2 | **Partition exact:** for 1000 seeded random rectilinear layouts (up to 30 shapes, holes included) the kernel's output passes `generate2d`'s tiling validation, the region of every cell centre equals the topmost covering shape's, and the areas per region equal the exact layered areas. A layered deck and its hand-tiled equivalent build to the same mesh bits. |
+| GE3 | **Round trip:** every 2D example and fixture deck read into the model and written back with no edit gives byte-identical text; after an edit, only the geometry lines differ (checked by a line diff), and the deck builds. |
+| GE4 | **Undo:** a seeded sequence of 200 random edits, each undone in reverse, restores the deck text byte-identical at every step; redo replays it. |
+| GE5 | **Speed:** a drag (move or resize) redraws in ≤ 16 ms per frame median on WARP with 200 shapes and 5000 vertices; the partition of 200 rectangles takes ≤ 5 ms; the deck written back per edit ≤ 2 ms. |
+| GE6 | **Hit testing:** handles, vertices, edges and contacts picked correctly at 96, 144 and 192 dpi and at zooms 1e-2 to 1e4 px/µm (table test). |
+| GE7 | **Validation agrees with the build:** for a table of invalid layouts the editor's message equals the deck build's error, and every valid one builds. |
+| GE8 | **Interaction:** window tests drive the canvas by messages (no screen automation): draw a rectangle, move and resize it, draw a polygon and edit a vertex, draw a contact, undo/redo, and the deck text and device are as expected; a drawn MOSFET (substrate, oxide, gate, source, drain, body) runs its sweep. |
+| GE9 | **Mutants:** at least 8 per slice caught (e.g. the replace order reversed; a T-junction vertex not inserted; a hole not cut; the quantum dropped; snap to the wrong candidate; undo of a reorder not restoring the order). |
+| GE10 | **Layering:** the model in `app` without Win32 headers; the kernel in `mesh` without `app` or `deck`; no new dependency. |
+
+**Questions (each with a recommendation; ruled by the standing "choose recommended" rule, 2026-11-11):**
+
+- **GQ1 — what the deck stores.** (a) the layered shapes (`layered = on`), the user's intent kept; (b) the computed
+  tiling as plain `polygon`s, no new key, but a reopened deck has lost which shape was drawn over which.
+  **Recommended (a)**, ruled (a).
+- **GQ2 — where the editor lives.** (a) a new centre tab "Geometry"; (b) an edit mode of the Device view.
+  **Recommended (a)**: the Device view shows results on the mesh, the editor shapes before any mesh; ruled (a).
+- **GQ3 — 3D.** (a) a later unit extruding the 2D cross-section; (b) in this unit. **Recommended (a)**, ruled (a).
+- **GQ4 — tensor decks.** (a) edited too, rectangles only (a tensor region takes boxes), the grid lines kept;
+  (b) converted to `generate2d` on the first edit. **Recommended (a)** with (b) offered by a button; ruled (a).
+
+**Slice 0 results (2026-11-20; GD1, GD2):** `mesh::layered_partition2d` (`src/mesh/layered2d.cpp`) and the deck's
+`layered = on` / `domain` keys with region `box` and `polygon` layered in deck order.
+- **GE2 met:** 1000 seeded random rectilinear layouts (1–30 shapes, past the domain and overlapping, five regions) tile
+  exactly: simple counter-clockwise polygons, no vertex inside another polygon's edge, every unit cell's centre in
+  exactly one polygon of the topmost shape's region, the areas per region exact. A ring (a hole) and a C whose ends
+  touch at a corner are cut into simple pieces. A layered deck (a junction under an oxide, with a T-junction) builds
+  to the same mesh digest and node regions as its hand tiling.
+- **GE5 (partition part) met:** 200 random rectangles on a 1000² lattice resolve in 1.8–2.0 ms (median of 5, three
+  runs; 43 polygons). The first version took 16 ms; what fixed it: each row painted top shape down with every cell
+  written once, parts labelled and their boundary edges found in one pass each, span flood fills, and the breakpoint
+  lines hidden under later shapes merged away first (exact: such a line carries no polygon edge).
+- **GE9 for slice 0 met:** 10 hand mutants caught: the replace order reversed; T-junctions not inserted; a hole not
+  cut; a pinch not cut; hidden rows judged by one column; the background ignored; the clamp past the domain wrong;
+  slanted edges accepted; the deck's domain read wrongly; `domain` accepted without `layered`.
+- **GE1:** the mesh suite passes (147 cases). The deck build suite's four failures are the working tree's own: three
+  FinFET decks deleted from `decks/` and `finfet_3d.deck` edited (uncommitted, not this unit's), so their tests
+  cannot open or match them.
+- **Limitation recorded:** a cut (for a hole or a pinch) is a same-region internal edge; where one ends on the outer
+  boundary it splits that boundary edge, so a patch across that point is refused by the mesher, as on a hand tiling.
+
+**Slice 1 results (2026-11-20; GD3–GD5):** the editor's model `app::geo` (`include/NiTCAD/app/geometry.hpp`,
+`src/app/geometry.cpp`; plain C++, no Win32, GE10): the deck read into regions (each a layer, its box and polygon
+lines, the background the one without shapes), contacts (a generated deck's `[mesh] patch` segment, a tensor deck's
+face clipped by its box) and the domain; written back by minimal edits; 17 edits; an undo history of deck texts;
+the grid, snapping, the Shift constraint, handle drags and hit tests. Coordinates are integers in 0.1 nm.
+- **Writing:** region sections keep their slots (layer order permutes them); each changed entry is rewritten in
+  place, comments and blanks between entries kept; a removed section goes with the blank line before it; new
+  regions follow the last region, new contacts end the file; the deck's line ends (LF or CRLF) are kept. A new
+  contact's patch name is made unique among the deck's patches. The first edit of a tiled deck adds `layered = on`
+  (refused while a polygon has a slanted edge); a polygon keeps axis-parallel edges (a dragged vertex's neighbours
+  follow along their shared edges; inserted and removed vertices must lie on an edge) until slice 4.
+- **GE3 met:** `mosfet_2d.deck` (tensor, CRLF), a layered deck with comments and a continued polygon, and a tiled
+  deck (CRLF, last line without its end) come back byte-identical with no edit; after edits only geometry lines
+  change (a line-multiset diff), and the edited layered and tiled decks build.
+- **GE4 met:** 200 seeded random edits (16 kinds) on a layered and on a tensor deck: after each, the written deck
+  reads back to the edited model and only geometry lines changed (a whole removed section excepted); undone one by
+  one, each step gives the earlier text byte for byte, ending at the original; redo replays to the last.
+- **GE5 (write part) met:** a write takes 0.03–0.04 ms mean over the 200 edits; on a 300-region deck a write and a
+  read together take 0.5–0.8 ms per edit (three runs).
+- **GE6 met:** at 96, 144 and 192 dpi and zooms 1e-2, 0.1, 1, 10, 100, 1e3 and 1e4 px/µm: box handles (picked within
+  4.5 px of the centre, scaled; outside at 5 px), polygon vertices and edges (4 px), contact ends before the contact
+  (5 px), the topmost shape, the background inside the domain, nothing outside it; model points round-trip through
+  the screen. The grid step is the smallest 1, 2 or 5 × 10ⁿ µm at least 12 px apart (scaled), never below 0.1 nm.
+- **Kernel change (slice 0's limitation lifted for holes):** a hole is now cut by two rays along grid lines from two
+  of its corners to the part's outer loop, chosen to end on the domain's boundary off every patch's inside (a
+  corner first), else on an interface, a patch's inside last; then the shorter. A straight cut across the part
+  put a vertex inside a full-width body contact, and one ending on an interface made `generate2d` refuse a corner
+  zone (P4b), both seen while writing the tests. New deck test: a buried box under a full-width body contact
+  builds. Pinches are still cut along a column line. The mesh suite passes (122 cases, GE2's 1000 layouts included).
+- **GE9 for slice 1 met:** 12 hand mutants caught (a 13th's edit did not apply and was not run): lengths not
+  trimmed of trailing zeros; nm read as Å; comments between entries dropped; a removed section's blank kept; a
+  vertex's neighbours not following; a tiled deck not made layered; undo not feeding redo; the snap radius not
+  scaled by dpi; handles picked at 6 px; grid steps without 2 × 10ⁿ; a tensor contact's box clipped wrongly; the
+  ray choice ignoring patches.
+- **Found on the way:** slice 0 left `layered` and `domain` out of the app's deck vocabulary (XG2's test caught it
+  once the app suite ran); added. The app suite passes (88 cases).
+
+**Slice 2 results (2026-11-20; GD6–GD8):** the Geometry tab (`src/app/geometry_page.{hpp,cpp}`), second after Start
+(Ctrl+2; the other tabs' keys move up one), on Direct2D (an `ID2D1HwndRenderTarget`, software when the window runs on
+WARP) with DirectWrite labels.
+- **Canvas (GD6):** rulers in µm (labels at the 1, 2, 5 step ≥ 60 px apart), the grid, the background and each
+  region's shapes filled by material in layer order, outlines, the domain, contacts as thick segments with their
+  names, the selection (a box's eight handles, a polygon's vertices; the background's handles are the domain's in a
+  layered deck), rubber-band selection (Ctrl adds), wheel zoom at the cursor, pan by middle drag, Space+drag or the
+  Pan tool, Fit (F, Home). The cursor's position in µm is in the status bar's cursor part. 1D and unknown decks show
+  why; 3D decks "3D geometry editing is a later unit"; a deck without `[mesh]` offers **New 2D layout** (a layered
+  template).
+- **Tools (GD7):** a strip of tool buttons and Edit ▸ Geometry tools (keys V R P C H M while the canvas has the focus;
+  no accelerators, so the deck editor keeps its letters). Polygon points are kept horizontal or vertical from the last
+  (slice 4 brings slanted edges); Enter, a double-click or a click on the first point closes it. Double-click on a
+  selected polygon's edge inserts a vertex, on a vertex removes it. Arrows nudge by a grid step (Shift ×10); Delete;
+  Escape cancels or deselects. New Edit commands: Redo (Ctrl+Y), Duplicate (Ctrl+D), Delete (Del); on the Geometry tab
+  Undo, Redo, Cut, Copy, Paste, Duplicate and Delete act on the canvas. Every finished gesture writes the deck at once
+  (minimal edits, then the deck pane's text and the live check); undo and redo step through those texts and start
+  again when the deck is edited elsewhere. A drawn contact is named `contact_<n>`, kind ohmic.
+- **Inspector (GD8):** the Geometry section takes the inspector's place on the Geometry tab: a line on the selection,
+  name, material (the materials the deck build knows), Raise and Lower layer, x/y/width/height (a box; the domain for
+  the background), the vertex list with Apply (a polygon), a contact's kind and its ends, and the material to draw
+  with. Values are in µm unless typed with a unit; Enter takes them; a refused value keeps the deck as it was. A region
+  selected in the tree selects it on the canvas.
+- **GE8 (slice 2's part) met:** a window test drives the canvas by messages: a rectangle drawn, moved right and down,
+  resized by its handle; undo and redo through those; a polygon clicked and closed with Enter, a vertex dragged (its
+  neighbours follow); a contact dragged along the bottom; duplicate and delete; the deck's other lines untouched; and
+  the deck as drawn builds (the live check reports nothing). The inspector test types a height, a name, a bad width
+  (refused), the domain's width and a polygon's vertex list. The MOSFET drawn and run is left to slice 3 with GE7.
+- **GE5 (drag part) met:** 200 shapes and 5598 vertices (199 boxes and a 4802-vertex staircase), a box dragged 60
+  frames on software Direct2D: median 2.5–2.7 ms a frame, slowest 5.3–6.5 ms (three runs; limit 16 ms).
+- **GE9 for slice 2 met:** 11 hand mutants caught: the undo history not recorded; R choosing the polygon tool; a move
+  without its vertical part (survived the first test, which moved only sideways; a downward drag added); a handle drag
+  using the wrong handle; a drawn contact's kind; inspector numbers read as nm; the domain edited as a box; a polygon's
+  last point dropped on closing; Redo undoing; a contact's kind not written; a domain change leaving a contact off its
+  side. New model tests: a contact's kind, the domain widened, narrowed (a contact clipped) and refused.
+- **Not done here, recorded:** the Measure tool draws its own line and readout rather than reusing the probe's ruler;
+  the tree links regions only (contacts are not tree items). The app suite (89 cases) and the window suite (45 cases,
+  the hidden ones not run) pass.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
