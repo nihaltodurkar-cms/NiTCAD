@@ -320,6 +320,7 @@ add_library(nitcad_mesh STATIC
   src/mesh/triangulation3d.cpp
   src/mesh/generate2d.cpp
   src/mesh/layered2d.cpp
+  src/mesh/layered3d.cpp
   src/mesh/generate3d.cpp
   src/mesh/polygon2d.cpp
   src/mesh/complex.cpp
@@ -344,6 +345,7 @@ add_executable(nitcad_mesh_test
   tests/mesh/generate2d_test.cpp
   tests/mesh/generate2d_layers_test.cpp
   tests/mesh/layered2d_test.cpp
+  tests/mesh/layered3d_test.cpp
   tests/mesh/triangulation3d_test.cpp
   tests/mesh/generate3d_test.cpp
   tests/mesh/complex_test.cpp

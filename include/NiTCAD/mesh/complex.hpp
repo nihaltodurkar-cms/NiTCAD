@@ -104,4 +104,41 @@ struct ExtrudedGeometry {
 // Builds and checks the complex. Errors: invalid_input.
 [[nodiscard]] std::expected<PolyhedralGeometry, base::Error> extrude(const ExtrudedGeometry& geometry);
 
+// Layered 3D solids resolved into a complex (Unit 26l, SD1-SD2): a box domain, a background region filling it, and
+// solids applied in order, each replacing what it covers: a box, or a prism (a simple polygon in the plane across
+// `axis`, in (u, v) = the coordinates along axes (axis + 1) % 3 and (axis + 2) % 3, as the extrusion's cells,
+// extruded from `from` to `to` along the axis). Solids past the domain are clipped to it.
+//
+// Rules (invalid_input; the index names the solid, or the patch box with "patch box"): the domain lo < hi on each
+// axis; a box lo < hi on each axis; a prism's axis 0, 1 or 2, from < to, its polygon at least three vertices, none
+// repeated, simple, of non-zero area, every edge parallel to u or v (slanted faces come in slice 4, SD6); the
+// background (when >= 0) and each region >= 0; every point of the domain covered by a solid or the background. Patch
+// boxes as the extrusion's: a boundary facet inside a box (to 1e-12 of the extent) takes its name, the first box
+// first, and a box selecting none is an error; the others are named by the domain's face: x_min, x_max, y_min,
+// y_max, z_min, z_max. The boundary facets are split along the boxes' edges, so a box selects exactly the part of a
+// face inside it.
+//
+// Output (exact): an overlay of every solid's and patch box's coordinates on the three axes; each cell to the topmost
+// solid covering its centre (else the background); cells merged into blocks of one region (maximal runs along x,
+// then y, then z); each block a volume, its faces split into rectangular facets where the neighbours' faces meet, and
+// every vertex lying on a facet's edge inserted in it, so facets meet edge to edge. Coordinates are the inputs' own
+// doubles; shared vertices are bit-identical. The result passes check_complex by construction (not run here: it costs
+// seconds on thousands of facets, and the generator runs its rules again).
+struct LayeredSolid {
+    enum class Kind { box, prism };
+    Kind kind = Kind::box;
+    Point lo, hi;                // a box
+    int axis = 2;                // a prism
+    double from = 0.0, to = 0.0;
+    std::vector<Point> polygon;  // (u, v, ignored)
+    std::int32_t region = 0;
+};
+struct LayeredGeometry3D {
+    Point lo, hi;
+    std::int32_t background = -1;  // the region filling the domain under the solids, or -1: none
+    std::vector<LayeredSolid> solids;
+    std::vector<PatchBox> patches;
+};
+[[nodiscard]] std::expected<PolyhedralGeometry, base::Error> layered_partition3d(const LayeredGeometry3D& geometry);
+
 }  // namespace NiTCAD::mesh

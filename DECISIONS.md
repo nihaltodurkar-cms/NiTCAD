@@ -1489,6 +1489,67 @@ depends on them; slice 3's validation is how this shows. 3D runs are slow (the F
 so SE8's device is coarse. The D3D12 viewport's picking and gizmos are new code in the render path, so SE5 and SE6
 are the gates there.
 
+**Slice 0 results (2026-11-21; SD1, SD2):** `mesh::layered_partition3d` (`src/mesh/layered3d.cpp`, declared in
+`complex.hpp`) and the deck's layered `generate3d`. Run under the owner's 4-core cap: builds `-j 4`, tests on 4 P
+cores.
+- **Kernel:**
+  - **Grid:** each axis's breakpoints come from the solids and the patch boxes, merged within 1e-12 of the extent
+    (20nm and 0.02um are one plane).
+  - **Rows:** each row along x is resolved top solid first as run-length intervals. A box gives its index range; a
+    prism along x gives its cell centre's side of the polygon; a prism along y or z gives a scanline across its
+    rectilinear polygon. All of this is on grid indices, so exact.
+  - **Blocks:** blocks are the identical runs of a row, extended over the next rows and slabs; each block is a volume.
+  - **Facets:** the faces of the blocks on either side of each plane are overlaid (on the domain's boundary, with
+    the patch boxes) and merged into rectangles. Every vertex on a facet's edge is inserted in it.
+  - **Names:** boundary facets take the first patch box holding them (to 1e-12), else their face's name (x_min ...
+    z_max). A patch box that selects nothing is an error.
+  - **Validation:** the output passes `check_complex` by construction. The kernel no longer runs it: it took 3.2 s on
+    3500 facets, the generator applies the same rules when it indexes the complex, and the tests run it on every
+    output.
+- **Deck (SD1):** `[mesh] type = generate3d`, `layered = on`, `domain = x0 x1 y0 y1 z0 z1` (required), and
+  `patch <name> = x0 y0 z0 x1 y1 z1`. Regions give `box = x0 x1 y0 y1 z0 z1` and `prism = <x|y|z> <from> <to>, u v,
+  ...`; one region without a solid is the background. Errors are placed on the solid's or patch box's line. `domain`
+  without layers, `cuboid`/`vertex`/`face`/`plane` with them, and `prism` in any other mesh type are refused with a
+  message. The app's deck vocabulary knows `prism`, and `layered`, `domain` and the box `patch` for `generate3d`.
+- **SE2 met (kernel part):**
+  - 1000 seeded random layouts (1–20 solids: boxes, and L- and U-shaped prisms on all three axes, past the domain,
+    five regions, patch boxes in a third of them) give complexes that pass `check_complex`. Each volume is a box; the
+    volumes fill the domain; each of 200 sample points lies in exactly one volume, of the topmost solid's region; the
+    volumes per region equal the unit-cell counts exactly.
+  - The reduced FinFET drawn as five boxes over a background has the same region volumes and the same source, drain,
+    gate and substrate areas as `extrude`'s complex of `decks/finfet_3d_reduced.deck`, to 1e-12 (the rest of the
+    boundary matches in total).
+  - **Not run:** the layered FinFET deck's own build. It meshes for about 20 minutes, like the extruded one, so it
+    is a hidden `[.benchmark]` case.
+- **SE5 met (partition part):** 100 random boxes on a 1000³ lattice resolve in 37–44 ms (median of 3; 576 volumes,
+  3435 facets). The first version took 3.3 s: 3.2 s in `check_complex`, and about 100 ms painting and merging a full
+  8-million-cell grid. The run-length rows fixed the rest.
+- **Deck tests:**
+  - A layered MOS stack (silicon, an oxide layer, a gate patch box on the top, a body on the bottom) builds through
+    the polyhedral generator, with the unnamed faces named.
+  - The oxide written as a box, as a prism along z and as a prism along x meshes to the same mesh digest.
+  - Eight refusals are checked with their lines.
+- **SE1:** the deck suite passes (9 failures marked as expected, unchanged), the mesh suite passes (160 cases), and the
+  app suite passes (92 cases, the vocabulary test included). Full ctest suites not run.
+- **GE9-style mutants for slice 0 (SE9):** 14 run; 13 caught:
+  - solids painted bottom up;
+  - vertices on a facet's edge not inserted;
+  - patch-box matching without its tolerance;
+  - near-equal breakpoints not merged;
+  - the prism scanline's crossings inverted;
+  - a prism's (u, v) swapped;
+  - blocks merged across regions;
+  - the faces' default names swapped;
+  - an unused patch box allowed;
+  - the slanted-edge refusal dropped;
+  - errors placed at the section's line;
+  - `layered = on` ignored;
+  - every prism along z.
+
+  Two of them (the patch tolerance, the breakpoint merge) survived until a test wrote one plane two ways. One is
+  equivalent and recorded: the solids not sorted by line (a region's solids are contiguous in the deck, so they
+  already come in line order).
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
