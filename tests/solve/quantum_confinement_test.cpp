@@ -414,7 +414,7 @@ TEST_CASE("density gradient: mesh adaptation refuses it (Unit 62)") {
     o.models = dg_models();
     const std::vector<std::vector<double>> points{{0.5, 0.0}};
     const auto r = solve::adapt([](const solve::MeshRefinement&) -> std::expected<solve::AdaptableMesh, base::Error> {
-        FAIL("the device is not built");
+        FAIL_CHECK("the device is not built");
         return std::unexpected(base::Error{base::ErrorCode::invalid_input, "", {}});
     }, points, o, {}, {});
     REQUIRE_FALSE(r.has_value());
