@@ -176,9 +176,14 @@ public:
     [[nodiscard]] const std::string& readout_text() const noexcept { return readout_text_; }
     [[nodiscard]] bool hover_readout() const noexcept { return state_.hover_readout; }
     [[nodiscard]] const AppState& app_state() const noexcept { return state_; }
-    // Unit 26j: the console under the inspector (its text, and the edit control showing it).
+    // Unit 26j: the console under the inspector: its log, the lines its rich edit shows, the Show filter
+    // (as the combo box sets it), the Copy button (the shown lines as text) and Save log (to a file).
     [[nodiscard]] const ConsoleLog& console_log() const noexcept { return console_log_; }
-    [[nodiscard]] std::wstring console_text() const;
+    [[nodiscard]] int console_line_count() const;
+    [[nodiscard]] LogFilter console_filter() const noexcept { return console_filter_; }
+    void set_console_filter(LogFilter filter);
+    bool copy_console();
+    bool save_console(const std::filesystem::path& path);
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
@@ -197,6 +202,9 @@ public:
         id_enhanced,
         // Unit 26h (JD1): the axis box.
         id_axis_box,
+        // Unit 26j: the console's rich edit and tool strip.
+        id_console_text, id_console_title, id_console_show, id_console_filter, id_console_clear, id_console_copy,
+        id_console_save,
         id_first_label = 5100,
     };
 
@@ -214,11 +222,16 @@ private:
     void layout();
     void layout_inspector();
     void update_title();
-    // The state part's messages also go to the console (log false: the run's live progress, which does not).
-    void set_status(int part, const std::string& text, bool log = true);
-    // Unit 26j: a timestamped line in the console; the console's new lines into its edit control.
-    void log_line(const std::string& text);
-    void flush_console();
+    // The state part's messages also go to the console, at the level given (Unit 26j); show_status only shows
+    // them (the run's live progress).
+    void set_status(int part, const std::string& text, LogLevel level = LogLevel::info);
+    void show_status(int part, const std::string& text);
+    // Unit 26j: a timestamped line in the console; the console's new lines into its rich edit (all of them
+    // again on rebuild); its tool strip laid out; its controls' notifications.
+    void log_line(LogLevel level, const std::string& text);
+    void flush_console(bool rebuild = false);
+    void layout_console();
+    void on_console(int id, int code);
     void on_run_events();
     void on_run_timer();
     void on_live_check();
@@ -307,10 +320,11 @@ private:
     WindowOptions options_;
     HWND hwnd_ = nullptr;
     HWND toolbar_ = nullptr, status_ = nullptr, tree_ = nullptr, tabs_ = nullptr, metrics_ = nullptr,
-         inspector_ = nullptr, console_ = nullptr;
-    HFONT console_font_ = nullptr;
+         inspector_ = nullptr, console_panel_ = nullptr, console_ = nullptr;
     ConsoleLog console_log_;
-    std::size_t console_shown_ = 0;  // the console's lines (by number, ConsoleLog::total) in its edit control
+    LogFilter console_filter_ = LogFilter::all;
+    std::size_t console_shown_ = 0;        // the log's lines (by number, ConsoleLog::total) flushed so far
+    std::size_t console_lines_shown_ = 0;  // of those, the lines the filter shows in the rich edit
     std::unique_ptr<Viewport> viewport_;
     std::unique_ptr<DeckPane> deck_;
     std::unique_ptr<StartPage> start_;

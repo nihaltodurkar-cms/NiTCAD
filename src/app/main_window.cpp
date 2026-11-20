@@ -2,6 +2,7 @@
 #include "main_window.hpp"
 
 #include <commctrl.h>
+#include <richedit.h>  // Unit 26j: the console
 #include <dwmapi.h>     // ZD6: the title bar's theme
 #include <shobjidl.h>   // ZD5: ITaskbarList3
 #include <windowsx.h>
@@ -9,8 +10,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <charconv>
 #include <format>
+#include <fstream>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -155,7 +158,6 @@ MainWindow::~MainWindow() {
     if (accelerators_) DestroyAcceleratorTable(accelerators_);
     if (font_) DeleteObject(font_);
     if (bold_) DeleteObject(bold_);
-    if (console_font_) DeleteObject(console_font_);
     if (com_) CoUninitialize();  // after the taskbar list's release
 }
 
@@ -212,12 +214,31 @@ bool MainWindow::create_children() {
     results_ = std::make_unique<ResultsPage>(hwnd_, id_results);
     results_->on_pass = [this](std::size_t k) { results_show_pass(k); };
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
-    // Unit 26j: the console under the inspector, read-only, wrapped, as long as it gets (ConsoleLog's cap).
-    console_ = make(L"EDIT", L"",
-                    WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-                    hwnd_, id_console, WS_EX_CLIENTEDGE);
-    SendMessageW(console_, EM_SETLIMITTEXT, 0, 0);
-    inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
+    // Unit 26j: the console under the inspector: its tool strip (title, Show filter, Clear, Copy, Save log) over
+    // a read-only rich edit, unwrapped, light text on dark.
+    console_panel_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
+                                     10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_console)),
+                                     GetModuleHandleW(nullptr), this);
+    make(L"STATIC", L"Console", WS_VISIBLE | SS_CENTERIMAGE, console_panel_, id_console_title);
+    make(L"STATIC", L"Show", WS_VISIBLE | SS_CENTERIMAGE | SS_RIGHT, console_panel_, id_console_show);
+    {
+        std::vector<std::string> names;
+        for (std::string_view n : filter_names()) names.emplace_back(n);
+        HWND combo = make(L"COMBOBOX", L"", WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, console_panel_,
+                          id_console_filter);
+        combo_fill(combo, names, 0);
+    }
+    make(L"BUTTON", L"Clear", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_clear);
+    make(L"BUTTON", L"Copy", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_copy);
+    make(L"BUTTON", L"Save log...", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_save);
+    LoadLibraryW(L"Msftedit.dll");
+    console_ = make(MSFTEDIT_CLASS, L"",
+                    WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
+                        ES_NOHIDESEL,
+                    console_panel_, id_console_text);
+    SendMessageW(console_, EM_EXLIMITTEXT, 0, 0x7FFFFFFE);
+    SendMessageW(console_, EM_SETTARGETDEVICE, 0, 1);  // no wrapping: the tables keep their columns
+    SendMessageW(console_, EM_SETBKGNDCOLOR, 0, RGB(30, 30, 30));    inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
                                  10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_inspector)),
                                  GetModuleHandleW(nullptr), this);
     // The inspector's controls, each after its label.
@@ -482,9 +503,10 @@ void MainWindow::apply_dpi(int dpi) {
     const auto set = [&](HWND h) { SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE); };
     for (HWND h : {toolbar_, status_, tree_, tabs_, metrics_}) set(h);
     for (HWND c = GetWindow(inspector_, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) set(c);
-    if (console_font_) DeleteObject(console_font_);
-    console_font_ = win32::code_font(dpi);
-    SendMessageW(console_, WM_SETFONT, reinterpret_cast<WPARAM>(console_font_), TRUE);
+    for (HWND c = GetWindow(console_panel_, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        if (c != console_) set(c);
+    }
+    SendMessageW(GetDlgItem(console_panel_, id_console_title), WM_SETFONT, reinterpret_cast<WPARAM>(bold_), TRUE);
     SendMessageW(toolbar_, TB_AUTOSIZE, 0, 0);
     deck_->set_dpi(dpi);
     start_->set_dpi(dpi, font_, bold_);
@@ -512,7 +534,7 @@ void MainWindow::layout() {
     place(tree_, panes_.tree);
     place(tabs_, panes_.tabs);
     place(inspector_, panes_.inspector);
-    place(console_, panes_.console);
+    place(console_panel_, panes_.console);
     const bool view = tab_ == tab_view || tab_ == tab_curves;
     Rect page = panes_.page;
     if (tab_ != tab_view) page.height += panes_.metrics.height;  // the metrics strip is the device view's
@@ -627,46 +649,171 @@ void MainWindow::update_title() {
     set_status(status_file, document_.is_untitled() ? std::string("untitled deck") : document_.path().string());
 }
 
-void MainWindow::set_status(int part, const std::string& text, bool log) {
-    SendMessageW(status_, SB_SETTEXTW, static_cast<WPARAM>(part), reinterpret_cast<LPARAM>(win32::widen(text).c_str()));
-    if (log && part == status_state && !text.empty()) log_line(text);
+void MainWindow::set_status(int part, const std::string& text, LogLevel level) {
+    show_status(part, text);
+    if (part == status_state && !text.empty()) log_line(level, text);
 }
 
-void MainWindow::log_line(const std::string& text) {
+void MainWindow::show_status(int part, const std::string& text) {
+    SendMessageW(status_, SB_SETTEXTW, static_cast<WPARAM>(part), reinterpret_cast<LPARAM>(win32::widen(text).c_str()));
+}
+
+void MainWindow::log_line(LogLevel level, const std::string& text) {
     SYSTEMTIME t{};
     GetLocalTime(&t);
-    console_log_.add(std::format("[{:02}:{:02}:{:02}] {}", t.wHour, t.wMinute, t.wSecond, text));
+    console_log_.add(level, std::format("[{:02}:{:02}:{:02}] {}", t.wHour, t.wMinute, t.wSecond, text));
     flush_console();
 }
 
-// The console's lines since the last flush, appended at the end (which scrolls there); the whole text again
-// when lines it shows were dropped.
-void MainWindow::flush_console() {
-    if (!console_ || console_shown_ == console_log_.total()) return;
-    const auto& lines = console_log_.lines();
-    const bool rebuild = console_shown_ < console_log_.dropped();
-    std::wstring text;
-    for (std::size_t k = rebuild ? 0 : console_shown_ - console_log_.dropped(); k < lines.size(); ++k) {
-        if (!text.empty() || (!rebuild && console_shown_ > console_log_.dropped())) text += L"\r\n";
-        text += win32::widen(lines[k]);
-    }
-    console_shown_ = console_log_.total();
-    if (rebuild) {
-        SetWindowTextW(console_, text.c_str());
-        const auto end = GetWindowTextLengthW(console_);
-        SendMessageW(console_, EM_SETSEL, static_cast<WPARAM>(end), static_cast<LPARAM>(end));
-    } else {
-        const auto end = GetWindowTextLengthW(console_);
-        SendMessageW(console_, EM_SETSEL, static_cast<WPARAM>(end), static_cast<LPARAM>(end));
-        SendMessageW(console_, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(text.c_str()));
-    }
-    SendMessageW(console_, EM_SCROLLCARET, 0, 0);
+namespace {
+
+// EM_STREAMIN's reader over a string.
+struct RtfSource {
+    const std::string* text;
+    std::size_t at = 0;
+};
+
+DWORD CALLBACK read_rtf(DWORD_PTR cookie, LPBYTE buffer, LONG size, LONG* read) {
+    auto* s = reinterpret_cast<RtfSource*>(cookie);
+    const std::size_t n = std::min(static_cast<std::size_t>(size), s->text->size() - s->at);
+    std::memcpy(buffer, s->text->data() + s->at, n);
+    s->at += n;
+    *read = static_cast<LONG>(n);
+    return 0;
 }
 
-std::wstring MainWindow::console_text() const {
-    std::wstring w(static_cast<std::size_t>(GetWindowTextLengthW(console_)) + 1, L'\0');
-    w.resize(static_cast<std::size_t>(GetWindowTextW(console_, w.data(), static_cast<int>(w.size()))));
-    return w;
+}  // namespace
+
+// The console's lines since the last flush, appended at the end (the whole text again when lines it shows
+// were dropped, or rebuild). It follows the end while the view is at the bottom; scrolled up, it stays put.
+void MainWindow::flush_console(bool rebuild) {
+    if (!console_) return;
+    if (console_shown_ < console_log_.dropped()) rebuild = true;
+    if (!rebuild && console_shown_ == console_log_.total()) return;
+    const std::size_t from = rebuild ? 0 : console_shown_ - console_log_.dropped();
+    const bool any_before = !rebuild && console_lines_shown_ > 0;
+    std::size_t adding = 0;
+    for (std::size_t k = from; k < console_log_.lines().size(); ++k) {
+        if (shows(console_filter_, console_log_.lines()[k].level)) ++adding;
+    }
+    console_shown_ = console_log_.total();
+    if (!rebuild && adding == 0) return;
+    const std::string rtf = console_rtf(console_log_.lines(), from, console_filter_, any_before);
+    console_lines_shown_ = (rebuild ? 0 : console_lines_shown_) + adding;
+
+    SCROLLINFO si{sizeof(si), SIF_ALL};
+    GetScrollInfo(console_, SB_VERT, &si);
+    const bool at_bottom = rebuild || si.nMax <= 0 || si.nPos + static_cast<int>(si.nPage) >= si.nMax;
+    CHARRANGE selection{};
+    SendMessageW(console_, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&selection));
+    const auto first = SendMessageW(console_, EM_GETFIRSTVISIBLELINE, 0, 0);
+    SendMessageW(console_, WM_SETREDRAW, FALSE, 0);
+    RtfSource source{&rtf};
+    EDITSTREAM stream{reinterpret_cast<DWORD_PTR>(&source), 0, read_rtf};
+    if (rebuild) {
+        SendMessageW(console_, EM_STREAMIN, SF_RTF, reinterpret_cast<LPARAM>(&stream));
+    } else {
+        CHARRANGE end{-1, -1};
+        SendMessageW(console_, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&end));
+        SendMessageW(console_, EM_STREAMIN, SF_RTF | SFF_SELECTION, reinterpret_cast<LPARAM>(&stream));
+    }
+    if (at_bottom) {
+        const auto last = SendMessageW(console_, EM_GETLINECOUNT, 0, 0) - 1;
+        const auto start = static_cast<LONG>(SendMessageW(console_, EM_LINEINDEX, static_cast<WPARAM>(last), 0));
+        CHARRANGE caret{start, start};
+        SendMessageW(console_, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&caret));
+        SendMessageW(console_, WM_VSCROLL, SB_BOTTOM, 0);
+    } else {
+        SendMessageW(console_, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&selection));
+        const auto now = SendMessageW(console_, EM_GETFIRSTVISIBLELINE, 0, 0);
+        SendMessageW(console_, EM_LINESCROLL, 0, static_cast<LPARAM>(first - now));
+    }
+    SendMessageW(console_, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(console_, nullptr, TRUE);
+}
+
+void MainWindow::layout_console() {
+    RECT r{};
+    GetClientRect(console_panel_, &r);
+    const int pad = scaled(4, dpi_), gap = scaled(4, dpi_), row = scaled(23, dpi_);
+    const int strip = row + 2 * pad;
+    const auto put = [&](int id, int x, int width) {
+        MoveWindow(GetDlgItem(console_panel_, id), x, pad, std::max(width, 0), row, TRUE);
+    };
+    // Left to right: the title and the filter; the buttons on the right, as room allows.
+    int x = pad;
+    const int title = scaled(56, dpi_), show = scaled(36, dpi_), button = scaled(48, dpi_), save = scaled(72, dpi_);
+    put(id_console_title, x, title);
+    x += title + gap;
+    put(id_console_show, x, show);
+    x += show + gap;
+    int right = r.right - pad;
+    for (const auto& [id, width] : {std::pair{id_console_save, save}, std::pair{id_console_copy, button},
+                                    std::pair{id_console_clear, button}}) {
+        right -= width;
+        put(id, right, width);
+        right -= gap;
+    }
+    MoveWindow(GetDlgItem(console_panel_, id_console_filter), x, pad, std::max(right - x, scaled(60, dpi_)), row * 8, TRUE);
+    MoveWindow(console_, 0, strip, r.right, std::max<int>(r.bottom - strip, 0), TRUE);
+}
+
+void MainWindow::on_console(int id, int code) {
+    if (id == id_console_filter && code == CBN_SELCHANGE) {
+        const auto k = SendMessageW(GetDlgItem(console_panel_, id_console_filter), CB_GETCURSEL, 0, 0);
+        if (k >= 0 && static_cast<std::size_t>(k) < filter_names().size()) {
+            console_filter_ = static_cast<LogFilter>(k);
+            flush_console(true);
+        }
+    } else if (code == BN_CLICKED && id == id_console_clear) {
+        console_log_.clear();
+        console_lines_shown_ = 0;
+        flush_console(true);
+    } else if (code == BN_CLICKED && id == id_console_copy) {
+        copy_console();
+    } else if (code == BN_CLICKED && id == id_console_save) {
+        const fs::path p = win32::save_dialog(hwnd_, L"Logs (*.log)\0*.log\0Text (*.txt)\0*.txt\0All files\0*.*\0",
+                                              L"Save the console log", L"log");
+        if (!p.empty()) save_console(p);
+    }
+}
+
+bool MainWindow::copy_console() {
+    const std::wstring text = win32::widen(console_log_.text(console_filter_));
+    if (!OpenClipboard(hwnd_)) return false;
+    EmptyClipboard();
+    bool ok = false;
+    if (HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t))) {
+        if (void* p = GlobalLock(g)) {
+            std::memcpy(p, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+            GlobalUnlock(g);
+            ok = SetClipboardData(CF_UNICODETEXT, g) != nullptr;
+        }
+        if (!ok) GlobalFree(g);
+    }
+    CloseClipboard();
+    return ok;
+}
+
+bool MainWindow::save_console(const fs::path& path) {
+    std::ofstream out(path, std::ios::binary);
+    out << console_log_.text(console_filter_);
+    out.close();
+    if (!out) {
+        set_status(status_state, "Could not write " + path.filename().string(), LogLevel::error);
+        return false;
+    }
+    set_status(status_state, "Saved the console log to " + path.filename().string());
+    return true;
+}
+
+int MainWindow::console_line_count() const {
+    return console_lines_shown_ == 0 ? 0 : static_cast<int>(SendMessageW(console_, EM_GETLINECOUNT, 0, 0));
+}
+
+void MainWindow::set_console_filter(LogFilter filter) {
+    SendMessageW(GetDlgItem(console_panel_, id_console_filter), CB_SETCURSEL, static_cast<WPARAM>(filter), 0);
+    on_console(id_console_filter, CBN_SELCHANGE);
 }
 
 std::string MainWindow::status(int part) const {
@@ -1718,10 +1865,10 @@ bool MainWindow::open_deck(const fs::path& path) {
     fill_tree();
     pending_ = Pending::open;
     console_log_.begin_run();
-    log_line("Open " + document_.path().filename().string());
+    log_line(LogLevel::header, "Open " + document_.path().filename().string());
     runner_.start_check(document_.text(), document_.path());
     update_taskbar(false);  // ZD5: a check clears a failed run's state
-    set_status(status_state, "Building the deck...", false);
+    show_status(status_state, "Building the deck...");
     refresh();
     update_command_states();
     return true;
@@ -1805,7 +1952,7 @@ void MainWindow::on_run_timer() {
             else text += std::format(": point {}", r.point + 1);
             text += std::format(", iteration {}, update {:.2g}", r.iterations, r.update);
         }
-        set_status(status_state, text, false);
+        show_status(status_state, text);
         flush_console();
         run_page_->update(runner_, renderer());
         update_command_states();
@@ -1816,7 +1963,8 @@ void MainWindow::on_run_timer() {
 void MainWindow::on_run_finished(Pending pending, RunState s) {
     if (s == RunState::failed) {
         const std::string why = runner_.error() ? runner_.error()->message : std::string("failed");
-        set_status(status_state, (pending == Pending::run ? "The run failed: " : "The deck does not build: ") + why);
+        set_status(status_state, (pending == Pending::run ? "The run failed: " : "The deck does not build: ") + why,
+                   LogLevel::error);
         if (!runner_.diagnostics().empty()) {
             select_tab(tab_deck);
             deck_->go_to_line(runner_.diagnostics().front().line);
@@ -1834,7 +1982,7 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
             }
         }
     } else if (pending == Pending::check && s == RunState::idle) {
-        set_status(status_state, "The deck builds.");
+        set_status(status_state, "The deck builds.", LogLevel::success);
     } else if (pending == Pending::run && s == RunState::done) {
         const auto stopped = runner_.stopped_early();
         const double seconds = runner_.elapsed_seconds();
@@ -1849,7 +1997,8 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
             }
         }
         set_status(status_state, stopped ? std::format("Stopped early after {:.1f} s: {}", seconds, stopped->message)
-                                         : std::format("Done in {:.1f} s", seconds));
+                                         : std::format("Done in {:.1f} s", seconds),
+                   stopped ? LogLevel::warning : LogLevel::success);
     }
     update_command_states();
     update_taskbar(pending == Pending::run);
@@ -2106,10 +2255,10 @@ void MainWindow::execute(Command c) {
         document_.set_text(deck_->text());
         pending_ = Pending::check;
         console_log_.begin_run();
-        log_line("Check " + (document_.is_untitled() ? std::string("Untitled") : document_.path().filename().string()));
+        log_line(LogLevel::header, "Check " + (document_.is_untitled() ? std::string("Untitled") : document_.path().filename().string()));
         runner_.start_check(document_.text(), document_.path());
         update_taskbar(false);
-        set_status(status_state, "Checking...", false);
+        show_status(status_state, "Checking...");
         update_command_states();
         return;
     case Command::run:
@@ -2119,10 +2268,10 @@ void MainWindow::execute(Command c) {
         select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
         pending_ = Pending::run;
         console_log_.begin_run();
-        log_line("Run " + document_.path().filename().string());
+        log_line(LogLevel::header, "Run " + document_.path().filename().string());
         runner_.start_run(document_.text(), document_.path());
         update_taskbar(true);
-        set_status(status_state, "Running...", false);
+        show_status(status_state, "Running...");
         SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
         run_page_->update(runner_, renderer(), true);  // the last run's rows cleared
         update_command_states();
@@ -2563,6 +2712,10 @@ LRESULT CALLBACK MainWindow::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARA
     if (self) {
         switch (message) {
         case WM_COMMAND:
+            if (hwnd == self->console_panel_) {  // Unit 26j
+                self->on_console(LOWORD(w), HIWORD(w));
+                return 0;
+            }
             if (LOWORD(w) == id_play && HIWORD(w) == BN_CLICKED) {
                 self->execute(Command::play_pause);
                 return 0;
@@ -2573,7 +2726,8 @@ LRESULT CALLBACK MainWindow::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARA
             if (l != 0) self->on_slider(reinterpret_cast<HWND>(l));
             return 0;
         case WM_SIZE:
-            self->layout_inspector();
+            if (hwnd == self->console_panel_) self->layout_console();
+            else if (hwnd == self->inspector_) self->layout_inspector();
             return 0;
         case WM_CTLCOLORSTATIC:
             SetBkMode(reinterpret_cast<HDC>(w), TRANSPARENT);

@@ -20,6 +20,8 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <functional>
 #include <set>
 #include <string>
@@ -246,7 +248,8 @@ TEST_CASE("app window: a deck opened, run, shown, probed; the deck menus (WG7)",
     CHECK(w->runner().diagnostics()[0].line > 0);
 }
 
-TEST_CASE("app window: the console logs the run's iterations and points, and a check's errors (Unit 26j)", "[app]") {
+TEST_CASE("app window: the console logs the run's banner, Newton table, points and summary; filters, saves (Unit 26j)",
+          "[app]") {
     const fs::path dir = app_test::scratch("window_console");
     const fs::path deck = app_test::write(dir, "m.deck", app_test::mosfet2d);
     auto w = window();
@@ -256,19 +259,35 @@ TEST_CASE("app window: the console logs the run's iterations and points, and a c
     CHECK(c.y > w->panes().inspector.y);
     REQUIRE(w->open_deck(deck));
     REQUIRE(pump_until([&] { return w->workspace() != nullptr; }));
-    CHECK(w->console_text().find(L"] Open ") != std::wstring::npos);
+    CHECK(w->console_log().text().find("] Open m.deck") != std::string::npos);
     w->execute(Command::run);
     REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
-    const std::wstring ran = w->console_text();
-    for (const wchar_t* s : {L"] Run ", L"  equilibrium\r\n", L"  bias point 1 of ", L"    Newton   1  update ",
-                             L"    converged in ", L" Newton iterations, ", L"] Done in "}) {
-        CHECK(ran.find(s) != std::wstring::npos);
+    const std::string ran = w->console_log().text();
+    for (const char* s : {"] Run m.deck", "   Analysis   bias sweep", "   Device     2D, ", "   Solver     ",
+                          "  Equilibrium\n", "  Bias point 1/", "     Iter      |update|    |residual|",
+                          "     Converged in ", "  Summary\n", " Newton iterations, ", "  Terminal currents (A/cm)",
+                          "  Wrote ", "] Done in "}) {
+        CHECK(ran.find(s) != std::string::npos);
     }
-    // Every iteration of the run is one line, and the edit control shows every line of the log.
-    std::size_t newton = 0;
-    for (std::size_t at = ran.find(L"    Newton "); at != std::wstring::npos; at = ran.find(L"    Newton ", at + 1)) ++newton;
-    CHECK(newton == w->runner().iterations().size());
-    CHECK(static_cast<std::size_t>(std::ranges::count(ran, L'\n')) + 1 == w->console_log().lines().size());
+    // Every iteration of the run is one Newton row; the rich edit shows every line of the log.
+    std::size_t rows = 0;
+    for (const app::LogLine& l : w->console_log().lines()) {
+        if (l.level == app::LogLevel::detail && !l.text.contains("Iter")) ++rows;
+    }
+    CHECK(rows == w->runner().iterations().size());
+    CHECK(static_cast<std::size_t>(w->console_line_count()) == w->console_log().lines().size());
+    // Show: no Newton detail hides the rows; Save log writes what is shown.
+    w->set_console_filter(app::LogFilter::summary);
+    CHECK(w->console_filter() == app::LogFilter::summary);
+    const std::string summary = w->console_log().text(app::LogFilter::summary);
+    CHECK(static_cast<std::size_t>(w->console_line_count()) == static_cast<std::size_t>(std::ranges::count(summary, '\n')));
+    CHECK(summary.find("     Iter ") == std::string::npos);
+    const fs::path log = dir / "run.log";
+    REQUIRE(w->save_console(log));
+    std::ifstream in(log, std::ios::binary);
+    const std::string saved{std::istreambuf_iterator<char>(in), {}};
+    CHECK(saved == summary);
+    w->set_console_filter(app::LogFilter::all);
 
     std::string bad = app_test::mosfet2d;
     bad.insert(bad.find("[contact source]"), "[bogus]\n");
@@ -276,12 +295,11 @@ TEST_CASE("app window: the console logs the run's iterations and points, and a c
     w->execute(Command::check);
     REQUIRE(pump_until([&] { return !w->runner().busy(); }));
     REQUIRE(w->runner().diagnostics().size() == 1);
-    const std::wstring checked = w->console_text();
-    CHECK(checked.find(L"] Check ") != std::wstring::npos);
-    CHECK(checked.find(std::format(L"  line {}: ", w->runner().diagnostics()[0].line)) != std::wstring::npos);
-    CHECK(checked.find(L"] The deck does not build: ") != std::wstring::npos);
+    const std::string errors = w->console_log().text(app::LogFilter::errors);
+    CHECK(errors.find(std::format("  line {}: ", w->runner().diagnostics()[0].line)) != std::string::npos);
+    CHECK(errors.find("] The deck does not build: ") != std::string::npos);
+    CHECK(w->console_log().text().find("] Check m.deck") != std::string::npos);
 }
-
 TEST_CASE("app window: the start page, the run monitor, Stop and the results (WG1, WG8, VA3, VA5)", "[app]") {
     const fs::path copies = app_test::scratch("window_examples");
     app::WindowOptions o;

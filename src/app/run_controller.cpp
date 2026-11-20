@@ -1,6 +1,8 @@
 // The run controller (run_controller.hpp).
 #include "NiTCAD/app/run_controller.hpp"
 
+#include <algorithm>
+#include <format>
 #include <mutex>
 #include <utility>
 
@@ -26,6 +28,7 @@ struct RunController::Event {
     double seconds = 0.0;  // on the point so far
     std::vector<Diagnostic> diagnostics;
     std::optional<deck::Plan> plan;
+    std::optional<PlanSummary> summary;
     std::optional<deck::RunReport> report;
     std::optional<base::Error> error;
 };
@@ -43,7 +46,53 @@ std::size_t plan_point_count(const deck::Plan& p) {
     return p.analysis == deck::Analysis::sweep || p.analysis == deck::Analysis::small_signal ? p.points.size() : 0;
 }
 
+std::string_view analysis_name(deck::Analysis a) {
+    switch (a) {
+    case deck::Analysis::equilibrium: return "equilibrium";
+    case deck::Analysis::sweep: return "bias sweep";
+    case deck::Analysis::transient: return "transient";
+    case deck::Analysis::small_signal: return "small signal";
+    case deck::Analysis::trace: return "trace";
+    }
+    return "?";
+}
+
+std::string_view backend_name(linalg::SolverBackend b) {
+    switch (b) {
+    case linalg::SolverBackend::eigen_sparse_lu: return "Eigen SparseLU";
+    case linalg::SolverBackend::mkl_pardiso: return "MKL PARDISO";
+    case linalg::SolverBackend::gmres_ilut: return "GMRES + ILUT";
+    }
+    return "other";
+}
+
+std::string count(std::size_t n, std::string_view one) { return std::format("{} {}{}", n, one, n == 1 ? "" : "s"); }
+
 }  // namespace
+
+PlanSummary summarize_plan(const deck::Plan& plan) {
+    const auto& d = plan.device;
+    const solve::BiasOptions& o = plan.options;
+    PlanSummary s;
+    for (const auto& c : d.contacts()) s.contacts.push_back(c.name);
+    if (plan_point_count(plan) > 0) s.points = plan.points;
+    std::string contacts;
+    for (const std::string& c : s.contacts) contacts += (contacts.empty() ? "" : ", ") + c;
+    s.description.push_back(std::format("Analysis   {}, {}", analysis_name(plan.analysis),
+                                        o.equations == solve::Equations::equilibrium_poisson
+                                            ? "Poisson (carriers in equilibrium)"
+                                            : "drift-diffusion (Poisson, n, p)"));
+    s.description.push_back(std::format("Device     {}D, {}, {}, contacts: {}", d.mesh().dimension(),
+                                        count(d.mesh().node_count(), "node"), count(d.regions().size(), "region"),
+                                        contacts.empty() ? "none" : contacts));
+    s.description.push_back(std::format("Solver     {}, {}; Newton |update| < {:.1e}, at most {} iterations",
+                                        backend_name(o.linear.backend),
+                                        count(static_cast<std::size_t>(std::max(o.linear.threads, 1)), "thread"),
+                                        o.newton.tol_update, o.newton.max_iterations));
+    if (plan_point_count(plan) > 0) s.description.push_back(std::format("Points     {} planned", plan.points.size()));
+    if (!plan.restart.empty()) s.description.push_back("Restart    from " + plan.restart.filename().string());
+    return s;
+}
 
 RunController::RunController(Wake wake) : wake_(std::move(wake)), shared_(std::make_shared<Shared>()) {}
 
@@ -72,6 +121,7 @@ void RunController::start(bool run, std::string text, std::filesystem::path path
     state_ = run ? RunState::running : RunState::checking;
     diagnostics_.clear();
     plan_.reset();
+    summary_.reset();
     report_.reset();
     error_.reset();
     points_.clear();
@@ -101,11 +151,16 @@ void RunController::start(bool run, std::string text, std::filesystem::path path
         }
         if (!run) {
             Event e{.kind = Event::Kind::finished, .run = false};
+            e.summary = summarize_plan(*checked.plan);
             e.plan = std::move(checked.plan);
             post(std::move(e));
             return;
         }
-        post(Event{.kind = Event::Kind::built, .run = true, .planned = plan_point_count(*checked.plan)});
+        {
+            Event built{.kind = Event::Kind::built, .run = true, .planned = plan_point_count(*checked.plan)};
+            built.summary = summarize_plan(*checked.plan);
+            post(std::move(built));
+        }
         // Progress: one event per Newton iteration, with the wall time spent on its point.
         auto point_started = std::chrono::steady_clock::now();
         solve::Phase phase = solve::Phase::equilibrium;
@@ -142,6 +197,7 @@ void RunController::apply(Event& e) {
     switch (e.kind) {
     case Event::Kind::built:
         planned_points_ = e.planned;
+        summary_ = std::move(e.summary);
         break;
     case Event::Kind::progress: {
         const solve::Progress& p = e.progress;
@@ -156,13 +212,14 @@ void RunController::apply(Event& e) {
         row.time_s = p.time_s;
         row.frequency_Hz = p.frequency_Hz;
         row.seconds = e.seconds;
-        iterations_.push_back({iterations_.size() + 1, p.update, points_.size() - 1});
+        iterations_.push_back({iterations_.size() + 1, p.update, points_.size() - 1, p.residual, p.iteration});
         break;
     }
     case Event::Kind::finished:
         finished_ = std::chrono::steady_clock::now();
         diagnostics_ = std::move(e.diagnostics);
         plan_ = std::move(e.plan);
+        if (e.summary) summary_ = std::move(e.summary);
         report_ = std::move(e.report);
         error_ = std::move(e.error);
         if (!e.run) state_ = diagnostics_.empty() ? RunState::idle : RunState::failed;
