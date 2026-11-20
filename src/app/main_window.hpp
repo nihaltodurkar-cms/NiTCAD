@@ -181,6 +181,16 @@ public:
     // lines the log's rich edit shows; folded or not (Hide on its menu); Copy and Save (the table, or the
     // tab's lines); whether the tab's body is shown.
     [[nodiscard]] const ConsoleLog& console_log() const noexcept { return console_log_; }
+    // The UI thread's time on a run (the speed pass): taking its events; the progress updates (at most every
+    // 50 ms), and within them the console, the Points table and the run monitor; at its end, the console,
+    // table and monitor, then the results shown. Reset when a run starts.
+    struct UiTimings {
+        std::size_t events = 0, updates = 0;
+        double events_s = 0.0, update_s = 0.0, update_max_s = 0.0;
+        double console_s = 0.0, points_s = 0.0, monitor_s = 0.0;
+        double finish_s = 0.0, results_s = 0.0;
+    };
+    [[nodiscard]] const UiTimings& ui_timings() const noexcept { return timings_; }
     [[nodiscard]] int console_tab() const noexcept { return console_tab_; }
     void set_console_tab(int tab);
     [[nodiscard]] const PointsTable& points() const noexcept { return points_; }
@@ -240,7 +250,7 @@ private:
     void on_console(int id, int code);
     void console_menu(int x, int y);  // the right-click menu at a screen point (-1, -1: the menu key)
     LRESULT on_console_notify(const NMHDR& n, LPARAM l);
-    void update_points();
+    void update_points(bool force = false);
     void update_console_footer();
     [[nodiscard]] LogFilter console_text_filter() const noexcept;
     void on_run_events();
@@ -333,8 +343,12 @@ private:
     HWND toolbar_ = nullptr, status_ = nullptr, tree_ = nullptr, tabs_ = nullptr, metrics_ = nullptr,
          inspector_ = nullptr, console_panel_ = nullptr, console_ = nullptr, console_points_ = nullptr;
     ConsoleLog console_log_;
+    UiTimings timings_;
     PointsTable points_;
     int console_tab_ = 0;
+    bool console_rebuild_ = false, points_stale_ = false;  // what waits while the console's tab is hidden
+    LogFilter console_filter_shown_ = LogFilter::all;      // the lines the rich edit holds
+    std::size_t messages_shown_ = static_cast<std::size_t>(-1);  // the count on the Messages tab
     std::size_t console_shown_ = 0;        // the log's lines (by number, ConsoleLog::total) flushed so far
     std::size_t console_lines_shown_ = 0;  // of those, the lines the filter shows in the rich edit
     std::unique_ptr<Viewport> viewport_;

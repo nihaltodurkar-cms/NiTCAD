@@ -697,9 +697,15 @@ LogFilter MainWindow::console_text_filter() const noexcept {
 void MainWindow::flush_console(bool rebuild) {
     if (!console_) return;
     update_console_footer();
+    // Hidden (folded, or the Points tab shown), the text waits: it is appended when the tab is shown.
+    if (rebuild) console_rebuild_ = true;
+    if (state_.layout.console_collapsed || console_tab_ == tab_points) return;
+    rebuild = std::exchange(console_rebuild_, false);
+    const LogFilter filter = console_text_filter();
+    if (filter != console_filter_shown_) rebuild = true;  // the other text tab's lines are shown
+    console_filter_shown_ = filter;
     if (console_shown_ < console_log_.dropped()) rebuild = true;
     if (!rebuild && console_shown_ == console_log_.total()) return;
-    const LogFilter filter = console_text_filter();
     const std::size_t from = rebuild ? 0 : console_shown_ - console_log_.dropped();
     const bool any_before = !rebuild && console_lines_shown_ > 0;
     std::size_t adding = 0;
@@ -742,8 +748,14 @@ void MainWindow::flush_console(bool rebuild) {
     InvalidateRect(console_, nullptr, TRUE);
 }
 
-// The Points tab from the controller's state (before a run's results are taken: its currents).
-void MainWindow::update_points() {
+// The Points tab from the controller's state (before a run's results are taken: its currents). Hidden, it
+// waits until shown, unless forced (a run's end: the results are taken next).
+void MainWindow::update_points(bool force) {
+    if (!force && (state_.layout.console_collapsed || console_tab_ != tab_points)) {
+        points_stale_ = true;
+        return;
+    }
+    points_stale_ = false;
     const RunState s = runner_.state();
     const auto stopped = runner_.stopped_early();
     PointsTable t = points_table(RunView{.rows = runner_.points(),
@@ -786,6 +798,8 @@ void MainWindow::update_points() {
 void MainWindow::update_console_footer() {
     // The Messages tab carries the count of warnings and errors.
     const std::size_t n = console_log_.count(LogLevel::warning) + console_log_.count(LogLevel::error);
+    if (n == messages_shown_) return;  // the label only when the count changes
+    messages_shown_ = n;
     const std::wstring label = n == 0 ? std::wstring(L"Messages") : std::format(L"Messages ({})", n);
     TCITEMW item{};
     item.mask = TCIF_TEXT;
@@ -892,17 +906,22 @@ LRESULT MainWindow::on_console_notify(const NMHDR& n, LPARAM l) {
 
 void MainWindow::set_console_tab(int tab) {
     if (tab < tab_output || tab > tab_messages) return;
-    const bool text_changed = (tab == tab_messages) != (console_tab_ == tab_messages);
     console_tab_ = tab;
     SendMessageW(GetDlgItem(console_panel_, id_console_tabs), TCM_SETCURSEL, static_cast<WPARAM>(tab), 0);
-    if (tab != tab_points && text_changed) flush_console(true);
     layout_console();
+    // What waited while hidden.
+    if (tab != tab_points) flush_console();
+    else if (points_stale_) update_points();
 }
 
 void MainWindow::set_console_collapsed(bool collapsed) {
     if (state_.layout.console_collapsed == collapsed) return;
     state_.layout.console_collapsed = collapsed;
     layout();
+    if (!collapsed) {
+        if (console_tab_ == tab_points && points_stale_) update_points();
+        else flush_console();
+    }
 }
 
 bool MainWindow::copy_console() {
@@ -2043,9 +2062,17 @@ bool MainWindow::compare_result(const fs::path& result, const fs::path& device, 
     return true;
 }
 
+// The seconds since a time point (the UI timings).
+static double since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
 void MainWindow::on_run_events() {
+    const auto t0 = std::chrono::steady_clock::now();
     if (!runner_.process()) return;
     console_log_.follow(runner_);  // the text only: shown with the status, at most every 50 ms
+    ++timings_.events;
+    timings_.events_s += since(t0);
     const RunState s = runner_.state();
     if (s == RunState::running || s == RunState::stopping) {
         // The events of a fast solve arrive as fast as the window takes them; showing them costs more than
@@ -2057,12 +2084,16 @@ void MainWindow::on_run_events() {
     }
     KillTimer(hwnd_, run_timer);
     const Pending pending = std::exchange(pending_, Pending::none);
+    const auto t1 = std::chrono::steady_clock::now();
     run_page_->update(runner_, renderer(), true);  // before the results are taken: how the run ended
     console_log_.finish(runner_);
     flush_console();
-    update_points();  // before the results are taken: their currents
+    update_points(true);  // before the results are taken: their currents
     deck_->set_diagnostics(runner_.diagnostics());
+    timings_.finish_s = since(t1);
+    const auto t2 = std::chrono::steady_clock::now();
     on_run_finished(pending, s);
+    timings_.results_s = since(t2);
 }
 
 // The run's progress in the status bar and the run monitor: on its events (at most every 50 ms) and on
@@ -2085,12 +2116,23 @@ void MainWindow::on_run_timer() {
             else text += std::format(": point {}", r.point + 1);
             text += std::format(", iteration {}, update {:.2g}", r.iterations, r.update);
         }
+        const auto t0 = std::chrono::steady_clock::now();
         show_status(status_state, text);
+        auto t = std::chrono::steady_clock::now();
         flush_console();
+        timings_.console_s += since(t);
+        t = std::chrono::steady_clock::now();
         update_points();
-        run_page_->update(runner_, renderer());
+        timings_.points_s += since(t);
+        t = std::chrono::steady_clock::now();
+        if (tab_ == tab_run) run_page_->update(runner_, renderer());  // hidden, it catches up when shown
+        timings_.monitor_s += since(t);
         update_command_states();
         update_taskbar(pending_ == Pending::run);
+        const double spent = since(t0);
+        ++timings_.updates;
+        timings_.update_s += spent;
+        timings_.update_max_s = std::max(timings_.update_max_s, spent);
     }
 }
 
@@ -2402,6 +2444,7 @@ void MainWindow::execute(Command c) {
         select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
         pending_ = Pending::run;
         console_log_.begin_run();
+        timings_ = {};
         set_console_collapsed(false);  // Unit 26j: the console opens for a run
         log_line(LogLevel::header, "Run " + document_.path().filename().string());
         runner_.start_run(document_.text(), document_.path());

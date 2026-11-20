@@ -328,6 +328,43 @@ TEST_CASE("app window: the console logs the run's banner, Newton table, points a
     REQUIRE(pump_until([&] { return !w->runner().busy(); }));
 }
 
+// The speed pass (hidden: run by name): the window's creation, the largest example opened, and the UI thread's
+// time on runs that make many points and many steps (the console, the Points table, the run monitor).
+TEST_CASE("app window perf: startup, open, and the UI's time on runs", "[.perf]") {
+    using clock = std::chrono::steady_clock;
+    const auto secs = [](clock::time_point t0) { return std::chrono::duration<double>(clock::now() - t0).count(); };
+    auto t0 = clock::now();
+    auto w = window();
+    WARN(std::format("create: {:.1f} ms", 1e3 * secs(t0)));
+    t0 = clock::now();
+    REQUIRE(w->open_deck(fs::path(NITCAD_EXAMPLES_DIR) / "mosfet_3d.deck"));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    WARN(std::format("open mosfet_3d (built, shown): {:.1f} ms", 1e3 * secs(t0)));
+
+    const fs::path dir = app_test::scratch("window_perf");
+    const auto run = [&](const std::string& name, const std::string& text) {
+        const fs::path deck = app_test::write(dir, name, text);
+        REQUIRE(w->open_deck(deck));
+        REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+        const auto r0 = clock::now();
+        w->execute(Command::run);
+        REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+        const double wall = secs(r0);
+        const auto& u = w->ui_timings();
+        WARN(std::format("{}: run {:.2f} s, {} points, {} iterations, {} log lines; events {} ({:.1f} ms); updates {} "
+                         "({:.1f} ms, max {:.2f} ms: console {:.1f}, points {:.1f}, monitor {:.1f}); end {:.1f} ms, "
+                         "results {:.1f} ms; UI share {:.1f}%",
+                         name, wall, w->runner().points().size(), w->runner().iterations().size(),
+                         w->console_log().lines().size(), u.events, 1e3 * u.events_s, u.updates, 1e3 * u.update_s,
+                         1e3 * u.update_max_s, 1e3 * u.console_s, 1e3 * u.points_s, 1e3 * u.monitor_s, 1e3 * u.finish_s,
+                         1e3 * u.results_s, 100.0 * (u.events_s + u.update_s + u.finish_s + u.results_s) / wall));
+    };
+    std::string sweep = app_test::mosfet2d;
+    sweep.replace(sweep.find("contact gate = 0 : 1.5 : 0.25"), 29, "contact gate = 0 : 1.5 : 0.01");
+    run("sweep151.deck", sweep);
+    run("transient.deck", app_test::transient_diode());
+}
+
 TEST_CASE("app window: the start page, the run monitor, Stop and the results (WG1, WG8, VA3, VA5)", "[app]") {
     const fs::path copies = app_test::scratch("window_examples");
     app::WindowOptions o;
