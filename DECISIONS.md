@@ -1398,6 +1398,13 @@ WARP) with DirectWrite labels.
 - The mesh (152 cases), deck (9 failures as expected, unchanged), app (92) and window (48) suites pass; full ctest
   suites not run.
 
+**GE5 on CI (2026-11-21; owner "fix them").** CI on main 9b5292e and PR #110 failed the GE5 timing checks: Debug
+37-40 ms for the 200-rectangle partition (limit 5) and 28 ms per edit on the 300-region deck (limit 2); Release
+2.24-2.29 ms on that deck. That test timed a write and the read after it, while GE5 bounds the write, so it now times
+the write alone (the read is recorded beside it): locally 0.52 ms write, 0.23 ms read. Both GE5 checks are Release
+only, as KG6 (owner, 2026-11-19); Debug records the times. The limits are unchanged. `mesh.layered2d` and
+`app.geometry` pass in Release; full suites not run.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

@@ -487,16 +487,24 @@ TEST_CASE("app geometry: a deck of 300 regions is written within 2 ms per edit (
     deck += "\n[contact a]\nkind = ohmic\npatch = a\n";
     Geometry g = must_read(deck);
     REQUIRE(g.regions.size() == 301);
-    const auto t0 = std::chrono::steady_clock::now();
+    // GE5 bounds the write; the read that follows each edit is timed apart and only recorded.
+    double write_ms = 0, read_ms = 0;
     std::string text = deck;
     for (int k = 0; k < 50; ++k) {
         REQUIRE(move_shape(g, {1 + k * 5, 0}, 1000, 0));
+        const auto t0 = std::chrono::steady_clock::now();
         text = must_write(text, g);
+        const auto t1 = std::chrono::steady_clock::now();
         g = must_read(text);
+        write_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        read_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
     }
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 50;
-    WARN("GE5: 300 regions, write and read " << ms << " ms per edit");
+    const double ms = write_ms / 50;
+    WARN("GE5: 300 regions, write " << ms << " ms, read " << read_ms / 50 << " ms per edit");
+    // Release only, as KG6 (owner, 2026-11-19): the unoptimised Debug build is many times slower; there it is recorded.
+#ifdef NDEBUG
     CHECK(ms <= 2.0);
+#endif
 }
 
 TEST_CASE("app geometry: the grid, snapping and the Shift constraint", "[app][geometry]") {
