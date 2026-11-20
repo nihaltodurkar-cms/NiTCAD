@@ -14,8 +14,10 @@
 // but fails the measure restarts from the true residual with a new target, so a wrong aim costs a
 // restart, never a wrong answer.
 //
-// Single-threaded and with a fixed operation order, so a solve is bit-for-bit reproducible on one
-// machine (6.8).
+// With a fixed operation order, so a solve is bit-for-bit reproducible on one machine (6.8). With a
+// pool (Unit 58 SD2) the per-index vector updates run in fixed chunks (base::for_chunks); the dot
+// products and norms stay serial, so the bits are those of one thread for every thread count
+// (DECISIONS.md Unit 58, slice 1: chunked reductions would change the one-thread result, SG1).
 #pragma once
 
 #include <algorithm>
@@ -25,9 +27,15 @@
 #include <span>
 #include <vector>
 
+#include "NiTCAD/base/thread_pool.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
 
 namespace NiTCAD::linalg::detail {
+
+// The fixed chunks of the pool's kernels (SD2), independent of the thread count: vector entries,
+// and matrix rows for the product.
+inline constexpr std::size_t gmres_vector_chunk = 8192;
+inline constexpr std::size_t gmres_row_chunk = 2048;
 
 struct GmresSettings {
     std::size_t restart;          // m: basis vectors per cycle, at least 1
@@ -114,7 +122,8 @@ public:
     // y is overwritten: it starts at zero and holds the last iterate on return.
     template <class Apply, class Precondition, class Measure>
     GmresResult solve(const GmresSettings& settings, Apply&& apply, Precondition&& precondition,
-                      Measure&& measure, std::span<Scalar> y);
+                      Measure&& measure, std::span<Scalar> y,
+                      base::ThreadPool* pool = nullptr);
 
 private:
     std::vector<Scalar> basis_;      // (m + 1) vectors of length n, one after the other
@@ -131,7 +140,7 @@ template <MatrixScalar Scalar>
 template <class Apply, class Precondition, class Measure>
 GmresResult Gmres<Scalar>::solve(const GmresSettings& settings, Apply&& apply,
                                  Precondition&& precondition, Measure&& measure,
-                                 std::span<Scalar> y) {
+                                 std::span<Scalar> y, base::ThreadPool* pool) {
     using gmres_ops::dot;
     using gmres_ops::norm2;
     const std::size_t n = y.size();
@@ -146,6 +155,12 @@ GmresResult Gmres<Scalar>::solve(const GmresSettings& settings, Apply&& apply,
     w_.resize(n);
     const auto vector = [&](std::size_t i) { return std::span<Scalar>(basis_).subspan(i * n, n); };
     const auto h = [&](std::size_t i, std::size_t j) -> Scalar& { return hessenberg_[j * (m + 1) + i]; };
+    // A per-index update over [0, n), on the pool when there is one (same bits either way).
+    const auto each = [&](auto&& body) {
+        base::for_chunks(pool, n, gmres_vector_chunk, [&](std::size_t begin, std::size_t end) {
+            for (std::size_t k = begin; k < end; ++k) body(k);
+        });
+    };
 
     std::ranges::fill(y, Scalar{});
     double omega = measure(std::span<const Scalar>(y), std::span<Scalar>(residual_));
@@ -158,9 +173,7 @@ GmresResult Gmres<Scalar>::solve(const GmresSettings& settings, Apply&& apply,
         }
         // A new cycle from the true residual: nothing of the previous basis is kept.
         const std::span<Scalar> v0 = vector(0);
-        for (std::size_t i = 0; i < n; ++i) {
-            v0[i] = residual_[i] / beta;
-        }
+        each([&](std::size_t k) { v0[k] = residual_[k] / beta; });
         std::ranges::fill(g_, Scalar{});
         g_[0] = beta;
         const double target = 0.5 * beta * settings.tolerance / omega;
@@ -178,9 +191,7 @@ GmresResult Gmres<Scalar>::solve(const GmresSettings& settings, Apply&& apply,
                     const std::span<const Scalar> vi = vector(i);
                     const Scalar hij = dot<Scalar>(vi, w_);
                     h(i, j) += hij;
-                    for (std::size_t k = 0; k < n; ++k) {
-                        w_[k] -= hij * vi[k];
-                    }
+                    each([&](std::size_t k) { w_[k] -= hij * vi[k]; });
                 }
             }
             const double next = norm2<Scalar>(w_);
@@ -199,9 +210,7 @@ GmresResult Gmres<Scalar>::solve(const GmresSettings& settings, Apply&& apply,
                 break;  // exact (breakdown) or estimated to pass: end the cycle and measure
             }
             const std::span<Scalar> vj1 = vector(j + 1);
-            for (std::size_t k = 0; k < n; ++k) {
-                vj1[k] = w_[k] / next;
-            }
+            each([&](std::size_t k) { vj1[k] = w_[k] / next; });
         }
         if (columns == 0) {
             return {false, iterations, omega};
@@ -214,17 +223,14 @@ GmresResult Gmres<Scalar>::solve(const GmresSettings& settings, Apply&& apply,
             }
             t_[i] = s / h(i, i);
         }
-        std::ranges::fill(w_, Scalar{});
-        for (std::size_t i = 0; i < columns; ++i) {
-            const std::span<const Scalar> vi = vector(i);
-            for (std::size_t k = 0; k < n; ++k) {
-                w_[k] += t_[i] * vi[k];
-            }
-        }
+        // w = sum_i t_i v_i, each entry summed over i in order (as one thread does).
+        each([&](std::size_t k) {
+            Scalar s{};
+            for (std::size_t i = 0; i < columns; ++i) s += t_[i] * basis_[i * n + k];
+            w_[k] = s;
+        });
         precondition(std::span<const Scalar>(w_), std::span<Scalar>(z_));
-        for (std::size_t k = 0; k < n; ++k) {
-            y[k] += z_[k];
-        }
+        each([&](std::size_t k) { y[k] += z_[k]; });
         omega = measure(std::span<const Scalar>(y), std::span<Scalar>(residual_));
     }
     return {true, iterations, omega};

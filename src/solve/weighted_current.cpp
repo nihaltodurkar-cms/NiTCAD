@@ -29,6 +29,10 @@ std::expected<WeightedCurrents, base::Error> WeightedCurrents::create(
     // topology check), so the pivot test is off for it.
     linalg::SolverConfig laplace_config = linear;
     laplace_config.min_pivot_ratio = 0.0;
+    // Unit 58: the Laplace problem has one unknown per node and no fields; cpr is AMG there.
+    if (laplace_config.preconditioner == linalg::Preconditioner::cpr) {
+        laplace_config.preconditioner = linalg::Preconditioner::amg;
+    }
     auto laplace = linalg::LinearSolver::create(laplace_config);
     if (!laplace) return std::unexpected(std::move(laplace.error()));
     auto newton = linalg::LinearSolver::create(linear);
@@ -166,6 +170,7 @@ std::expected<void, base::Error> WeightedCurrents::fill(const assemble::System& 
             finite = finite && std::isfinite(f[i]);
             rhs[i] = -f[i];
         }
+        newton_.set_field_labels(assemble::field_labels(system.dofs()));  // Unit 58 SD4 (cpr only)
         if (finite && newton_.factorize(jacobian) && newton_.solve(rhs, dx)) {
             std::vector<double> next(x.begin(), x.end());
             system.apply_update(next, dx, max_update);

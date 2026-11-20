@@ -1343,8 +1343,28 @@ std::expected<void, base::Error> Builder::solver(Plan& plan) const {
         } else if (e.key == "backend") {
             if (e.value == "eigen") o.linear.backend = linalg::SolverBackend::eigen_sparse_lu;
             else if (e.value == "pardiso") o.linear.backend = linalg::SolverBackend::mkl_pardiso;
-            else if (e.value == "gmres_ilut") o.linear.backend = linalg::SolverBackend::gmres_ilut;
-            else return std::unexpected(at(e.line, "backend is eigen, pardiso or gmres_ilut"));
+            // Unit 58 SQ7 (a): gmres is gmres_ilut, its preconditioner set apart (an unchanged identity).
+            else if (e.value == "gmres_ilut" || e.value == "gmres")
+                o.linear.backend = linalg::SolverBackend::gmres_ilut;
+            else return std::unexpected(at(e.line, "backend is eigen, pardiso, gmres or gmres_ilut"));
+        } else if (e.key == "preconditioner") {  // Unit 58 SD6
+            if (e.value == "ilut") o.linear.preconditioner = linalg::Preconditioner::ilut;
+            else if (e.value == "amg") o.linear.preconditioner = linalg::Preconditioner::amg;
+            else if (e.value == "cpr") o.linear.preconditioner = linalg::Preconditioner::cpr;
+            else return std::unexpected(at(e.line, "preconditioner is ilut, amg or cpr"));
+        } else if (e.key == "amg_strength_threshold") {
+            NITCAD_DECK_TRY(v, num(e));
+            if (!(v >= 0.0 && v < 1.0)) return std::unexpected(at(e.line, "amg_strength_threshold is in [0, 1)"));
+            o.linear.amg_strength_threshold = v;
+        } else if (e.key == "amg_smoother_degree") {
+            NITCAD_DECK_TRY(v, count(e, 1, 10));
+            o.linear.amg_smoother_degree = v;
+        } else if (e.key == "amg_coarse_size") {
+            NITCAD_DECK_TRY(v, count(e, 1, 100000));
+            o.linear.amg_coarse_size = v;
+        } else if (e.key == "amg_max_levels") {
+            NITCAD_DECK_TRY(v, count(e, 2, 50));
+            o.linear.amg_max_levels = v;
         } else if (e.key == "restart") {
             NITCAD_DECK_TRY(v, count(e, 1, 1000));
             o.linear.restart = v;
@@ -1397,6 +1417,10 @@ std::expected<void, base::Error> Builder::solver(Plan& plan) const {
     }
     if (o.linear.backend == linalg::SolverBackend::mkl_pardiso && plan.mkl_runtime.empty()) {
         return std::unexpected(at(s->line, "backend = pardiso needs 'mkl', the path of mkl_rt"));
+    }
+    if (o.linear.preconditioner != linalg::Preconditioner::ilut &&
+        o.linear.backend != linalg::SolverBackend::gmres_ilut) {
+        return std::unexpected(at(s->line, "preconditioner = amg or cpr needs backend = gmres"));
     }
     return {};
 }

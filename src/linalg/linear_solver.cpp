@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <concepts>
 #include <cstddef>
 #include <functional>
 #include <limits>
@@ -11,6 +12,9 @@
 #include <utility>
 
 #include "NiTCAD/base/contract.hpp"
+#include "NiTCAD/base/thread_pool.hpp"
+#include "amg.hpp"
+#include "cpr.hpp"
 #include "eigen_ilut.hpp"
 #include "eigen_sparse_lu.hpp"
 #include "gmres.hpp"
@@ -101,9 +105,9 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
             }
             break;
         case SolverBackend::gmres_ilut:
-            if (config.threads != 1) {
+            if (config.threads < 1 || config.threads > 1024) {
                 return std::unexpected(error(base::ErrorCode::invalid_input,
-                                             "gmres_ilut supports exactly 1 thread", std::nullopt,
+                                             "gmres_ilut supports 1 to 1024 threads", std::nullopt,
                                              static_cast<double>(config.threads)));
             }
             break;
@@ -134,6 +138,42 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
     if (config.fallback != LinearFallback::sparse_lu && config.fallback != LinearFallback::none) {
         return std::unexpected(error(base::ErrorCode::invalid_input, "unknown linear fallback"));
     }
+    if (config.preconditioner != Preconditioner::ilut && config.preconditioner != Preconditioner::amg &&
+        config.preconditioner != Preconditioner::cpr) {
+        return std::unexpected(error(base::ErrorCode::invalid_input, "unknown preconditioner"));
+    }
+    if (config.preconditioner != Preconditioner::ilut &&
+        config.backend != SolverBackend::gmres_ilut) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "a preconditioner other than ilut needs the gmres backend"));
+    }
+    if constexpr (!std::same_as<Scalar, double>) {
+        if (config.preconditioner == Preconditioner::amg ||
+            config.preconditioner == Preconditioner::cpr) {
+            return std::unexpected(error(base::ErrorCode::invalid_input,
+                                         "the amg and cpr preconditioners are for real matrices only"));
+        }
+    }
+    if (!(config.amg_strength_threshold >= 0.0 && config.amg_strength_threshold < 1.0)) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "amg_strength_threshold must be in [0, 1)", std::nullopt,
+                                     config.amg_strength_threshold));
+    }
+    if (config.amg_smoother_degree < 1 || config.amg_smoother_degree > 10) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "amg_smoother_degree must be in [1, 10]", std::nullopt,
+                                     static_cast<double>(config.amg_smoother_degree)));
+    }
+    if (config.amg_coarse_size < 1 || config.amg_coarse_size > 100000) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "amg_coarse_size must be in [1, 100000]", std::nullopt,
+                                     static_cast<double>(config.amg_coarse_size)));
+    }
+    if (config.amg_max_levels < 2 || config.amg_max_levels > 50) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "amg_max_levels must be in [2, 50]", std::nullopt,
+                                     static_cast<double>(config.amg_max_levels)));
+    }
     if (!std::isfinite(config.max_backward_error) || config.max_backward_error <= 0.0) {
         return std::unexpected(error(base::ErrorCode::invalid_input,
                                      "max_backward_error must be positive and finite",
@@ -163,12 +203,35 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config) : confi
     if (config.backend == SolverBackend::mkl_pardiso) {
         backend_ = std::make_unique<detail::PardisoBackend<Scalar>>(config.threads);
     } else if (config.backend == SolverBackend::gmres_ilut) {
-        backend_ = std::make_unique<detail::IlutBackend<Scalar>>(config.ilut_drop_tolerance,
-                                                                 config.ilut_fill_factor);
+        if (config.threads > 1) pool_ = std::make_unique<base::ThreadPool>(config.threads);
+        if constexpr (std::same_as<Scalar, double>) {
+            const detail::AmgSettings amg{
+                .strength_threshold = config.amg_strength_threshold,
+                .smoother_degree = config.amg_smoother_degree,
+                .coarse_size = static_cast<std::size_t>(config.amg_coarse_size),
+                .max_levels = config.amg_max_levels};
+            if (config.preconditioner == Preconditioner::amg) {
+                backend_ = std::make_unique<detail::AmgBackend>(amg, pool_.get());
+            } else if (config.preconditioner == Preconditioner::cpr) {
+                backend_ = std::make_unique<detail::CprBackend>(
+                    amg, config.ilut_drop_tolerance, config.ilut_fill_factor, pool_.get());
+            }
+        }
+        if (!backend_) {
+            backend_ = std::make_unique<detail::IlutBackend<Scalar>>(config.ilut_drop_tolerance,
+                                                                     config.ilut_fill_factor);
+        }
         gmres_ = std::make_unique<detail::Gmres<Scalar>>();
     } else {
         backend_ = std::make_unique<detail::SparseLuBackend<Scalar>>();
     }
+}
+
+template <MatrixScalar Scalar>
+void BasicLinearSolver<Scalar>::set_field_labels(std::span<const std::int32_t> labels) {
+    NITCAD_EXPECTS(backend_ != nullptr);
+    if (config_.preconditioner != Preconditioner::cpr) return;
+    if (backend_->set_fields(labels)) reset();
 }
 
 template <MatrixScalar Scalar>
@@ -193,6 +256,7 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(BasicLinearSolver&& other) noexcept
       previous_x_(std::move(other.previous_x_)),
       transposed_abs_(std::move(other.transposed_abs_)),
       gmres_(std::move(other.gmres_)),
+      pool_(std::move(other.pool_)),
       fallback_(std::move(other.fallback_)),
       fallback_analyzed_(std::exchange(other.fallback_analyzed_, false)),
       direct_(std::exchange(other.direct_, false)),
@@ -219,6 +283,7 @@ BasicLinearSolver<Scalar>& BasicLinearSolver<Scalar>::operator=(
         previous_x_ = std::move(other.previous_x_);
         transposed_abs_ = std::move(other.transposed_abs_);
         gmres_ = std::move(other.gmres_);
+        pool_ = std::move(other.pool_);
         fallback_ = std::move(other.fallback_);
         fallback_analyzed_ = std::exchange(other.fallback_analyzed_, false);
         direct_ = std::exchange(other.direct_, false);
@@ -371,6 +436,7 @@ std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::facto
         weighted_row_max_[r] = weighted;
     }
 
+    backend_->set_scales(row_scale_, col_scale_, config_.equilibrate);
     direct_ = false;
     auto factorization = check_pivots(backend_->factorize(scaled_values_));
     // gmres_ilut (LQ2): an ILUT that cannot be built falls back to SparseLU; running out of
@@ -618,15 +684,20 @@ std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::iterative_sol
     const std::span<const Index> columns = matrix_.col_indices();
     const bool scaled = config_.equilibrate;
     // GMRES runs on the system the preconditioner was built from, R A C y = R b with x = C y.
+    // Row-parallel on the pool (SD2): each row's sum in its own serial order, so any thread count
+    // gives the same bits.
     const auto apply = [&](std::span<const Scalar> v, std::span<Scalar> w) {
-        for (std::size_t r = 0; r < w.size(); ++r) {
-            Scalar s{};
-            for (auto k = static_cast<std::size_t>(offsets[r]);
-                 k < static_cast<std::size_t>(offsets[r + 1]); ++k) {
-                s += scaled_values_[k] * v[static_cast<std::size_t>(columns[k])];
-            }
-            w[r] = s;
-        }
+        base::for_chunks(pool_.get(), w.size(), detail::gmres_row_chunk,
+                         [&](std::size_t begin, std::size_t end) {
+                             for (std::size_t r = begin; r < end; ++r) {
+                                 Scalar s{};
+                                 for (auto k = static_cast<std::size_t>(offsets[r]);
+                                      k < static_cast<std::size_t>(offsets[r + 1]); ++k) {
+                                     s += scaled_values_[k] * v[static_cast<std::size_t>(columns[k])];
+                                 }
+                                 w[r] = s;
+                             }
+                         });
     };
     const auto precondition = [&](std::span<const Scalar> v, std::span<Scalar> w) {
         backend_->solve(v, w);
@@ -646,7 +717,7 @@ std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::iterative_sol
         {.restart = static_cast<std::size_t>(config_.restart),
          .max_iterations = static_cast<std::size_t>(config_.max_iterations),
          .tolerance = config_.max_backward_error},
-        apply, precondition, measure, std::span<Scalar>(work_x_));
+        apply, precondition, measure, std::span<Scalar>(work_x_), pool_.get());
     if (result.converged) {
         const double b_norm = inf_norm<Scalar>(b);
         const double r_norm = inf_norm<Scalar>(residual_);

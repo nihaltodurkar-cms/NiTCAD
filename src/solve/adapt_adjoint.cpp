@@ -177,6 +177,7 @@ std::expected<PointAdjoint, base::Error> point_adjoint(const device::Device& dev
     dd.evaluate(x, f, jac);
     auto solver = linalg::LinearSolver::create(options.linear);
     if (!solver) return std::unexpected(solver.error());
+    solver->set_field_labels(assemble::field_labels(dd.dofs()));  // Unit 58 SD4 (cpr only)
     const auto tf = clock_type::now();
     if (auto fz = solver->factorize(jac); !fz) return std::unexpected(fz.error());
     const double seconds_factorize = since(tf);
@@ -224,6 +225,7 @@ std::expected<GoalEstimate, base::Error> estimate_goals(const device::Device& co
     fd.evaluate(u, r, jac);
     auto solver = linalg::LinearSolver::create(options.linear);
     if (!solver) return std::unexpected(solver.error());
+    solver->set_field_labels(assemble::field_labels(fd.dofs()));  // Unit 58 SD4 (cpr only)
     const auto tf = clock_type::now();
     if (auto fz = solver->factorize(jac); !fz) return std::unexpected(fz.error());
     const double seconds_factorize = since(tf);

@@ -54,6 +54,10 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
 
+namespace NiTCAD::base {
+class ThreadPool;
+}
+
 namespace NiTCAD::linalg {
 
 enum class SolverBackend : std::uint8_t {
@@ -90,10 +94,28 @@ enum class LinearFallback : std::uint8_t {
     none,
 };
 
+// The preconditioner of gmres_ilut's GMRES (Unit 58 SD3, SQ7 a: the deck's backend = gmres with
+// preconditioner = ...; gmres_ilut is that backend, its run identity unchanged with ilut).
+enum class Preconditioner : std::uint8_t {
+    // Eigen's IncompleteLUT (Unit 44), real and complex.
+    ilut,
+    // Smoothed-aggregation algebraic multigrid, one V-cycle per application, real matrices only
+    // (src/linalg/amg.hpp). Its hierarchy is built by factorize, its coarsening once per pattern.
+    // Every thread count gives the same bits.
+    amg,
+    // CPR-style two-stage (Unit 58 SD4): AMG on the potential system (the potential rows, each
+    // node's other unknowns reduced into its potential by their local response), then ILUT of the
+    // full matrix on the residual that leaves (src/linalg/cpr.hpp). Real matrices only; needs the
+    // field labels (set_field_labels). The amg_* and ilut_* settings apply to its two stages.
+    cpr,
+};
+
 struct SolverConfig {
     SolverBackend backend = SolverBackend::eigen_sparse_lu;
     // Thread count (6.8: default 1). eigen_sparse_lu accepts only 1; mkl_pardiso 1 to 1024 (MKL
-    // threads for this solver's calls only, set thread-locally around each one).
+    // threads for this solver's calls only, set thread-locally around each one); gmres_ilut 1 to
+    // 1024 (Unit 58 SD2: a pool for its matrix products and vector updates, bit-identical for every
+    // thread count; the ILUT triangular solves and the dot products stay serial).
     int threads = 1;
     // Scale rows and columns by powers of two before factorizing.
     bool equilibrate = true;
@@ -130,6 +152,19 @@ struct SolverConfig {
     // ILUT fill, 1 to 1000: each row of L and of U keeps at most fill * nnz(A) / (2 n) entries.
     int ilut_fill_factor = 10;
     LinearFallback fallback = LinearFallback::sparse_lu;
+    // gmres_ilut only: anything but ilut with another backend, or amg or cpr for a complex matrix,
+    // is invalid_input. The amg_* settings are validated for every backend.
+    Preconditioner preconditioner = Preconditioner::ilut;
+    // AMG strength of connection theta, in [0, 1): j is a strong neighbour of i if
+    // |a_ij| >= theta sqrt(|a_ii a_jj|).
+    double amg_strength_threshold = 0.08;
+    // Chebyshev smoother degree (matrix products per pre- or post-smoothing), 1 to 10.
+    int amg_smoother_degree = 2;
+    // A level of at most this many unknowns is the coarsest and is factorized by SparseLU, 1 to
+    // 100000.
+    int amg_coarse_size = 1000;
+    // Levels including the finest, 2 to 50.
+    int amg_max_levels = 10;
 };
 
 struct FactorizationReport {
@@ -226,6 +261,15 @@ public:
         return config_.backend != SolverBackend::gmres_ilut || config_.fallback != LinearFallback::none;
     }
 
+    // The field of every unknown, for preconditioner = cpr (Unit 58 SD4; plain integers, so linalg
+    // knows nothing of the fields): 0 for the potential, a positive value for a field coupled to it
+    // at the same node, negative for an unknown in no node (for example a bordering row's). A node
+    // is a potential unknown and the positive-labelled unknowns right after it (the node-interleaved
+    // layout). Copied; with cpr, labels that differ from the last ones forget the analysis, so the
+    // next factorize analyzes with them (a cpr factorization without one label per unknown is invalid_input). Ignored by every other
+    // configuration.
+    void set_field_labels(std::span<const std::int32_t> labels);
+
     [[nodiscard]] bool is_analyzed() const noexcept { return analyzed_; }
     [[nodiscard]] bool is_factorized() const noexcept { return factorized_; }
     // Successful analyses and factorizations since creation (to observe symbolic reuse).
@@ -283,6 +327,8 @@ private:
     std::vector<double> transposed_abs_;  // |A^T| |x| per row of A^T (transposed_backward_error)
     // gmres_ilut only: the GMRES workspace, and the SparseLU fallback (created at its first use).
     std::unique_ptr<detail::Gmres<Scalar>> gmres_;
+    // gmres_ilut with threads > 1 (Unit 58 SD2): the pool of its per-index kernels.
+    std::unique_ptr<base::ThreadPool> pool_;
     std::unique_ptr<detail::Backend<Scalar>> fallback_;
     bool fallback_analyzed_ = false;  // fallback_ holds an analysis of matrix_'s pattern
     bool direct_ = false;             // this factorization is solved by fallback_

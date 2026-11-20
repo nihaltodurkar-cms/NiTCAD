@@ -121,6 +121,15 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         s.emplace_back("linear.ilut_drop_tolerance", o.linear.ilut_drop_tolerance);
         s.emplace_back("linear.ilut_fill_factor", static_cast<double>(o.linear.ilut_fill_factor));
         s.emplace_back("linear.fallback", static_cast<double>(o.linear.fallback));
+        // Unit 58: recorded only with a preconditioner other than ILUT, so ILUT runs keep theirs.
+        if (o.linear.preconditioner != linalg::Preconditioner::ilut) {
+            s.emplace_back("linear.preconditioner", static_cast<double>(o.linear.preconditioner));
+            s.emplace_back("linear.amg_strength_threshold", o.linear.amg_strength_threshold);
+            s.emplace_back("linear.amg_smoother_degree",
+                           static_cast<double>(o.linear.amg_smoother_degree));
+            s.emplace_back("linear.amg_coarse_size", static_cast<double>(o.linear.amg_coarse_size));
+            s.emplace_back("linear.amg_max_levels", static_cast<double>(o.linear.amg_max_levels));
+        }
     }
     if (transport) {
         s.emplace_back("models.doping_mobility", o.models.doping_mobility ? 1.0 : 0.0);
