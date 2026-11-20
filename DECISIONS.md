@@ -1317,6 +1317,94 @@ WARP) with DirectWrite labels.
   the tree links regions only (contacts are not tree items). The app suite (89 cases) and the window suite (45 cases,
   the hidden ones not run) pass.
 
+**Slice 3 results (2026-11-20; GD9):** live validation and the mesh preview, on `app/geometry-validation` (from main
+`9b5292e`; built in its own worktree, as the main checkout's uncommitted deck deletions stop CMake's configure).
+- **Validation (GD9):** the window hands the Geometry tab every live check of the deck (the build's own diagnostics,
+  unchanged) and the mesh it built. `geo::locate_problem` (model, no Win32) places the build's error on the layout:
+  the line's shape (or its region, the background as the domain), the contact of its section, the contact of its
+  `[mesh] patch` line with every contact overlapping it, the points "(x, y)" in cm the mesher names, else the domain;
+  no marker outside the geometry (a doping profile). Markers are drawn in red (outline, a wide segment, a ringed
+  cross, the domain's border) and the message along the canvas's foot. On the Geometry tab the message goes to the
+  console's Messages (error level), and Run is off (the toolbar, the menu and the command itself, with the reason in
+  the status bar) while the text shown does not build; the other tabs keep Run as before. A deck opened and not yet
+  checked is checked when the tab is shown.
+- **Build change (deck layer):** a `generate2d` error of one patch (the mesher's "patch ...", "patches overlap",
+  "a patch end within 3 s ...", named by index) is now reported at that `patch` line rather than the `[mesh]`
+  header, so the deck pane and the canvas point at it. Only invalid decks' line numbers change (GE1: the deck suite
+  passes, 123 cases).
+- **Mesh preview:** a Mesh preview toggle on the tool strip overlays the last check's mesh edges while that check is
+  of the text shown ("Building the mesh..." or "The mesh shows when the layout builds." otherwise).
+- **GE7 met:** a table of invalid layouts made by model edits (two contacts overlapping, a contact's end within 3 s of
+  a junction, a box too small for the interface resolution, an unknown material on a region and on the background,
+  a contact's unknown kind, a zero-height box) and a doping error: each problem's message is `check_deck`'s, its
+  line and markers as expected; four successive valid edits (a moved well, a new oxide layer, a gate contact, a layer
+  raised, a rename, a wider gate) each build.
+- **GE8 met (slice 3's part):** a window test draws a MOSFET on New 2D layout (silicon substrate, a 50 nm oxide box,
+  source and drain contacts on the sides, a gate electrode over the oxide, a body along the bottom, each named in the
+  inspector), types what the canvas does not draw (the gate's metal, the pockets' Gaussians, a five-point gate
+  sweep), and Run solves it to the end. Another draws a contact over the source's patch: the canvas marks both
+  contacts with the build's message, Run is off (and a direct Run starts nothing), the console has the error; undone,
+  it builds and the mesh shows again.
+- **GE5 still met:** the drag test's median frame 2.7–3.1 ms (slowest 5.6–5.7 ms).
+- **GE9 for slice 3 met:** 13 hand mutants caught (one, a shape's line ignored, survived until a zero-height box case
+  was added): patch errors not located; overlapping contacts not marked; the named points read in µm; the background
+  marked as a shape; the domain marked beside the points; the check not tied to the text shown; Run not gated; the
+  Run command not guarded; the problem not in Messages; a stale mesh shown; a corner drag always vertical; the
+  build's messages not passed to the page.
+- **Slice 2 defects found by GE8 and fixed:** a contact drag started at a domain corner always took the vertical side
+  (now the side of the larger offset); a new contact after a rename reused `contact_1` (now also unique among the
+  deck's patches); undo or redo of a drawn contact left the selected contact past the end (a crash or `bad_alloc`,
+  seen intermittently; the selection is now pruned on every text applied); a deck opened while the Geometry tab was
+  shown jumped to the View tab when its build ended (now it stays); a tab change did not refresh the commands' states.
+- The app suite (91 cases) and the window suite (47 cases, the hidden ones not run) pass; full suites not run.
+
+**Slice 4 results (2026-11-21; GD10):** slanted edges, on `app/geometry-validation` after slice 3 (same worktree).
+- **Kernel (mesh layer):** a layered layout with any slanted edge goes to a general planar arrangement
+  (`general_partition` in layered2d.cpp); rectilinear layouts keep the grid kernel unchanged (GE5 still 1.9-2.4 ms
+  for 200 rectangles, GE2's 1000 random rectilinear layouts as before). Every shape edge and domain side is split
+  where it meets another: sides and touches by orient2d, exact on the input's own points, and within a tolerance of
+  1e-12 times the domain's extent counted as on the line or touching, so a vertex or edge meant to lie on a slanted
+  edge but rounded off it by decimal coordinates splits it there instead of leaving a sliver. A proper crossing is
+  computed once (along a horizontal or vertical segment its constant coordinate kept exactly, and any crossing within
+  the tolerance of such a line put on it), then shared: within the tolerance of any input vertex or earlier crossing
+  it is that point. Edges are labelled side by side (own shape by direction, others by an exact point-in-polygon of
+  the midpoint), each region's loops traced and split at repeated vertices, holes cut by two bridges to one loop
+  (ranked, tested in order, a near-collinear bridge refused as a sliver), and a vertex kept where three or more
+  boundary edges meet or its two edges come from different lines. Shapes now need three vertices or more; a
+  repeated vertex is refused.
+- **Model and editor:** polygons may slant: `add_polygon` takes any simple outline of non-zero area, three vertices
+  or more within 10 cm of the origin (exact 64-bit cross products of the 0.1 nm quanta); `insert_vertex` only exactly
+  on the edge; `remove_vertex` while the outline stays valid; `set_vertex` gains `follow` (neighbours follow along
+  shared horizontal and vertical edges; off, the vertex moves alone). A tiled deck with slanted polygons is now edited
+  (made layered). On the canvas the Polygon tool takes clicks as they are, Shift keeping a point horizontal or vertical
+  from the last; Ctrl+drag moves a vertex alone; the closing edge is no longer forced rectilinear.
+- **Tests:** a trapezoid gate over a slanted-wall STI (shared computed crossing, then meshed by `generate_mesh`); a
+  slanted ring with a hole and a crossing triangle; 1000 seeded random layouts of boxes, trapezoids and triangles (the
+  last 300 in decimal cm, so no coordinate is exact in binary), each checked for simple counter-clockwise polygons, no
+  vertex inside another's edge, area equal to the domain's, vertices on axis lines exact, and 200 sample points each in
+  exactly one polygon of the topmost shape's region (a 6000-trial run, half decimal, also passed once); a vertex rounded
+  above or below a slanted edge; the model's slanted rules; a slanted tiling made layered and built; a deck with a
+  slanted well built (the deck test that expected "horizontal or vertical" now expects "repeats a vertex"); a window
+  test drawing a trapezoid gate, a Shift-constrained polygon and a Ctrl-dragged vertex, the deck built.
+- **Speed (recorded, no target):** 200 random trapezoids resolved in 60-120 ms (median of 3, 61 polygons); the
+  slowest of the 1000 random layouts 2-5 ms. A first version took 4.5 s for the 200 (every bridge candidate tested
+  before ranking); fixed by testing candidates in ranked order.
+- **GE9 for slice 4:** 14 hand mutants, 13 caught: the near-touch tolerance off; proper crossings by `||`; axis
+  snapping off; the two bridges not required to reach one loop; the sliver refusal off; the reversal check off; the
+  exact on-edge test off in `insert_vertex`; `follow` always on; the 10 cm bound off; Shift ignored (always
+  constrained); Ctrl ignored; input vertices not shared; the tolerant side off. **Survived (recorded):** the x-sweep
+  prune not widened by the tolerance (no test puts a vertex within 1e-12 of a segment across an exact x gap). Two
+  mutants on redundant checks (zero area given reversals) led to removing the redundant check instead.
+- The mesh (152 cases), deck (9 failures as expected, unchanged), app (92) and window (48) suites pass; full ctest
+  suites not run.
+
+**GE5 on CI (2026-11-21; owner "fix them").** CI on main 9b5292e and PR #110 failed the GE5 timing checks: Debug
+37-40 ms for the 200-rectangle partition (limit 5) and 28 ms per edit on the 300-region deck (limit 2); Release
+2.24-2.29 ms on that deck. That test timed a write and the read after it, while GE5 bounds the write, so it now times
+the write alone (the read is recorded beside it): locally 0.52 ms write, 0.23 ms read. Both GE5 checks are Release
+only, as KG6 (owner, 2026-11-19); Debug records the times. The limits are unchanged. `mesh.layered2d` and
+`app.geometry` pass in Release; full suites not run.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

@@ -5,6 +5,8 @@
 
 #include "main_window.hpp"
 #include "fixtures.hpp"
+#include "NiTCAD/deck/build.hpp"
+#include "NiTCAD/deck/syntax.hpp"
 
 #include <windows.h>
 
@@ -320,4 +322,199 @@ TEST_CASE("app window geometry: a drag redraws within 16 ms a frame with 200 sha
     const double median = ms[ms.size() / 2];
     WARN("GE5: a drag frame, median " << median << " ms (slowest " << ms.back() << " ms), " << vertices << " vertices, software Direct2D");
     CHECK(median <= 16.0);
+}
+
+// --- slice 3: live validation, Run, the mesh preview, a drawn MOSFET (GD9, GE7, GE8) ------------------------------
+
+namespace {
+
+// Waits for the live check of the deck's text now (the page then knows whether it builds).
+bool checked_now(MainWindow& w, GeometryPage& page) {
+    return pump_until([&] { return !w.live_checker().pending() && page.check() != GeometryPage::Check::pending; }, 120.0);
+}
+
+bool run_enabled(MainWindow& w) {
+    // The toolbar's Run button (the menus are filled as they open).
+    HWND bar = GetDlgItem(w.hwnd(), MainWindow::id_toolbar);
+    return SendMessageW(bar, TB_ISBUTTONENABLED, static_cast<WPARAM>(Command::run), 0) != 0;
+}
+
+void replace_text(MainWindow& w, const std::string& from, const std::string& to) {
+    const std::string text = w.deck().text();
+    const auto at = text.find(from);
+    REQUIRE(at != std::string::npos);
+    SendMessageW(w.deck().editor(), EM_SETSEL, at, at + from.size());
+    const std::wstring wide(to.begin(), to.end());
+    SendMessageW(w.deck().editor(), EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(wide.c_str()));
+}
+
+}  // namespace
+
+TEST_CASE("app window geometry: a layout that does not build is marked, Run is off, the mesh previewed (GD9, GE7)",
+          "[app][window][geometry]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("validate", layered)));
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    w->execute(Command::tab_geometry);
+    GeometryPage& page = w->geometry_page();
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    const Mouse m{page};
+    REQUIRE(checked_now(*w, page));
+    CHECK(page.check() == GeometryPage::Check::valid);
+    CHECK(page.problems().empty());
+    CHECK(page.run_blocked().empty());
+    CHECK(page.banner().empty());
+    CHECK(run_enabled(*w));
+
+    // The mesh preview: the mesh the check built, drawn over the layout.
+    page.set_mesh_preview(true);
+    CHECK(page.mesh_shown());
+    CHECK(page.mesh().edges.size() > 50);
+    CHECK(page.render() >= 0.0);
+
+    // A contact drawn over the source's patch: the build's error, on both contacts; Run off with the reason.
+    const std::size_t errors = w->console_log().count(app::LogLevel::error);
+    m.key('C');
+    m.drag(0, 3000, 0, 9000);
+    REQUIRE(has(w->deck().text(), "patch contact_1 = 0 0.3um, 0 0.9um\n"));
+    CHECK_FALSE(page.mesh_shown());  // the mesh is of the text before
+    REQUIRE(checked_now(*w, page));
+    REQUIRE(page.check() == GeometryPage::Check::invalid);
+    REQUIRE(page.problems().size() == 1);
+    const geo::Problem& p = page.problems().front();
+    const auto check = app::check_deck(w->deck().text(), w->document().path());
+    REQUIRE(check.diagnostics.size() == 1);
+    INFO(p.message);
+    CHECK(p.message == check.diagnostics.front().message);  // the build's own message
+    CHECK(p.message.find("patch") != std::string::npos);  // the build's message (the new patch splits the source's edge)
+    CHECK(std::ranges::count(p.markers, geo::Marker::Kind::contact, &geo::Marker::kind) == 2);
+    CHECK(has(page.banner(), p.message));
+    CHECK(has(page.run_blocked(), p.message));
+    CHECK_FALSE(run_enabled(*w));
+    CHECK(w->console_log().count(app::LogLevel::error) > errors);  // in the console's Messages
+    CHECK(page.render() >= 0.0);
+    // Run asked for anyway (F5 reaches execute only when enabled; a direct call too): nothing starts.
+    w->execute(Command::run);
+    CHECK(w->runner().state() == app::RunState::idle);
+    CHECK(w->tab() == MainWindow::tab_geometry);
+
+    // On the deck's tab Run is as before; back on the Geometry tab it is off again.
+    w->select_tab(MainWindow::tab_deck);
+    CHECK(run_enabled(*w));
+    w->execute(Command::tab_geometry);
+    CHECK_FALSE(run_enabled(*w));
+
+    // Undone: valid once checked, Run on, the mesh shown again.
+    w->execute(Command::undo);
+    REQUIRE(checked_now(*w, page));
+    CHECK(page.check() == GeometryPage::Check::valid);
+    CHECK(page.problems().empty());
+    CHECK(run_enabled(*w));
+    CHECK(page.mesh_shown());
+}
+
+TEST_CASE("app window geometry: a MOSFET drawn on a new layout runs its sweep (GE8)", "[app][window][geometry]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("mosfet", "# a MOSFET drawn on the Geometry tab\n")));
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    w->execute(Command::tab_geometry);
+    GeometryPage& page = w->geometry_page();
+    REQUIRE_FALSE(page.geometry().editable());
+    page.commit(GeometryPage::c_new_layout);
+    REQUIRE(page.geometry().mesh == geo::MeshKind::layered);
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    const Mouse m{page};
+    const auto deck = [&] { return w->deck().text(); };
+    const auto name = [&](const wchar_t* n) {
+        SetWindowTextW(page.control(GeometryPage::c_name), n);
+        page.commit(GeometryPage::c_name);
+    };
+
+    // The substrate is the template's background; the oxide drawn over its top 50 nm and named.
+    page.set_material("sio2");
+    m.key('R');
+    m.drag(0, 9500, 20000, 10000);
+    INFO(deck());
+    REQUIRE(has(deck(), "material = sio2\nbox = 0 2um 0.95um 1um\n"));
+    name(L"oxide");
+    REQUIRE(has(deck(), "[region oxide]\n"));
+
+    // The contacts along the boundary: source and drain on the sides below the oxide, the gate over it, the body
+    // along the bottom.
+    m.key('C');
+    m.drag(0, 6000, 0, 9000);
+    name(L"source");
+    m.drag(20000, 6000, 20000, 9000);
+    name(L"drain");
+    m.drag(5000, 10000, 15000, 10000);
+    name(L"gate");
+    SendMessageW(page.control(GeometryPage::c_kind), CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(L"electrode"));
+    page.commit(GeometryPage::c_kind);
+    m.drag(0, 0, 20000, 0);
+    name(L"body");
+    REQUIRE(page.geometry().contacts.size() == 4);
+    REQUIRE(has(deck(), "[contact gate]\nkind = electrode\n"));
+
+    // What the canvas does not draw (a later unit): the gate's metal, the pockets' doping, the sweep, typed.
+    replace_text(*w, "[contact gate]\nkind = electrode\n", "[contact gate]\nkind = electrode\nelectrode = metal\nwork_function = 4.1\n");
+    replace_text(*w, "profile = acceptor constant 1e16\n",
+                 "profile = acceptor constant 1e16\n"
+                 "profile = donor gaussian 2e19 axis=y center=0.95um width=0.15um x=0:0.5um lateral=20nm\n"
+                 "profile = donor gaussian 2e19 axis=y center=0.95um width=0.15um x=1.5um:2um lateral=20nm\n");
+    replace_text(*w, "[equilibrium]\n", "[sweep]\ncontact gate = 0 : 1 : 0.25\ncontact drain = 0.1\n");
+    w->execute(Command::tab_geometry);
+    REQUIRE(checked_now(*w, page));
+    for (const auto& p : page.problems()) UNSCOPED_INFO(p.message);
+    REQUIRE(page.check() == GeometryPage::Check::valid);
+    REQUIRE(run_enabled(*w));
+
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }, 600.0));
+    CHECK(w->runner().state() == app::RunState::done);
+    CHECK_FALSE(w->preview());
+}
+
+TEST_CASE("app window geometry: a slanted gate drawn, a vertex moved alone, Shift keeps an edge straight (slice 4, GD10)",
+          "[app][window][geometry]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("slanted", layered)));
+    pump();
+    w->execute(Command::tab_geometry);
+    GeometryPage& page = w->geometry_page();
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    const Mouse m{page};
+    const auto deck = [&] { return w->deck().text(); };
+    // A trapezoid gate: its sidewalls slant (no Shift, the clicks are taken as they are).
+    page.set_material("sio2");
+    m.key('P');
+    for (const auto& [x, y] : std::vector<std::pair<geo::Coord, geo::Coord>>{{6000, 8000}, {14000, 8000}, {13000, 10000}, {7000, 10000}}) {
+        m.click(x, y);
+    }
+    m.key(VK_RETURN);
+    INFO(deck());
+    REQUIRE(has(deck(), "polygon = 0.6um 0.8um, 1.4um 0.8um, 1.3um 1um, 0.7um 1um\n"));
+    // With Shift a vertex is kept vertical from the last: (1.66, 0.6) comes in as (1.6, 0.6), not as (1.7, 0.6).
+    m.key(VK_ESCAPE);
+    m.key('P');
+    m.click(14000, 2000);
+    m.click(16000, 2000);
+    m.down(16600, 6000, MK_SHIFT);
+    m.up(16600, 6000);
+    m.click(14000, 6000);
+    m.key(VK_RETURN);
+    REQUIRE(has(deck(), "polygon = 1.4um 0.2um, 1.6um 0.2um, 1.6um 0.6um, 1.4um 0.6um\n"));
+    // The well's corner (1, 0.8) Ctrl-dragged to (1.1, 0.8): it moves alone, its left edge slanting.
+    m.key('V');
+    m.click(17000, 4000);
+    REQUIRE(page.selection().size() == 1);
+    m.down(10000, 8000, MK_CONTROL);
+    m.move(10500, 8000, MK_LBUTTON | MK_CONTROL);
+    m.move(11000, 8000, MK_LBUTTON | MK_CONTROL);
+    m.up(11000, 8000);
+    CHECK(has(deck(), "polygon = 1um 0, 2um 0, 2um 0.5um, 2um 0.8um, 1.1um 0.8um\n"));
+    // The layout builds: Run is on.
+    const auto d = NiTCAD::deck::parse(deck(), "s.deck");
+    REQUIRE(d);
+    const auto b = NiTCAD::deck::build(*d);
+    if (!b) FAIL(b.error().message);
 }

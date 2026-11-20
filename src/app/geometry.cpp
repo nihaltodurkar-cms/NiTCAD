@@ -625,27 +625,44 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
 
 namespace {
 
-// Each edge axis-parallel and not empty (the layered kernel's rule until slanted edges, slice 4).
-bool rectilinear(const std::vector<Pt>& p) {
-    if (p.size() < 4) return false;
-    for (std::size_t k = 0; k < p.size(); ++k) {
-        const Pt a = p[k], b = p[(k + 1) % p.size()];
-        if (a == b || (a.x != b.x && a.y != b.y)) return false;
+// A polygon the layered kernel takes (slice 4, GD10: edges in any direction): three or more vertices within ±10 cm,
+// no edge empty, simple, of non-zero area. Exact: with coordinates within 1e9 quanta every cross product below fits
+// in 64 bits.
+constexpr Coord coord_limit = 1'000'000'000;
+int turn(Pt a, Pt b, Pt c) {
+    const std::int64_t v = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    return v > 0 ? 1 : v < 0 ? -1 : 0;
+}
+bool on_closed(Pt a, Pt b, Pt p) {
+    return turn(a, b, p) == 0 && p.x >= std::min(a.x, b.x) && p.x <= std::max(a.x, b.x) && p.y >= std::min(a.y, b.y) &&
+           p.y <= std::max(a.y, b.y);
+}
+bool meet(Pt a, Pt b, Pt c, Pt d) {
+    const int o1 = turn(a, b, c), o2 = turn(a, b, d), o3 = turn(c, d, a), o4 = turn(c, d, b);
+    if (o1 * o2 < 0 && o3 * o4 < 0) return true;
+    return on_closed(a, b, c) || on_closed(a, b, d) || on_closed(c, d, a) || on_closed(c, d, b);
+}
+bool outline_ok(const std::vector<Pt>& p) {
+    const std::size_t n = p.size();
+    if (n < 3) return false;
+    for (std::size_t i = 0; i < n; ++i) {
+        const Pt a = p[i], b = p[(i + 1) % n], c = p[(i + 2) % n];
+        if (std::abs(a.x) > coord_limit || std::abs(a.y) > coord_limit || a == b) return false;
+        // Consecutive edges meet only at their shared vertex (no reversal: an outline without area turns back
+        // somewhere, so this refuses it too); the others not at all.
+        if (turn(a, b, c) == 0 && on_closed(a, b, c)) return false;
+        for (std::size_t j = i + 2; j < n; ++j) {
+            if (i == 0 && j == n - 1) continue;
+            if (meet(a, b, p[j], p[(j + 1) % n])) return false;
+        }
     }
     return true;
 }
 
 // Whether `g` can be edited; a tiled generated deck becomes layered (its polygons tile, so painting them in turn
-// gives the same device) when they are all axis-parallel.
+// gives the same device; slanted edges too since slice 4).
 bool editing(Geometry& g) {
-    if (g.mesh == MeshKind::tiled) {
-        for (const Region& r : g.regions) {
-            for (const Shape& s : r.shapes) {
-                if (s.kind == ShapeKind::polygon && !rectilinear(s.points)) return false;
-            }
-        }
-        g.mesh = MeshKind::layered;
-    }
+    if (g.mesh == MeshKind::tiled) g.mesh = MeshKind::layered;
     return g.editable();
 }
 
@@ -685,7 +702,7 @@ int add_box(Geometry& g, Rect r, std::string material) {
 }
 
 int add_polygon(Geometry& g, std::vector<Pt> points, std::string material) {
-    if (!editing(g) || g.mesh == MeshKind::tensor || !rectilinear(points)) return -1;
+    if (!editing(g) || g.mesh == MeshKind::tensor || !outline_ok(points)) return -1;
     return add_region(g, Shape{ShapeKind::polygon, std::move(points)}, std::move(material));
 }
 
@@ -701,20 +718,23 @@ bool set_box(Geometry& g, ShapeRef s, Rect r) {
     return true;
 }
 
-bool set_vertex(Geometry& g, ShapeRef s, int k, Pt p) {
+bool set_vertex(Geometry& g, ShapeRef s, int k, Pt p, bool follow) {
     if (!valid(g, s) || at(g, s).kind != ShapeKind::polygon) return false;
     auto& v = at(g, s).points;
     if (k < 0 || k >= static_cast<int>(v.size())) return false;
-    // Its neighbours follow along the edges they share with it, so the edges stay axis-parallel.
+    // With `follow`, its neighbours follow along the horizontal and vertical edges they share with it, so those stay
+    // so; a slanted edge's other end stays.
     auto w = v;
     const std::size_t n = w.size(), i = static_cast<std::size_t>(k);
     const Pt old = w[i];
-    for (const std::size_t j : {(i + n - 1) % n, (i + 1) % n}) {
-        if (w[j].x == old.x) w[j].x = p.x;
-        else if (w[j].y == old.y) w[j].y = p.y;
+    if (follow) {
+        for (const std::size_t j : {(i + n - 1) % n, (i + 1) % n}) {
+            if (w[j].x == old.x) w[j].x = p.x;
+            else if (w[j].y == old.y) w[j].y = p.y;
+        }
     }
     w[i] = p;
-    if (!rectilinear(w)) return false;
+    if (!outline_ok(w)) return false;
     v = std::move(w);
     return true;
 }
@@ -723,20 +743,19 @@ bool insert_vertex(Geometry& g, ShapeRef s, int after, Pt p) {  // on the edge a
     if (!valid(g, s) || at(g, s).kind != ShapeKind::polygon) return false;
     auto& v = at(g, s).points;
     if (after < 0 || after >= static_cast<int>(v.size())) return false;
-    auto w = v;
-    w.insert(w.begin() + after + 1, p);
-    if (!rectilinear(w)) return false;
-    v = std::move(w);
+    const Pt a = v[static_cast<std::size_t>(after)], b = v[(static_cast<std::size_t>(after) + 1) % v.size()];
+    if (!on_closed(a, b, p) || p == a || p == b) return false;
+    v.insert(v.begin() + after + 1, p);
     return true;
 }
 
-bool remove_vertex(Geometry& g, ShapeRef s, int k) {  // one between collinear edges
+bool remove_vertex(Geometry& g, ShapeRef s, int k) {  // the polygon left valid (three vertices or more)
     if (!valid(g, s) || at(g, s).kind != ShapeKind::polygon) return false;
     auto& v = at(g, s).points;
-    if (k < 0 || k >= static_cast<int>(v.size()) || v.size() <= 4) return false;
+    if (k < 0 || k >= static_cast<int>(v.size())) return false;
     auto w = v;
     w.erase(w.begin() + k);
-    if (!rectilinear(w)) return false;
+    if (!outline_ok(w)) return false;
     v = std::move(w);
     return true;
 }
@@ -1083,6 +1102,127 @@ bool set_domain(Geometry& g, Rect d) {
     g.domain = d;
     g.domain_given = true;
     return true;
+}
+
+}  // namespace NiTCAD::app::geo
+
+// --- validation (GD9) --------------------------------------------------------------------------------------------
+
+namespace NiTCAD::app::geo {
+
+namespace {
+
+// The points "(x, y)" or "(x, y, z)" a message names, in cm (the mesher's and the build's form).
+std::vector<Pt> named_points(std::string_view m) {
+    std::vector<Pt> out;
+    for (std::size_t open = m.find('('); open != std::string_view::npos; open = m.find('(', open + 1)) {
+        const std::size_t close = m.find(')', open);
+        if (close == std::string_view::npos) break;
+        std::vector<double> v;
+        std::string_view inner = m.substr(open + 1, close - open - 1);
+        bool ok = true;
+        while (ok && !inner.empty()) {
+            const std::size_t comma = inner.find(',');
+            const std::string_view t = trim(inner.substr(0, comma));
+            double x = 0.0;
+            const auto r = std::from_chars(t.data(), t.data() + t.size(), x);
+            ok = !t.empty() && r.ec == std::errc{} && r.ptr == t.data() + t.size() && std::isfinite(x);
+            if (ok) v.push_back(x);
+            inner = comma == std::string_view::npos ? std::string_view{} : inner.substr(comma + 1);
+        }
+        if (ok && (v.size() == 2 || v.size() == 3)) {
+            out.push_back({static_cast<Coord>(std::llround(v[0] / quantum_cm)), static_cast<Coord>(std::llround(v[1] / quantum_cm))});
+        }
+    }
+    return out;
+}
+
+// Two contacts along one line of the boundary sharing more than an end point.
+bool overlapping(const Contact& p, const Contact& q) noexcept {
+    const bool pv = p.a.x == p.b.x, qv = q.a.x == q.b.x;
+    if (pv != qv) return false;
+    if (pv ? p.a.x != q.a.x : p.a.y != q.a.y) return false;
+    const auto span = [&](const Contact& c) {
+        return pv ? std::pair{std::min(c.a.y, c.b.y), std::max(c.a.y, c.b.y)} : std::pair{std::min(c.a.x, c.b.x), std::max(c.a.x, c.b.x)};
+    };
+    const auto [p0, p1] = span(p);
+    const auto [q0, q1] = span(q);
+    return std::max(p0, q0) < std::min(p1, q1) || (p0 == q0 && p1 == q1);
+}
+
+}  // namespace
+
+Problem locate_problem(const Geometry& g, std::string_view text, int line, std::string message) {
+    Problem out{line, std::move(message), {}};
+    const auto d = deck::parse(text);
+    if (d && line > 0) {
+        // The section holding the line: the last one starting at or before it.
+        const deck::Section* at = nullptr;
+        int region_index = -1, contact_index = -1, ri = 0, ci = 0;
+        for (const auto& s : d->sections) {
+            if (s.line > line) break;
+            at = &s;
+            region_index = s.kind == "region" ? ri : -1;
+            contact_index = s.kind == "contact" ? ci : -1;
+            ri += s.kind == "region" ? 1 : 0;
+            ci += s.kind == "contact" ? 1 : 0;
+        }
+        const auto contact_of = [&](int origin) {
+            for (std::size_t k = 0; k < g.contacts.size(); ++k) {
+                if (g.contacts[k].origin == origin) return static_cast<int>(k);
+            }
+            return -1;
+        };
+        const auto add_contact = [&](int k) {
+            if (k < 0) return;
+            const Marker mk{Marker::Kind::contact, {}, k, {}};
+            if (std::ranges::find(out.markers, mk) == out.markers.end()) out.markers.push_back(mk);
+        };
+        if (at && region_index >= 0) {
+            for (std::size_t r = 0; r < g.regions.size(); ++r) {
+                if (g.regions[r].origin != region_index) continue;
+                int shape = -1, n = 0;
+                for (const auto& e : at->entries) {
+                    if (!is_shape_key(e.key)) continue;
+                    if (e.line == line) shape = n;
+                    ++n;
+                }
+                if (g.regions[r].shapes.empty()) out.markers.push_back({Marker::Kind::domain, {static_cast<int>(r), -1}, -1, {}});
+                else out.markers.push_back({Marker::Kind::shape, {static_cast<int>(r), shape}, -1, {}});
+            }
+        } else if (at && contact_index >= 0) {
+            add_contact(contact_of(contact_index));
+        } else if (at && at->kind == "mesh") {
+            const deck::Entry* patch = nullptr;
+            for (const auto& e : at->entries) {
+                if (e.line == line && e.key.starts_with("patch ")) patch = &e;
+            }
+            if (patch) {
+                // The contacts using this patch, and every contact overlapping one of them.
+                const std::string_view name = trim(std::string_view(patch->key).substr(6));
+                int c = 0;
+                for (const auto& s : d->sections) {
+                    if (s.kind != "contact") continue;
+                    const deck::Entry* p = find_entry(s, "patch");
+                    if (p && trim(p->value) == name) add_contact(contact_of(c));
+                    ++c;
+                }
+                const std::size_t direct = out.markers.size();
+                for (std::size_t m = 0; m < direct; ++m) {
+                    const Contact& p = g.contacts[static_cast<std::size_t>(out.markers[m].contact)];
+                    for (std::size_t k = 0; k < g.contacts.size(); ++k) {
+                        if (static_cast<int>(k) != out.markers[m].contact && overlapping(p, g.contacts[k])) add_contact(static_cast<int>(k));
+                    }
+                }
+            } else if (out.message.find("(") == std::string::npos) {
+                out.markers.push_back({Marker::Kind::domain, {}, -1, {}});
+            }
+        }
+        if (at && (at->kind == "mesh" || region_index >= 0 || contact_index >= 0)) {
+            for (const Pt p : named_points(out.message)) out.markers.push_back({Marker::Kind::point, {}, -1, p});
+        }
+    }
+    return out;
 }
 
 }  // namespace NiTCAD::app::geo

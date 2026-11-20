@@ -491,6 +491,7 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
     mesh::MeshOptions2D o;
     bool layered = false;            // Unit 26k (GD1): the regions' shapes layered in deck order
     const Entry* domain = nullptr;   // the layered domain, x0 x1 y0 y1 (default: the shapes' bounds)
+    std::vector<const Entry*> patch_entries;  // in the mesher's patch order (its errors name a patch by index)
     for (const Entry& e : s.entries) {
         if (e.key == "type") continue;
         if (e.key == "layered") {
@@ -502,6 +503,7 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
             NITCAD_DECK_TRY(ab, points(e, e.value, 2));
             if (ab.size() != 2) return std::unexpected(at(e.line, "a patch is two points"));
             g.patches.push_back({e.key.substr(6), ab[0], ab[1]});
+            patch_entries.push_back(&e);
         } else if (e.key == "max_size") {
             NITCAD_DECK_TRY(v, len(e));
             o.max_size = v;
@@ -598,7 +600,17 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
     mesh_info_.interface_resolution = o.interface_resolution;
     mesh_info_.max_size = o.max_size;
     auto m = mesh::generate_mesh(g, o);
-    if (!m) return std::unexpected(located(s.line, "[mesh] generate2d", std::move(m.error())));
+    if (!m) {
+        // Unit 26k (GD9): an error of one patch (its index the context's) is that patch's line, so the deck pane and
+        // the Geometry tab point at it; every other error the section's.
+        const auto& err = m.error();
+        const bool of_patch = err.message.starts_with("patch") || err.message.starts_with("a patch end within");
+        const int line = of_patch && err.context && err.context->index && *err.context->index < patch_entries.size() &&
+                                 g.patches.size() == patch_entries.size()
+                             ? patch_entries[*err.context->index]->line
+                             : s.line;
+        return std::unexpected(located(line, "[mesh] generate2d", std::move(m.error())));
+    }
     generated_ = std::move(*m);
     return {};
 }

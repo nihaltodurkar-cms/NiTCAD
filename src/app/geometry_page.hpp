@@ -6,10 +6,16 @@
 //   selection with its handles (a box's eight, a polygon's vertices; the background's: the domain's), rubber-band
 //   selection, zoom at the cursor (wheel), pan (middle drag, Space+drag, the Pan tool), Fit.
 // - Tools, each with a key while the canvas has the focus: Select (V), Rectangle (R), Polygon (P: click the
-//   vertices, each kept horizontal or vertical from the last; double-click or Enter closes), Contact (C: drag along
+//   vertices, Shift keeping one horizontal or vertical from the last; double-click or Enter closes; Ctrl+drag moves
+//   a vertex alone, slanting its edges, slice 4), Contact (C: drag along
 //   a side of the domain), Pan (H), Measure (M). Arrows nudge by a grid step (Shift: ×10); Delete; Escape cancels.
 // - Every edit goes to the deck at once, by minimal edits (VQ13: the deck stays the only source of truth); undo
 //   and redo step through the deck texts the page wrote, and start again when the deck is edited elsewhere.
+//
+// - Live validation (slice 3, GD9): the window hands the page each live check of the deck (the build's own
+//   messages); a problem of the text shown is drawn where it lies (a shape, a contact, a point, the domain), with
+//   its message along the canvas's foot; Run stays off on this tab while the layout does not build. Mesh preview
+//   overlays the mesh the last check built, while it is of the text shown.
 //
 // The tests drive the canvas by its messages (GE8; no screen automation).
 #pragma once
@@ -21,6 +27,10 @@
 #include <string>
 #include <vector>
 
+#include <span>
+#include <utility>
+
+#include "NiTCAD/app/document.hpp"
 #include "NiTCAD/app/geometry.hpp"
 
 struct ID2D1Factory;
@@ -88,6 +98,28 @@ public:
     double render();
     [[nodiscard]] std::string ruler_text(bool x_axis) const;  // the labels the last frame's ruler drew
 
+    // --- live validation and the mesh preview (slice 3, GD9) ---
+    // A live check of `text` ended: its diagnostics (empty: the deck builds). Kept while `text` is the text shown.
+    void checked(const std::string& text, std::span<const Diagnostic> diagnostics);
+    enum class Check { pending, valid, invalid };
+    // The state of the text shown: not checked yet, builds, or does not.
+    [[nodiscard]] Check check() const noexcept;
+    [[nodiscard]] const std::vector<geo::Problem>& problems() const noexcept { return problems_; }
+    // Why Run is off on this tab ("" when it is not): the layout's first problem.
+    [[nodiscard]] std::string run_blocked() const;
+    // The mesh a live check of `text` built (points in quanta, edges as point indices).
+    struct MeshOverlay {
+        std::vector<geo::Pt> points;
+        std::vector<std::pair<int, int>> edges;
+    };
+    void set_mesh(const std::string& text, MeshOverlay mesh);
+    void set_mesh_preview(bool on);
+    [[nodiscard]] bool mesh_preview() const noexcept { return mesh_preview_; }
+    // The overlay drawn now: the preview on and the mesh of the text shown.
+    [[nodiscard]] bool mesh_shown() const noexcept { return mesh_preview_ && !mesh_text_.empty() && mesh_text_ == text_seen_; }
+    [[nodiscard]] const MeshOverlay& mesh() const noexcept { return mesh_; }
+    [[nodiscard]] std::string banner() const;  // the canvas's foot line drawn last ("" none)
+
     // The inspector's controls' ids (offsets from inspector_id).
     enum Control : int {
         c_heading = 0, c_name_label, c_name, c_material_label, c_material, c_raise, c_lower,
@@ -152,10 +184,22 @@ private:
     geo::Pt anchor_{}, at_{};
     double press_x_ = 0, press_y_ = 0, last_x_ = 0, last_y_ = 0;
     int drag_index_ = -1;
+    bool alone_ = false;  // a vertex dragged with Ctrl (slice 4)
     bool space_ = false;
     std::vector<geo::Pt> polygon_;  // the polygon being drawn
     std::optional<geo::Pt> hover_;   // the polygon tool's next point
     mutable std::string ruler_x_, ruler_y_;
+
+    // Slice 3: the last live check (its text, problems), the mesh it built, the preview toggle.
+    std::string checked_text_;
+    std::vector<Diagnostic> diagnostics_;
+    std::vector<geo::Problem> problems_;  // diagnostics_ placed on g_, while checked_text_ is the text shown
+    std::string mesh_text_;
+    MeshOverlay mesh_;
+    bool mesh_preview_ = false;
+    HWND mesh_button_ = nullptr;
+    void locate_problems();
+    void prune_selection();
 };
 
 }  // namespace NiTCAD::app

@@ -106,15 +106,16 @@ struct ShapeRef {
 };
 
 // A new region on top with one shape, named "<material>_<n>" (unique), its index returned (-1 refused: a tensor
-// deck takes no polygon; a polygon has four or more vertices and axis-parallel edges until slice 4). Any edit of a
-// tiled deck first makes it layered, refused when a polygon has a slanted edge.
+// deck takes no polygon; a polygon is simple, of non-zero area, three vertices or more within 10 cm of the origin,
+// its edges in any direction since slice 4, GD10). Any edit of a tiled deck first makes it layered.
 int add_box(Geometry& g, Rect r, std::string material);
 int add_polygon(Geometry& g, std::vector<Pt> points, std::string material);
 bool move_shape(Geometry& g, ShapeRef s, Coord dx, Coord dy);
 bool set_box(Geometry& g, ShapeRef s, Rect r);
-bool set_vertex(Geometry& g, ShapeRef s, int k, Pt p);  // its neighbours follow along their shared edges
+// `follow`: its neighbours follow along the horizontal and vertical edges they share with it (else it moves alone).
+bool set_vertex(Geometry& g, ShapeRef s, int k, Pt p, bool follow = true);
 bool insert_vertex(Geometry& g, ShapeRef s, int after, Pt p);  // a point on the edge after vertex `after`
-bool remove_vertex(Geometry& g, ShapeRef s, int k);  // one between collinear edges; four kept
+bool remove_vertex(Geometry& g, ShapeRef s, int k);  // the polygon left valid
 bool delete_shape(Geometry& g, ShapeRef s);          // a region left without shapes goes too
 bool rename_region(Geometry& g, int region, std::string name);  // unique, a deck identifier
 bool set_material(Geometry& g, int region, std::string material);
@@ -191,5 +192,30 @@ struct Hit {
 
 // The box with handle `h` dragged to `p` (the opposite side fixed), normalized.
 [[nodiscard]] Rect drag_handle(const Rect& r, int h, Pt p) noexcept;
+
+// --- validation (GD9): the deck build's own error, placed on the canvas ------------------------------------------
+
+// Where a problem is drawn: a shape (shape -1: every shape of the region; the background: the domain), a contact,
+// a point the message names, or the whole domain.
+struct Marker {
+    enum class Kind : unsigned char { shape, contact, point, domain };
+    Kind kind = Kind::domain;
+    ShapeRef shape;
+    int contact = -1;
+    Pt at{};
+    friend bool operator==(const Marker&, const Marker&) = default;
+};
+
+struct Problem {
+    int line = 0;          // the deck line the build named (0: none)
+    std::string message;   // the build's message, unchanged
+    std::vector<Marker> markers;
+};
+
+// The build's error at `line` of `deck` (read into `g`) placed on `g`: the line's region shape (or region), its
+// contact section, or the contact of its [mesh] patch line with every contact overlapping it; the points
+// "(x, y)" or "(x, y, z)" in cm the message names; the domain when the line is the [mesh] section's other lines.
+// No markers when the line is outside the geometry (a doping profile, a sweep, ...).
+[[nodiscard]] Problem locate_problem(const Geometry& g, std::string_view deck, int line, std::string message);
 
 }  // namespace NiTCAD::app::geo

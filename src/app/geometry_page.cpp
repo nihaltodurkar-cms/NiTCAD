@@ -26,7 +26,7 @@ using namespace geo;
 
 constexpr const wchar_t* canvas_class = L"NiTCADGeometryCanvas";
 constexpr const wchar_t* panel_class = L"NiTCADGeometryPanel";
-constexpr int id_strip = 1, id_canvas = 2, id_tool_first = 10, id_fit = 20;
+constexpr int id_strip = 1, id_canvas = 2, id_tool_first = 10, id_fit = 20, id_mesh = 21;
 constexpr std::array<const wchar_t*, 6> tool_texts{L"Select (V)", L"Rectangle (R)", L"Polygon (P)", L"Contact (C)",
                                                    L"Pan (H)", L"Measure (M)"};
 
@@ -139,6 +139,8 @@ GeometryPage::GeometryPage(HWND parent, Host& host, int id, int inspector_id, bo
                                      strip_, id_tool_first + static_cast<int>(k)));
     }
     tool_buttons_.push_back(make(L"BUTTON", L"Fit (F)", WS_TABSTOP | WS_GROUP | BS_PUSHBUTTON, strip_, id_fit));
+    mesh_button_ = make(L"BUTTON", L"Mesh preview", WS_TABSTOP | BS_AUTOCHECKBOX | BS_PUSHLIKE, strip_, id_mesh);
+    tool_buttons_.push_back(mesh_button_);
     canvas_ = CreateWindowExW(0, canvas_class, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, panel_,
                               reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_canvas)), GetModuleHandleW(nullptr), this);
 
@@ -232,9 +234,10 @@ void GeometryPage::layout() {
     MoveWindow(strip_, 0, 0, r.right, bh + 2 * pad, TRUE);
     int x = pad;
     for (std::size_t k = 0; k < tool_buttons_.size(); ++k) {
-        const int w = MulDiv(k + 1 == tool_buttons_.size() ? 64 : 92, dpi_, 96);
+        // The tools, Fit, then Mesh preview.
+        const int w = MulDiv(k < tool_texts.size() ? 92 : k == tool_texts.size() ? 64 : 108, dpi_, 96);
         MoveWindow(tool_buttons_[k], x, pad, w, bh, TRUE);
-        x += w + (k + 2 == tool_buttons_.size() ? 3 * pad : pad / 2);
+        x += w + (k + 1 == tool_texts.size() ? 3 * pad : pad / 2);
     }
     MoveWindow(canvas_, 0, bh + 2 * pad, r.right, std::max<int>(1, r.bottom - bh - 2 * pad), TRUE);
     if (target_) {
@@ -310,6 +313,15 @@ void GeometryPage::reload(bool fit_view, bool force) {
         g_ = std::move(*g);
         message_ = g_.editable() ? std::string() : g_.why;
     }
+    prune_selection();
+    if (fit_view || first) fit();
+    locate_problems();
+    update_inspector();
+    invalidate();
+}
+
+// The selection kept to what the model has (the deck read again: an edit elsewhere, an undo, a redo).
+void GeometryPage::prune_selection() {
     const auto valid = [&](ShapeRef s) {
         return s.region >= 0 && s.region < static_cast<int>(g_.regions.size()) &&
                (s.shape == -1 ? g_.regions[static_cast<std::size_t>(s.region)].shapes.empty()
@@ -317,9 +329,6 @@ void GeometryPage::reload(bool fit_view, bool force) {
     };
     std::erase_if(selection_, [&](ShapeRef s) { return !valid(s); });
     if (contact_ >= static_cast<int>(g_.contacts.size())) contact_ = -1;
-    if (fit_view || first) fit();
-    update_inspector();
-    invalidate();
 }
 
 void GeometryPage::apply_text(const std::string& text) {
@@ -329,8 +338,56 @@ void GeometryPage::apply_text(const std::string& text) {
         g_ = std::move(*g);
         message_ = g_.editable() ? std::string() : g_.why;
     }
+    prune_selection();  // an undo can take the selected shape or contact away
+    locate_problems();
     update_inspector();
     invalidate();
+}
+
+// --- live validation and the mesh preview (slice 3, GD9) ----------------------------------------------------------
+
+void GeometryPage::checked(const std::string& text, std::span<const Diagnostic> diagnostics) {
+    checked_text_ = text;
+    diagnostics_.assign(diagnostics.begin(), diagnostics.end());
+    locate_problems();
+    invalidate();
+}
+
+void GeometryPage::locate_problems() {
+    problems_.clear();
+    if (checked_text_.empty() || checked_text_ != text_seen_ || !g_.editable()) return;
+    for (const Diagnostic& d : diagnostics_) problems_.push_back(locate_problem(g_, text_seen_, d.line, d.message));
+}
+
+GeometryPage::Check GeometryPage::check() const noexcept {
+    if (checked_text_.empty() || checked_text_ != text_seen_) return Check::pending;
+    return diagnostics_.empty() ? Check::valid : Check::invalid;
+}
+
+std::string GeometryPage::run_blocked() const {
+    if (check() != Check::invalid || !g_.editable()) return {};
+    return "Run is off until the layout builds: " + diagnostics_.front().message;
+}
+
+void GeometryPage::set_mesh(const std::string& text, MeshOverlay mesh) {
+    mesh_text_ = text;
+    mesh_ = std::move(mesh);
+    if (mesh_preview_) invalidate();
+}
+
+void GeometryPage::set_mesh_preview(bool on) {
+    mesh_preview_ = on;
+    if (mesh_button_) SendMessageW(mesh_button_, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+    invalidate();
+}
+
+std::string GeometryPage::banner() const {
+    if (!g_.editable()) return {};
+    if (check() == Check::invalid) {
+        return diagnostics_.front().message + "  (Run is off until the layout builds.)";
+    }
+    if (mesh_preview_ && !mesh_shown()) return check() == Check::pending ? "Building the mesh..." : "The mesh shows when the layout builds.";
+    return {};
 }
 
 bool GeometryPage::commit_model(Geometry next) {
@@ -629,7 +686,7 @@ Pt GeometryPage::snapped(double x, double y, bool shift, std::optional<ShapeRef>
     return p;
 }
 
-void GeometryPage::on_down(double x, double y, bool /*shift*/, bool ctrl, bool double_click) {
+void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool double_click) {
     SetFocus(canvas_);
     press_x_ = last_x_ = x;
     press_y_ = last_y_ = y;
@@ -663,7 +720,7 @@ void GeometryPage::on_down(double x, double y, bool /*shift*/, bool ctrl, bool d
             return;
         }
         Pt p = snapped(x, y, false);
-        if (!polygon_.empty()) p = constrain(polygon_.back(), p);
+        if (!polygon_.empty() && shift) p = constrain(polygon_.back(), p);  // Shift: horizontal or vertical (slice 4)
         if (polygon_.size() >= 3 && p == polygon_.front()) {
             on_key(VK_RETURN, false, false);
             return;
@@ -706,6 +763,7 @@ void GeometryPage::on_down(double x, double y, bool /*shift*/, bool ctrl, bool d
         drag_index_ = hit.index;
         anchor_ = g_.regions[static_cast<std::size_t>(hit.shape.region)].shapes[static_cast<std::size_t>(hit.shape.shape)]
                       .points[static_cast<std::size_t>(hit.index)];
+        alone_ = ctrl;  // Ctrl: the vertex moves alone (its edges may slant); else its neighbours follow
         begin(Drag::vertex);
         return;
     case HitKind::edge:
@@ -763,7 +821,7 @@ void GeometryPage::on_move(double x, double y, bool shift) {
     last_y_ = y;
     if (tool_ == Tool::polygon && drag_ == Drag::none && g_.editable()) {
         Pt p = snapped(x, y, false);
-        if (!polygon_.empty()) p = constrain(polygon_.back(), p);
+        if (!polygon_.empty() && shift) p = constrain(polygon_.back(), p);  // Shift: horizontal or vertical (slice 4)
         hover_ = p;
         invalidate();
         return;
@@ -793,7 +851,7 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         if (!one) break;
         const Pt p = snapped(x, y, shift, one);
         g_ = g_start_;
-        set_vertex(g_, *one, drag_index_, p);
+        set_vertex(g_, *one, drag_index_, p, !alone_);
         break;
     }
     case Drag::domain: {
@@ -818,7 +876,10 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         // Along the side the drag began on.
         const Rect& d = g_.domain;
         Pt p = snapped(x, y, false);
-        if (anchor_.x == d.lo.x || anchor_.x == d.hi.x) p = {anchor_.x, std::clamp(p.y, d.lo.y, d.hi.y)};
+        // At a corner of the domain, the side the drag goes along (the larger offset).
+        const bool on_x_side = anchor_.x == d.lo.x || anchor_.x == d.hi.x, on_y_side = anchor_.y == d.lo.y || anchor_.y == d.hi.y;
+        const bool vertical = on_x_side && (!on_y_side || std::abs(p.y - anchor_.y) > std::abs(p.x - anchor_.x));
+        if (vertical) p = {anchor_.x, std::clamp(p.y, d.lo.y, d.hi.y)};
         else p = {std::clamp(p.x, d.lo.x, d.hi.x), anchor_.y};
         at_ = p;
         break;
@@ -873,7 +934,11 @@ void GeometryPage::on_up(double x, double y, bool shift) {
         std::string name;
         for (int n = 1;; ++n) {
             name = "contact_" + std::to_string(n);
-            if (std::ranges::none_of(g_.contacts, [&](const Contact& c) { return c.name == name; })) break;
+            // Not a contact's name, nor a patch's left in the deck (a renamed contact keeps its patch).
+            if (std::ranges::none_of(g_.contacts, [&](const Contact& c) { return c.name == name; }) &&
+                text_seen_.find("patch " + name + " ") == std::string::npos) {
+                break;
+            }
         }
         const int c = add_contact(next, name, "ohmic", anchor_, at_);
         if (c >= 0 && commit_model(std::move(next))) {
@@ -913,7 +978,6 @@ bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
     case VK_RETURN: {
         if (tool_ != Tool::polygon || polygon_.size() < 3) return true;
         std::vector<Pt> p = polygon_;
-        if (p.back().x != p.front().x && p.back().y != p.front().y) p.push_back({p.back().x, p.front().y});
         polygon_.clear();
         hover_.reset();
         Geometry next = g_;
@@ -923,8 +987,8 @@ bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
             contact_ = -1;
             update_inspector();
         } else if (r < 0) {
-            host_.geometry_status("A polygon needs four or more vertices joined by horizontal and vertical edges (slanted "
-                                  "edges come in a later slice; a tensor deck takes rectangles only).");
+            host_.geometry_status("A polygon needs three or more vertices, its edges not crossing (a tensor deck takes "
+                                  "rectangles only).");
         }
         invalidate();
         return true;
@@ -1049,6 +1113,15 @@ double GeometryPage::render() {
                 }
             }
         }
+        // The mesh preview: the last check's mesh, while it is of the text shown.
+        if (mesh_shown()) {
+            const D2D1_COLOR_F wire = rgb(0.15f, 0.15f, 0.2f, 0.55f);
+            for (const auto& [i, j] : mesh_.edges) {
+                const Pt& p = mesh_.points[static_cast<std::size_t>(i)];
+                const Pt& q = mesh_.points[static_cast<std::size_t>(j)];
+                target_->DrawLine({sx(p.x), sy(p.y)}, {sx(q.x), sy(q.y)}, color(wire), 0.75f * px);
+            }
+        }
         target_->DrawRectangle(dom, color(rgb(0.2f, 0.2f, 0.2f)), 1.5f * px);
         // Contacts, with their names.
         for (std::size_t k = 0; k < g_.contacts.size(); ++k) {
@@ -1064,6 +1137,39 @@ double GeometryPage::render() {
                 }
             }
             text(wide(ct.name), (p0.x + p1.x) / 2 + 4 * px, (p0.y + p1.y) / 2 + 2 * px, 160 * px, 18 * px, rgb(0.15f, 0.15f, 0.15f));
+        }
+        // The build's problems where they lie (GD9): a shape or region outlined, a contact, a point ringed, the
+        // domain.
+        const D2D1_COLOR_F red = rgb(0.85f, 0.1f, 0.1f);
+        for (const Problem& pr : problems_) {
+            for (const Marker& mk : pr.markers) {
+                switch (mk.kind) {
+                case Marker::Kind::shape: {
+                    const Region& rg = g_.regions[static_cast<std::size_t>(mk.shape.region)];
+                    for (std::size_t s = 0; s < rg.shapes.size(); ++s) {
+                        if (mk.shape.shape >= 0 && static_cast<int>(s) != mk.shape.shape) continue;
+                        if (ID2D1PathGeometry* path = path_of(rg.shapes[s].outline())) {
+                            target_->DrawGeometry(path, color(red), 2.5f * px);
+                            path->Release();
+                        }
+                    }
+                    break;
+                }
+                case Marker::Kind::contact: {
+                    const Contact& ct = g_.contacts[static_cast<std::size_t>(mk.contact)];
+                    target_->DrawLine({sx(ct.a.x), sy(ct.a.y)}, {sx(ct.b.x), sy(ct.b.y)}, color(rgb(0.85f, 0.1f, 0.1f, 0.6f)), 9.0f * px);
+                    break;
+                }
+                case Marker::Kind::point: {
+                    const D2D1_POINT_2F o{sx(mk.at.x), sy(mk.at.y)};
+                    target_->DrawEllipse(D2D1::Ellipse(o, 7.0f * px, 7.0f * px), color(red), 2.0f * px);
+                    target_->DrawLine({o.x - 3 * px, o.y - 3 * px}, {o.x + 3 * px, o.y + 3 * px}, color(red), 1.5f * px);
+                    target_->DrawLine({o.x - 3 * px, o.y + 3 * px}, {o.x + 3 * px, o.y - 3 * px}, color(red), 1.5f * px);
+                    break;
+                }
+                case Marker::Kind::domain: target_->DrawRectangle(dom, color(red), 3.0f * px); break;
+                }
+            }
         }
         // The selection: outlines; the handles of one box (or the domain), the vertices of one polygon.
         const D2D1_COLOR_F blue = rgb(0.1f, 0.45f, 0.95f);
@@ -1116,6 +1222,14 @@ double GeometryPage::render() {
                 target_->DrawLine({sx(pts[k].x), sy(pts[k].y)}, {sx(pts[k + 1].x), sy(pts[k + 1].y)}, color(blue), 1.5f * px);
             }
             for (const Pt& p : polygon_) handle(p);
+        }
+        // The foot line: the first problem's message (Run is off), or the preview's state.
+        if (const std::string foot = banner(); !foot.empty()) {
+            const float bh = 40.0f * px;
+            const bool bad = check() == Check::invalid;
+            target_->FillRectangle(D2D1::RectF(R, H - bh, W, H), color(bad ? rgb(1.0f, 0.92f, 0.92f, 0.95f) : rgb(1, 1, 1, 0.9f)));
+            target_->DrawLine({R, H - bh}, {W, H - bh}, color(bad ? red : rgb(0.6f, 0.6f, 0.6f)), 1.0f);
+            text(wide(foot), R + 8 * px, H - bh + 4 * px, std::max(10.0f, W - R - 16 * px), bh - 6 * px, bad ? rgb(0.6f, 0.0f, 0.0f) : rgb(0.3f, 0.3f, 0.3f));
         }
         target_->PopAxisAlignedClip();
     }
@@ -1172,6 +1286,11 @@ LRESULT CALLBACK GeometryPage::panel_proc(HWND hwnd, UINT message, WPARAM w, LPA
             }
             if (id == id_fit) {
                 self->fit();
+                SetFocus(self->canvas_);
+                return 0;
+            }
+            if (id == id_mesh) {
+                self->set_mesh_preview(SendMessageW(self->mesh_button_, BM_GETCHECK, 0, 0) == BST_CHECKED);
                 SetFocus(self->canvas_);
                 return 0;
             }

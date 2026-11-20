@@ -326,7 +326,11 @@ polygon = 0 0.8um, 1um 0.8um, 2um 0.8um, 2um 1um, 0 1um
     t = layered;
     fails(t.replace(t.find("box = 0 2um 0.8um 1um"), 21, ""), "two regions without a shape");
     t = layered;
-    fails(t.replace(t.find("polygon = 1um 0, 2um 0"), 22, "polygon = 1um 0, 2um 0.1um"), "horizontal or vertical");
+    fails(t.replace(t.find("polygon = 1um 0, 2um 0"), 22, "polygon = 1um 0, 1um 0, 2um 0"), "repeats a vertex");
+    // A slanted well builds since slice 4 (GD10): its left edge from (1.1, 0) up to (1, 0.8).
+    t = layered;
+    const deck::Plan s = must(t.replace(t.find("polygon = 1um 0, 2um 0"), 22, "polygon = 1.1um 0, 2um 0"));
+    CHECK(s.device.mesh().node_count() > 0);
 }
 
 TEST_CASE("deck build: a layered hole under a full-width contact meshes (Unit 26k slice 1)", "[deck]") {

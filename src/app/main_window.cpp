@@ -481,7 +481,8 @@ void MainWindow::update_command_states() {
         SendMessageW(toolbar_, TB_ENABLEBUTTON, static_cast<WPARAM>(c), on);
     };
     enable(Command::check, !busy);
-    enable(Command::run, !busy);
+    // Unit 26k (GD9): on the Geometry tab, Run is off while the layout does not build.
+    enable(Command::run, !busy && !(tab_ == tab_geometry && geometry_ && !geometry_->run_blocked().empty()));
     enable(Command::stop, runner_.state() == RunState::running);
     enable(Command::open_deck, !busy);
     enable(Command::new_deck, !busy);
@@ -1282,6 +1283,10 @@ void MainWindow::select_tab(int tab) {
     case tab_geometry:
         geometry_->reload();
         SetFocus(geometry_->canvas());
+        // GD9: a deck not checked since it was opened is checked now (an edit's check is on its way otherwise).
+        if (geometry_->check() == GeometryPage::Check::pending && !live_.pending() && live_edits_ == edits_) {
+            SetTimer(hwnd_, live_timer, 0, nullptr);
+        }
         break;
     case tab_results:
         results_->show(workspace(), run_b());
@@ -1291,6 +1296,7 @@ void MainWindow::select_tab(int tab) {
         refresh();
         break;
     }
+    update_command_states();  // GD9: Run is off on the Geometry tab while the layout does not build
 }
 
 bool MainWindow::open_example(std::size_t index) {
@@ -2458,7 +2464,8 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
                 set_workspace(std::move(*w));
                 set_status(status_state, workspace_->has_results() ? "Opened the deck and its results"
                                                                    : "Opened the deck (no results yet: Run, F5)");
-                select_tab(tab_view);
+                // Unit 26k: not away from the Geometry tab the user went to while the deck built.
+                if (tab_ != tab_geometry) select_tab(tab_view);
             } else {
                 set_status(status_state, w.error().message);
             }
@@ -2603,19 +2610,41 @@ void MainWindow::on_live_check() {
         if (const auto s = suggestion(text, d)) d.message += " (" + *s + ")";
     }
     deck_->set_diagnostics(shown);
+    // Unit 26k (GD9): the Geometry tab's problems are the build's own messages; on that tab they go to the
+    // console's Messages.
+    std::vector<Diagnostic> problems = live_.result().diagnostics;
+    const LogLevel level = tab_ == tab_geometry ? LogLevel::error : LogLevel::info;
+    bool built = false;
     if (!shown.empty()) {
-        set_status(status_state, shown.front().message);
+        set_status(status_state, shown.front().message, level);
     } else if (auto plan = live_.take_plan()) {
         // The structure preview (XD4): results stay while the deck keeps their mesh.
         if (workspace_ && workspace_->has_results() && same_mesh(*workspace_, plan->device.mesh())) {
             set_status(status_state, "The deck builds (the results shown are of its last run).");
+            built = true;
         } else if (auto w = workspace_from_structure(std::move(*plan), document_.path())) {
             show_structure(std::move(*w));
             set_status(status_state, "The deck builds: its structure is shown, not solved (Run, F5).");
+            built = true;
         } else {
-            set_status(status_state, w.error().message);
+            set_status(status_state, w.error().message, level);
+            problems.push_back({0, w.error().message});
         }
     }
+    if (built && workspace_ && workspace_->device->mesh().dimension() == 2) {
+        // The mesh preview's overlay: the mesh this check built, in the editor's quanta.
+        const auto& m = workspace_->device->mesh();
+        GeometryPage::MeshOverlay o;
+        o.points.reserve(m.node_count());
+        for (const auto& p : m.points()) {
+            o.points.push_back({static_cast<geo::Coord>(std::llround(p[0] / geo::quantum_cm)),
+                                static_cast<geo::Coord>(std::llround(p[1] / geo::quantum_cm))});
+        }
+        o.edges.reserve(m.edges().size());
+        for (const auto& e : m.edges()) o.edges.emplace_back(e.first, e.second);
+        geometry_->set_mesh(text, std::move(o));
+    }
+    geometry_->checked(text, problems);
     update_command_states();
 }
 
@@ -2808,6 +2837,12 @@ void MainWindow::execute(Command c) {
         return;
     case Command::run:
         if (runner_.busy()) return;
+        if (tab_ == tab_geometry) {
+            if (const std::string why = geometry_->run_blocked(); !why.empty()) {
+                set_status(status_state, why, LogLevel::warning);
+                return;
+            }
+        }
         document_.set_text(deck_->text());
         if (document_.is_untitled() && !save(true)) return;  // a run writes its outputs beside the deck
         select_tab(tab_run);  // the run monitor follows it (shown before the run starts)

@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "NiTCAD/app/document.hpp"
 #include "NiTCAD/app/geometry.hpp"
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/syntax.hpp"
@@ -272,16 +273,37 @@ TEST_CASE("app geometry: an edit rewrites only geometry lines, and the deck stil
         const auto d = NiTCAD::deck::parse(out, "t.deck");
         REQUIRE(d);
         CHECK(NiTCAD::deck::build(*d));
-        // A slanted tiling is not edited (until slice 4).
-        Geometry slanted = must_read(R"([mesh]
+        // A slanted tiling is edited too since slice 4 (GD10): it becomes layered and builds.
+        const std::string slanted_deck = R"([mesh]
 type = generate2d
+patch source = 0 0, 0 0.3um
+max_size = 0.25um
+interface_resolution = 20nm
+
 [region a]
-polygon = 0 0, 1um 0, 0 1um
+material = silicon
+polygon = 0 0, 2um 0, 2um 0.3um, 0 0.7um
+
 [region b]
-polygon = 1um 0, 1um 1um, 0 1um
-)");
-        CHECK(!move_shape(slanted, {0, 0}, 1, 1));
-        CHECK(slanted.mesh == MeshKind::tiled);
+material = sio2
+polygon = 0 0.7um, 2um 0.3um, 2um 1um, 0 1um
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact source]
+kind = ohmic
+patch = source
+
+[equilibrium]
+)";
+        Geometry slanted = must_read(slanted_deck);
+        REQUIRE(insert_vertex(slanted, {1, 0}, 0, {um, 5000}));  // a vertex on the oxide's slanted edge
+        CHECK(slanted.mesh == MeshKind::layered);
+        const auto ds = NiTCAD::deck::parse(must_write(slanted_deck, slanted), "s.deck");
+        REQUIRE(ds);
+        const auto bs = NiTCAD::deck::build(*ds);
+        if (!bs) FAIL(bs.error().message);
     }
     SECTION("tensor: boxes and contact boxes") {
         const std::string mosfet = example("mosfet_2d.deck");
@@ -465,16 +487,24 @@ TEST_CASE("app geometry: a deck of 300 regions is written within 2 ms per edit (
     deck += "\n[contact a]\nkind = ohmic\npatch = a\n";
     Geometry g = must_read(deck);
     REQUIRE(g.regions.size() == 301);
-    const auto t0 = std::chrono::steady_clock::now();
+    // GE5 bounds the write; the read that follows each edit is timed apart and only recorded.
+    double write_ms = 0, read_ms = 0;
     std::string text = deck;
     for (int k = 0; k < 50; ++k) {
         REQUIRE(move_shape(g, {1 + k * 5, 0}, 1000, 0));
+        const auto t0 = std::chrono::steady_clock::now();
         text = must_write(text, g);
+        const auto t1 = std::chrono::steady_clock::now();
         g = must_read(text);
+        write_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        read_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
     }
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 50;
-    WARN("GE5: 300 regions, write and read " << ms << " ms per edit");
+    const double ms = write_ms / 50;
+    WARN("GE5: 300 regions, write " << ms << " ms, read " << read_ms / 50 << " ms per edit");
+    // Release only, as KG6 (owner, 2026-11-19): the unoptimised Debug build is many times slower; there it is recorded.
+#ifdef NDEBUG
     CHECK(ms <= 2.0);
+#endif
 }
 
 TEST_CASE("app geometry: the grid, snapping and the Shift constraint", "[app][geometry]") {
@@ -590,4 +620,196 @@ TEST_CASE("app geometry: a contact's kind and a layered deck's domain (slice 2)"
     // Only a layered deck's domain is drawn by its line.
     Geometry t = must_read(example("mosfet_2d.deck"), mosfet_bounds);
     CHECK(!set_domain(t, {{0, 0}, {um, um}}));
+}
+
+// --- slice 3: live validation (GD9, GE7) ------------------------------------------------------------------------
+
+namespace {
+
+// The deck as the live check builds it, and its first problem placed on the model.
+struct Checked {
+    std::string text;
+    NiTCAD::app::CheckResult result;
+    Problem problem;
+};
+Checked check_layout(const Geometry& g, const std::string& base = layered_deck) {
+    Checked c;
+    c.text = must_write(base, g);
+    c.result = NiTCAD::app::check_deck(c.text, {});
+    if (!c.result.diagnostics.empty()) {
+        const auto& d = c.result.diagnostics.front();
+        c.problem = locate_problem(must_read(c.text), c.text, d.line, d.message);
+    }
+    return c;
+}
+
+int line_of(const std::string& text, std::string_view what) {
+    const auto at = text.find(what);
+    REQUIRE(at != std::string::npos);
+    return 1 + static_cast<int>(std::count(text.begin(), text.begin() + static_cast<std::ptrdiff_t>(at), '\n'));
+}
+
+bool has_marker(const Problem& p, Marker m) { return std::ranges::find(p.markers, m) != p.markers.end(); }
+
+}  // namespace
+
+TEST_CASE("app geometry: an invalid layout's problem is the build's message, placed where it lies (GE7)", "[app][geometry]") {
+    const Geometry base = must_read(layered_deck);
+    REQUIRE(check_layout(base).result.diagnostics.empty());
+    using K = Marker::Kind;
+
+    SECTION("two contacts overlapping along the bottom: both, the error at the later patch's line") {
+        Geometry g = base;
+        REQUIRE(add_contact(g, "c2", "ohmic", {5000, 0}, {um, 0}) == 2);
+        const Checked c = check_layout(g);
+        REQUIRE(c.result.diagnostics.size() == 1);
+        const auto& d = c.result.diagnostics.front();
+        INFO(d.message);
+        CHECK(d.message.find("patches overlap") != std::string::npos);
+        CHECK(d.line == line_of(c.text, "patch c2 ="));
+        CHECK(c.problem.message == d.message);
+        CHECK(has_marker(c.problem, {K::contact, {}, 2, {}}));
+        CHECK(has_marker(c.problem, {K::contact, {}, 1, {}}));
+        CHECK(c.problem.markers.size() == 2);
+    }
+    SECTION("a contact's end too near the junction under it: that contact") {
+        Geometry g = base;
+        REQUIRE(add_contact(g, "near", "ohmic", {10200, 0}, {15000, 0}) == 2);
+        const Checked c = check_layout(g);
+        REQUIRE(c.result.diagnostics.size() == 1);
+        const auto& d = c.result.diagnostics.front();
+        INFO(d.message);
+        CHECK(d.message.find("a patch end within 3 s of an interface junction") != std::string::npos);
+        CHECK(d.line == line_of(c.text, "patch near ="));
+        CHECK(c.problem.message == d.message);
+        CHECK(c.problem.markers == std::vector<Marker>{{K::contact, {}, 2, {}}});
+    }
+    SECTION("a box too small for the interface resolution: the points the mesher names") {
+        Geometry g = base;
+        REQUIRE(add_box(g, {{15000, 5000}, {16000, 6000}}, "sio2") >= 0);
+        const Checked c = check_layout(g);
+        REQUIRE(c.result.diagnostics.size() == 1);
+        const auto& d = c.result.diagnostics.front();
+        INFO(d.message);
+        CHECK(d.line == line_of(c.text, "[mesh]"));
+        CHECK(c.problem.message == d.message);
+        REQUIRE_FALSE(c.problem.markers.empty());
+        for (const Marker& m : c.problem.markers) {
+            CHECK(m.kind == K::point);
+            // On the small box's outline (the message's six decimals in cm: within 0.01 µm).
+            CHECK(m.at.x >= 15000 - 100);
+            CHECK(m.at.x <= 16000 + 100);
+            CHECK(m.at.y >= 5000 - 100);
+            CHECK(m.at.y <= 6000 + 100);
+        }
+    }
+    SECTION("an unknown material: its region") {
+        Geometry g = base;
+        REQUIRE(set_material(g, 2, "unobtainium"));
+        const Checked c = check_layout(g);
+        REQUIRE(c.result.diagnostics.size() == 1);
+        const auto& d = c.result.diagnostics.front();
+        INFO(d.message);
+        CHECK(c.problem.message == d.message);
+        CHECK(c.problem.markers == std::vector<Marker>{{K::shape, {2, -1}, -1, {}}});
+    }
+    SECTION("the background's material: the domain") {
+        Geometry g = base;
+        REQUIRE(set_material(g, 0, "unobtainium"));
+        const Checked c = check_layout(g);
+        REQUIRE(c.result.diagnostics.size() == 1);
+        CHECK(c.problem.markers == std::vector<Marker>{{K::domain, {0, -1}, -1, {}}});
+    }
+    SECTION("a contact's unknown kind: that contact") {
+        Geometry g = base;
+        REQUIRE(set_contact_kind(g, 0, "omic"));
+        const Checked c = check_layout(g);
+        REQUIRE(c.result.diagnostics.size() == 1);
+        const auto& d = c.result.diagnostics.front();
+        INFO(d.message);
+        CHECK(d.line == line_of(c.text, "kind = omic"));
+        CHECK(c.problem.markers == std::vector<Marker>{{K::contact, {}, 0, {}}});
+    }
+    SECTION("a shape the build refuses (no height): that shape, at its line") {
+        std::string text = layered_deck;
+        text.replace(text.find("box = 0   2um  0.8um 1um"), 24, "box = 0   2um  0.8um 0.8um");
+        const auto r = NiTCAD::app::check_deck(text, {});
+        REQUIRE(r.diagnostics.size() == 1);
+        INFO(r.diagnostics[0].message);
+        CHECK(r.diagnostics[0].line == line_of(text, "box = 0   2um  0.8um 0.8um"));
+        const Problem p = locate_problem(must_read(text), text, r.diagnostics[0].line, r.diagnostics[0].message);
+        CHECK(p.markers == std::vector<Marker>{{K::shape, {2, 0}, -1, {}}});
+    }
+    SECTION("a problem outside the geometry (a doping profile): no marker, the message kept") {
+        std::string text = layered_deck;
+        text.replace(text.find("constant 1e16"), 13, "constant -1");
+        const auto r = NiTCAD::app::check_deck(text, {});
+        REQUIRE(r.diagnostics.size() == 1);
+        const Problem p = locate_problem(must_read(text), text, r.diagnostics[0].line, r.diagnostics[0].message);
+        CHECK(p.message == r.diagnostics[0].message);
+        CHECK(p.markers.empty());
+    }
+}
+
+TEST_CASE("app geometry: valid layouts build (GE7)", "[app][geometry]") {
+    Geometry g = must_read(layered_deck);
+    // A moved well, a new oxide layer over it, a contact on the top's silicon-free edge away from the rest.
+    REQUIRE(move_shape(g, {1, 0}, -5000, 0));
+    REQUIRE(add_box(g, {{0, 9000}, {2 * um, um}}, "sio2") >= 0);
+    REQUIRE(add_contact(g, "gate", "electrode", {5000, um}, {15000, um}) == 2);
+    REQUIRE(set_contact(g, 1, {500, 0}, {3000, 0}));
+    for (int step = 0; step < 4; ++step) {
+        if (step == 1) REQUIRE(raise_region(g, 1));
+        if (step == 2) REQUIRE(rename_region(g, 3, "cap"));
+        if (step == 3) REQUIRE(set_contact(g, 2, {4000, um}, {16000, um}));  // the gate wider
+        std::string text = must_write(layered_deck, g);
+        // The gate needs its electrode's keys.
+        if (const auto at = text.find("kind = electrode\n"); at != std::string::npos) {
+            text.insert(at + 17, "electrode = metal\nwork_function = 4.1\n");
+        }
+        const auto r = NiTCAD::app::check_deck(text, {});
+        INFO("step " << step << "\n" << text);
+        for (const auto& d : r.diagnostics) UNSCOPED_INFO(d.message);
+        CHECK(r.diagnostics.empty());
+        CHECK(r.plan.has_value());
+    }
+}
+
+TEST_CASE("app geometry: slanted polygons drawn and edited exactly, and the deck builds (slice 4, GD10)", "[app][geometry]") {
+    Geometry g = must_read(layered_deck);
+    // A trapezoid (a gate with slanted sidewalls) and a triangle are taken; a crossing, a flat or a doubled outline is not.
+    const int gate = add_polygon(g, {{6000, 8000}, {14000, 8000}, {13000, um}, {7000, um}}, "sio2");
+    REQUIRE(gate == 3);
+    CHECK(add_polygon(g, {{0, 0}, {um, um}, {um, 0}, {0, um}}, "silicon") == -1);         // a bow tie
+    CHECK(add_polygon(g, {{0, 0}, {um, 0}, {2 * um, 0}}, "silicon") == -1);               // no area
+    CHECK(add_polygon(g, {{0, 0}, {um, 0}, {um, 0}, {0, um}}, "silicon") == -1);          // an empty edge
+    CHECK(add_polygon(g, {{0, 0}, {um, 0}, {um / 2, 0}, {0, um}}, "silicon") == -1);      // an edge turning back
+    CHECK(add_polygon(g, {{0, 0}, {um, 0}}, "silicon") == -1);
+    CHECK(add_polygon(g, {{0, 0}, {2'000'000'000, 0}, {0, um}}, "silicon") == -1);       // beyond 10 cm
+    // A vertex on the slanted sidewall, exactly on it (the cross product exact); one off it refused.
+    CHECK(insert_vertex(g, {gate, 0}, 1, {13500, 9000}));
+    CHECK_FALSE(insert_vertex(g, {gate, 0}, 2, {12000, 9600}));
+    CHECK_FALSE(insert_vertex(g, {gate, 0}, 2, {13000, um}));                            // an end of the edge
+    CHECK(g.regions[3].shapes[0].points.size() == 5);
+    CHECK(remove_vertex(g, {gate, 0}, 2));
+    REQUIRE(g.regions[3].shapes[0].points.size() == 4);
+    // A triangle is taken and kept (built apart: its corners are below the mesher's 60 degrees); two vertices are not.
+    Geometry h = must_read(layered_deck);
+    REQUIRE(add_polygon(h, {{2000, 2000}, {6000, 2000}, {2000, 5000}, {2000, 4000}}, "silicon") == 3);
+    CHECK(remove_vertex(h, {3, 0}, 3));
+    CHECK_FALSE(remove_vertex(h, {3, 0}, 0));
+    CHECK(h.regions[3].shapes[0].points.size() == 3);
+    // Alone, a vertex moves by itself; following, a rectilinear one keeps its horizontal and vertical edges.
+    REQUIRE(set_vertex(g, {1, 0}, 4, {11000, 8000}, false));                                 // the well's corner: a slant
+    CHECK(g.regions[1].shapes[0].points[3] == Pt{2 * um, 8000});
+    CHECK(g.regions[1].shapes[0].points[0] == Pt{um, 0});                                    // alone: not followed
+    REQUIRE(set_vertex(g, {1, 0}, 0, {12000, 0}, true));
+    CHECK(g.regions[1].shapes[0].points[1] == Pt{2 * um, 0});                               // along y = 0: not followed (x differs)
+    CHECK_FALSE(set_vertex(g, {1, 0}, 4, {2 * um, 8000}, false));                            // onto its neighbour
+    const std::string out = must_write(layered_deck, g);
+    for (const auto& l : changed_lines(layered_deck, out)) CHECK(geometry_line(l));
+    const auto d = NiTCAD::deck::parse(out, "t.deck");
+    REQUIRE(d);
+    const auto b = NiTCAD::deck::build(*d);
+    if (!b) FAIL(b.error().message);
 }
