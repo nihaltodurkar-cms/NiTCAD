@@ -9,7 +9,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <windows.h>
-#include <psapi.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
 
 #include <algorithm>
 #include <chrono>
@@ -911,12 +912,6 @@ TEST_CASE("render window: kept buffers are replaced, not added to (Unit 26i, NG5
     auto s = field_view(m3.device, g3, values, o);
     REQUIRE(s.has_value());
     set_look(*s, Look::enhanced);
-    const auto private_bytes = [] {
-        PROCESS_MEMORY_COUNTERS_EX c{};
-        c.cb = sizeof c;
-        REQUIRE(K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&c), sizeof c));
-        return static_cast<double>(c.PrivateUsage);
-    };
     const auto change = [&](int k) {
         for (TriangleBatch& b : s->triangles) {
             for (SceneVertex& v : b.vertices) v.value = std::fmod(v.value + 0.01f * static_cast<float>(k), 1.0f);
@@ -926,17 +921,31 @@ TEST_CASE("render window: kept buffers are replaced, not added to (Unit 26i, NG5
         REQUIRE(r.present_camera(*s, *t.target, W, H).has_value());
         REQUIRE(r.last_present_reused());
     };
-    // The allocators warmed up to their steady state first: WARP keeps freed memory for reuse, and the first
-    // hundred draws grow the process by some 100 MB whatever is kept (measured, 2026-11-19). On the CI runner
-    // twenty changes did not reach the plateau (ratio 1.019, 2026-11-20; locally 0.993-0.996), so the changes
-    // warm up a hundred times too. The bound stays 1%: a kept buffer that is added to still grows it.
-    for (int k = 0; k < 100; ++k) REQUIRE(r.draw(*s, W, H).has_value());
-    for (int k = 0; k < 100; ++k) change(k);
-    const double first = private_bytes();
-    for (int k = 0; k < 100; ++k) change(k);
-    const double after = private_bytes();
-    CAPTURE(first, after, after / first);
-    CHECK(after <= 1.01 * first);
+    // NG5 is about GPU memory, so it is measured there: the process's D3D12 memory on the WARP adapter (DXGI's
+    // QueryVideoMemoryInfo, both segment groups), which counts the committed buffers and nothing else. The
+    // process's private bytes, measured until 2026-11-20, also hold WARP's and the CRT's heaps: after any
+    // warm-up they still drifted 1-2.5 MB in 100 changes (ratios to 1.017 locally and 1.013 on the CI runner),
+    // while the GPU memory is the same to the byte after 1, 100 and 200 changes (19,202,048 bytes here).
+    const auto gpu_bytes = [] {
+        Microsoft::WRL::ComPtr<IDXGIFactory4> f;
+        REQUIRE(SUCCEEDED(CreateDXGIFactory2(0, IID_PPV_ARGS(&f))));
+        Microsoft::WRL::ComPtr<IDXGIAdapter3> a;
+        REQUIRE(SUCCEEDED(f->EnumWarpAdapter(IID_PPV_ARGS(&a))));
+        double sum = 0.0;
+        for (const auto group : {DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL}) {
+            DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+            REQUIRE(SUCCEEDED(a->QueryVideoMemoryInfo(0, group, &info)));
+            sum += static_cast<double>(info.CurrentUsage);
+        }
+        return sum;
+    };
+    change(0);
+    const double one = gpu_bytes();
+    REQUIRE(one > 0.0);
+    for (int k = 1; k <= 100; ++k) change(k);
+    const double hundred = gpu_bytes();
+    CAPTURE(one, hundred, hundred / one);
+    CHECK(hundred <= 1.01 * one);
 }
 
 TEST_CASE("render image: drawing benchmark (VG7)", "[.benchmark]") {

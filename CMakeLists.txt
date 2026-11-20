@@ -595,7 +595,7 @@ add_executable(nitcad_render_test
   tests/render/image_test.cpp
   tests/render/window_test.cpp)
 # The image test solves its MOSFETs (tests may use any layer; render itself may not).
-target_link_libraries(nitcad_render_test PRIVATE NiTCAD::render NiTCAD::solve Catch2::Catch2WithMain)
+target_link_libraries(nitcad_render_test PRIVATE NiTCAD::render NiTCAD::solve Catch2::Catch2WithMain dxgi)
 target_compile_definitions(nitcad_render_test PRIVATE
   NITCAD_RENDER_REFERENCES="${CMAKE_CURRENT_SOURCE_DIR}/tests/render/references")
 nitcad_add_file_tests(render nitcad_render_test)
