@@ -9,33 +9,14 @@
 #include <set>
 #include <utility>
 
+#include "deck_text.hpp"
 #include "NiTCAD/deck/syntax.hpp"
 
 namespace NiTCAD::app::geo {
 
 namespace {
 
-bool blank(char c) { return c == ' ' || c == '\t' || c == '\r'; }
-
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && blank(s.front())) s.remove_prefix(1);
-    while (!s.empty() && blank(s.back())) s.remove_suffix(1);
-    return s;
-}
-
-// Tokens separated by blanks and commas; `groups` the comma-separated groups' tokens.
-std::vector<std::string_view> words(std::string_view s) {
-    std::vector<std::string_view> out;
-    std::size_t i = 0;
-    while (i < s.size()) {
-        while (i < s.size() && (blank(s[i]) || s[i] == ',')) ++i;
-        std::size_t j = i;
-        while (j < s.size() && !blank(s[j]) && s[j] != ',') ++j;
-        if (j > i) out.push_back(s.substr(i, j - i));
-        i = j;
-    }
-    return out;
-}
+using namespace deck_text;
 
 std::optional<Rect> parse_box(std::string_view value) {
     const auto w = words(value);
@@ -95,20 +76,6 @@ std::string segment_text(Pt a, Pt b) {
     return format_length(a.x) + " " + format_length(a.y) + ", " + format_length(b.x) + " " + format_length(b.y);
 }
 
-const deck::Entry* find_entry(const deck::Section& s, std::string_view key) {
-    for (const auto& e : s.entries) {
-        if (e.key == key) return &e;
-    }
-    return nullptr;
-}
-
-std::optional<bool> on_off(std::string_view v) {
-    v = trim(v);
-    if (v == "on" || v == "yes" || v == "true") return true;
-    if (v == "off" || v == "no" || v == "false") return false;
-    return std::nullopt;
-}
-
 // A tensor deck's face: the side of the domain.
 std::optional<std::pair<Pt, Pt>> face_segment(const Rect& d, std::string_view face) {
     if (face == "x_min") return std::pair{Pt{d.lo.x, d.lo.y}, Pt{d.lo.x, d.hi.y}};
@@ -124,62 +91,6 @@ std::string face_of(const Rect& d, Pt a, Pt b) {
     if (a.y == b.y && a.y == d.lo.y) return "y_min";
     return "y_max";
 }
-
-// --- the text as lines ----------------------------------------------------------------------------------------
-
-struct Lines {
-    std::vector<std::string> body, eol;
-    std::string nl = "\n";
-};
-
-Lines split(std::string_view t) {
-    Lines l;
-    if (t.find("\r\n") != std::string_view::npos) l.nl = "\r\n";
-    std::size_t i = 0;
-    while (i < t.size()) {
-        const std::size_t j = t.find('\n', i);
-        if (j == std::string_view::npos) {
-            l.body.emplace_back(t.substr(i));
-            l.eol.emplace_back();
-            break;
-        }
-        const bool cr = j > i && t[j - 1] == '\r';
-        l.body.emplace_back(t.substr(i, j - i - (cr ? 1 : 0)));
-        l.eol.emplace_back(cr ? "\r\n" : "\n");
-        i = j + 1;
-    }
-    return l;
-}
-
-bool continues(std::string_view s) {
-    const std::size_t hash = s.find('#');
-    if (hash != std::string_view::npos) s = s.substr(0, hash);
-    s = trim(s);
-    return !s.empty() && s.back() == '\\';
-}
-
-// 0-based line spans.
-int entry_last(const Lines& l, int first) {
-    int k = first;
-    while (k + 1 < static_cast<int>(l.body.size()) && continues(l.body[static_cast<std::size_t>(k)])) ++k;
-    return k;
-}
-
-int section_last(const Lines& l, const deck::Section& s) {
-    int last = s.line - 1;
-    for (const auto& e : s.entries) last = std::max(last, entry_last(l, e.line - 1));
-    return last;
-}
-
-struct Change {
-    int first = 0, count = 0;  // the lines replaced (count 0: an insertion before `first`)
-    std::vector<std::string> lines;
-};
-
-// A section's block rewritten: `edit` sees its lines and the entries' spans relative to the block.
-struct Block {
-    std::vector<std::string> lines;
-};
 
 }  // namespace
 
@@ -354,12 +265,8 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
     if (!g.editable()) return std::unexpected("this deck's geometry is not editable: " + g.why);
     const auto d = deck::parse(text);
     if (!d) return std::unexpected(d.error().message);
-    const Lines l = split(text);
-    std::vector<Change> changes;
-    const auto block_of = [&](const deck::Section& s) {
-        const int first = s.line - 1, last = section_last(l, s);
-        return std::vector<std::string>(l.body.begin() + first, l.body.begin() + last + 1);
-    };
+    deck_text::Rewrite w(text);
+    const Lines& l = w.lines();
     std::vector<const deck::Section*> regions, contacts;
     const deck::Section* mesh = nullptr;
     for (const auto& s : d->sections) {
@@ -369,45 +276,10 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
     }
     if (mesh == nullptr) return std::unexpected("the deck has no [mesh] section");
 
-    // A section's lines with entries replaced (`replace`: the new text or nullopt to drop, per entry index), new
-    // lines inserted after an entry (`after`, -1: after the header), and the header replaced.
-    struct Edit {
-        std::map<std::size_t, std::optional<std::string>> replace;
-        std::multimap<int, std::string> after;
-        std::optional<std::string> header;
-    };
-    const auto rewrite = [&](const deck::Section& s, const Edit& e) {
-        std::vector<std::string> out;
-        out.push_back(e.header ? *e.header : l.body[static_cast<std::size_t>(s.line - 1)]);
-        const auto put_after = [&](int k) {
-            for (auto [it, end] = e.after.equal_range(k); it != end; ++it) out.push_back(it->second);
-        };
-        put_after(-1);
-        int line = s.line;  // 0-based index of the next line to copy
-        for (std::size_t k = 0; k < s.entries.size(); ++k) {
-            const int first = s.entries[k].line - 1, last = entry_last(l, first);
-            for (; line < first; ++line) out.push_back(l.body[static_cast<std::size_t>(line)]);  // blanks, comments
-            if (const auto it = e.replace.find(k); it != e.replace.end()) {
-                if (it->second) out.push_back(*it->second);
-            } else {
-                for (int j = first; j <= last; ++j) out.push_back(l.body[static_cast<std::size_t>(j)]);
-            }
-            line = last + 1;
-            put_after(static_cast<int>(k));
-        }
-        return out;
-    };
-    const auto change = [&](const deck::Section& s, std::vector<std::string> lines) {
-        const int first = s.line - 1, last = section_last(l, s);
-        if (lines != block_of(s)) changes.push_back({first, last - first + 1, std::move(lines)});
-    };
-    // A section removed with the blank line before it.
-    const auto drop = [&](const deck::Section& s) {
-        int first = s.line - 1;
-        const int last = section_last(l, s);
-        if (first > 0 && trim(l.body[static_cast<std::size_t>(first - 1)]).empty()) --first;
-        changes.push_back({first, last - first + 1, {}});
-    };
+    using Edit = SectionEdit;
+    const auto rewrite = [&](const deck::Section& s, const Edit& e) { return w.rewrite(s, e); };
+    const auto change = [&](const deck::Section& s, std::vector<std::string> lines) { w.change(s, std::move(lines)); };
+    const auto drop = [&](const deck::Section& s) { w.drop(s); };
 
     // Regions: slot k (the k-th region section's place) takes the k-th region.
     const auto region_block = [&](const Region& r) -> std::vector<std::string> {
@@ -453,7 +325,7 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
             drop(*regions[k]);
         } else {
             const int at = regions.empty() ? section_last(l, *mesh) + 1 : section_last(l, *regions.back()) + 1;
-            changes.push_back({at, 0, region_block(Region{g.regions[k].name, g.regions[k].material, g.regions[k].shapes, -1})});
+            w.insert(at, region_block(Region{g.regions[k].name, g.regions[k].material, g.regions[k].shapes, -1}));
         }
     }
 
@@ -602,23 +474,9 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
             drop(*contacts[k]);
         }
     }
-    if (!appended.empty()) changes.push_back({static_cast<int>(l.body.size()), 0, std::move(appended)});
+    if (!appended.empty()) w.insert(w.size(), std::move(appended));
 
-    // Applied in order; an insertion keeps its order among those at one place.
-    std::stable_sort(changes.begin(), changes.end(), [](const Change& a, const Change& b) { return a.first < b.first; });
-    std::string out;
-    out.reserve(text.size() + 256);
-    int line = 0;
-    const int n = static_cast<int>(l.body.size());
-    const auto copy = [&](int k) { out += l.body[static_cast<std::size_t>(k)] + l.eol[static_cast<std::size_t>(k)]; };
-    for (const Change& c : changes) {
-        for (; line < c.first && line < n; ++line) copy(line);
-        if (c.first >= n && !out.empty() && !out.ends_with('\n')) out += l.nl;  // after a last line without one
-        for (const std::string& s : c.lines) out += s + l.nl;
-        line = std::max(line, c.first + c.count);
-    }
-    for (; line < n; ++line) copy(line);
-    return out;
+    return w.apply();
 }
 
 // --- edits -----------------------------------------------------------------------------------------------------
@@ -705,6 +563,8 @@ int add_polygon(Geometry& g, std::vector<Pt> points, std::string material) {
     if (!editing(g) || g.mesh == MeshKind::tensor || !outline_ok(points)) return -1;
     return add_region(g, Shape{ShapeKind::polygon, std::move(points)}, std::move(material));
 }
+
+bool polygon_ok(const std::vector<Pt>& points) { return outline_ok(points); }
 
 bool move_shape(Geometry& g, ShapeRef s, Coord dx, Coord dy) {
     if (!valid(g, s)) return false;

@@ -1550,6 +1550,80 @@ cores.
   equivalent and recorded: the solids not sorted by line (a region's solids are contiguous in the deck, so they
   already come in line order).
 
+**Slice 1 results (2026-11-21; SD3):** `app::solid` (`include/NiTCAD/app/solid.hpp`, `src/app/solid.cpp`), the 2D
+editor's model one dimension up. Run under the owner's 4-core cap: builds `-j 4`, tests on 4 P cores.
+- **Model:** the domain, regions with their solids (a box, or a prism: axis, extent, polygon in (u, v)), and contacts
+  as patch boxes. Coordinates are 26k's 0.1 nm quanta, and undo is 26k's `EditHistory`. The 2D writer's line edits
+  moved into a shared internal header (`src/app/deck_text.hpp`), so both models now use them. The 2D model's behaviour
+  is unchanged (its tests pass). `geo::polygon_ok` is now public for the prisms.
+- **Reading and writing:** a layered `generate3d` deck is written back by minimal edits:
+  - **What is rewritten:** region `box`/`prism` lines, headers and materials; the `[mesh]` `layered`, `domain` and
+    patch lines; the contacts' sections.
+  - **Patch boxes:** a patch box no contact names is kept. One whose contact was deleted is dropped.
+  - **Decks not drawn here:** a tensor 3D deck, an unlayered `generate3d` deck and 2D decks read as unsupported, each
+    with its reason.
+- **`extrude3d` (SQ5):**
+  - **Reading:** read exactly as one prism per cell and `extrude` line, and not edited in place.
+  - **Conversion:** `convert_to_layered` gives the note for the button. Writing the converted model rewrites the
+    following:
+    - `type` becomes `generate3d`, with `layered = on` and the domain added;
+    - `axis`, `stations`, `cell` and `sweep` are dropped, and a swept deck's `lines`, `straddle`, `layer`,
+      `min_angle` and `box` with them;
+    - each `extrude` line becomes prisms.
+  - **Refusals:** conversion is refused with the reason when a cell is void in a section, when a region holds no
+    cell, or when the cells do not fill their bounds.
+  - **Kernel check:** the reduced FinFET converted (with its C-shaped cells and collinear vertices) passes the
+    slice 0 kernel and `check_complex`, with its volume per region exact.
+- **Edits:** each is one deck write and one undo step:
+  - add a box or prism;
+  - move;
+  - move a face: a box's six faces, or a prism's caps and its sides along their normals;
+  - set, insert or remove a prism vertex (neighbours follow);
+  - delete, rename, set the material, raise and lower;
+  - duplicate, or mirror across an axis;
+  - add, set, move, delete, rename a contact or set its kind (a patch box that reaches a domain face with area);
+  - set the domain (contacts on a face move with it).
+
+  A result that is empty, outside ±10 cm or slanted is refused (slanted faces are slice 4). An extruded model refuses
+  edits until it is converted.
+- **Snapping:** the order is a vertex (the solids', the contacts' boxes', the domain's), then an edge's midpoint, then
+  the nearest point of an edge, then a face (a box or domain face, a prism cap or axis-parallel side). Faces in the work
+  plane's own plane are left out. After faces comes the work plane's grid (26k's step), then the point as given. The
+  tolerance is in quanta; the viewport converts 8 px at the point's depth (slice 2).
+- **SE3 met:**
+  - Eight decks are written back byte-identical with no edit: the well and MOS fixtures, an extruded stack, a CRLF copy,
+    and the four FinFET extrusions.
+  - After edits, only geometry lines differ, and a read of the written text gives the model again.
+  - The edited MOS stack builds, and the converted coarse extrusion builds.
+- **SE4 met:** 200 seeded random edits on the well deck, and 200 on the converted reduced FinFET (the conversion its
+  first step), are each undone byte-identical at every step and redone to the end.
+- **SE5 met (write part):**
+  - The mean write per edit is 0.05–0.07 ms (well deck) and 0.10–0.15 ms (FinFET).
+  - A deck of 100 solids is written and read again in 0.34 ms per edit.
+  - The frame and partition parts are slice 2's and slice 0's.
+- **SE10 met:** the model's files name no Win32 or D3D12 header or type (a test reads them), and `app_layering`
+  passes.
+- **Suites:** the app test executable passes 101 cases (the 2D model's included). The deck and mesh suites are
+  untouched. Full ctest suites were not run.
+- **Mutants (SE9):** 14 run, 14 caught:
+  - a changed solid not rewritten;
+  - the box text's axes out of order;
+  - (u, v) swapped;
+  - the void check inverted;
+  - an unused patch box dropped;
+  - neighbours not following a vertex;
+  - a prism side moved along the wrong coordinate;
+  - the work plane's faces kept in snapping;
+  - a contact with area on one axis only;
+  - the domain's low faces not carrying their contacts;
+  - cells kept on conversion;
+  - raise without the swap;
+  - an extrude range reversed;
+  - slanted edges accepted.
+
+  One mutant survived until a test moved the domain's low face: the domain's low faces not carrying their contacts.
+  One first failed to build and was rerun as a compiling equivalent: neighbours not following a vertex.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
