@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <concepts>
 #include <cstddef>
 #include <functional>
 #include <limits>
@@ -12,6 +13,7 @@
 
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/base/thread_pool.hpp"
+#include "amg.hpp"
 #include "eigen_ilut.hpp"
 #include "eigen_sparse_lu.hpp"
 #include "gmres.hpp"
@@ -135,6 +137,40 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
     if (config.fallback != LinearFallback::sparse_lu && config.fallback != LinearFallback::none) {
         return std::unexpected(error(base::ErrorCode::invalid_input, "unknown linear fallback"));
     }
+    if (config.preconditioner != Preconditioner::ilut && config.preconditioner != Preconditioner::amg) {
+        return std::unexpected(error(base::ErrorCode::invalid_input, "unknown preconditioner"));
+    }
+    if (config.preconditioner != Preconditioner::ilut &&
+        config.backend != SolverBackend::gmres_ilut) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "a preconditioner other than ilut needs the gmres backend"));
+    }
+    if constexpr (!std::same_as<Scalar, double>) {
+        if (config.preconditioner == Preconditioner::amg) {
+            return std::unexpected(error(base::ErrorCode::invalid_input,
+                                         "the amg preconditioner is for real matrices only"));
+        }
+    }
+    if (!(config.amg_strength_threshold >= 0.0 && config.amg_strength_threshold < 1.0)) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "amg_strength_threshold must be in [0, 1)", std::nullopt,
+                                     config.amg_strength_threshold));
+    }
+    if (config.amg_smoother_degree < 1 || config.amg_smoother_degree > 10) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "amg_smoother_degree must be in [1, 10]", std::nullopt,
+                                     static_cast<double>(config.amg_smoother_degree)));
+    }
+    if (config.amg_coarse_size < 1 || config.amg_coarse_size > 100000) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "amg_coarse_size must be in [1, 100000]", std::nullopt,
+                                     static_cast<double>(config.amg_coarse_size)));
+    }
+    if (config.amg_max_levels < 2 || config.amg_max_levels > 50) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "amg_max_levels must be in [2, 50]", std::nullopt,
+                                     static_cast<double>(config.amg_max_levels)));
+    }
     if (!std::isfinite(config.max_backward_error) || config.max_backward_error <= 0.0) {
         return std::unexpected(error(base::ErrorCode::invalid_input,
                                      "max_backward_error must be positive and finite",
@@ -164,10 +200,23 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config) : confi
     if (config.backend == SolverBackend::mkl_pardiso) {
         backend_ = std::make_unique<detail::PardisoBackend<Scalar>>(config.threads);
     } else if (config.backend == SolverBackend::gmres_ilut) {
-        backend_ = std::make_unique<detail::IlutBackend<Scalar>>(config.ilut_drop_tolerance,
-                                                                 config.ilut_fill_factor);
-        gmres_ = std::make_unique<detail::Gmres<Scalar>>();
         if (config.threads > 1) pool_ = std::make_unique<base::ThreadPool>(config.threads);
+        if constexpr (std::same_as<Scalar, double>) {
+            if (config.preconditioner == Preconditioner::amg) {
+                backend_ = std::make_unique<detail::AmgBackend>(
+                    detail::AmgSettings{
+                        .strength_threshold = config.amg_strength_threshold,
+                        .smoother_degree = config.amg_smoother_degree,
+                        .coarse_size = static_cast<std::size_t>(config.amg_coarse_size),
+                        .max_levels = config.amg_max_levels},
+                    pool_.get());
+            }
+        }
+        if (!backend_) {
+            backend_ = std::make_unique<detail::IlutBackend<Scalar>>(config.ilut_drop_tolerance,
+                                                                     config.ilut_fill_factor);
+        }
+        gmres_ = std::make_unique<detail::Gmres<Scalar>>();
     } else {
         backend_ = std::make_unique<detail::SparseLuBackend<Scalar>>();
     }
@@ -375,6 +424,7 @@ std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::facto
         weighted_row_max_[r] = weighted;
     }
 
+    backend_->set_scales(row_scale_, col_scale_, config_.equilibrate);
     direct_ = false;
     auto factorization = check_pivots(backend_->factorize(scaled_values_));
     // gmres_ilut (LQ2): an ILUT that cannot be built falls back to SparseLU; running out of

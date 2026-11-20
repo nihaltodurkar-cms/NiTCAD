@@ -44,6 +44,10 @@ public:
     // x = A^-T b with the last factorization (the transpose, not the conjugate transpose, for a
     // complex A). Requires can_transpose(); b and x have the analyzed dimension.
     virtual void solve_transposed(std::span<const Scalar> /*b*/, std::span<Scalar> /*x*/) {}
+    // The row and column scales R and C of the equilibration (applied: the values factorize receives
+    // are R A C), given before every factorize. Only AMG uses them (Unit 58 SD3).
+    virtual void set_scales(std::span<const double> /*rows*/, std::span<const double> /*columns*/,
+                            bool /*applied*/) {}
 
     // The backend's own work, counted where it is done (BackendCounts).
     [[nodiscard]] const BackendCounts& counts() const noexcept { return counts_; }

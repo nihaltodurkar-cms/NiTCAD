@@ -94,6 +94,17 @@ enum class LinearFallback : std::uint8_t {
     none,
 };
 
+// The preconditioner of gmres_ilut's GMRES (Unit 58 SD3, SQ7 a: the deck's backend = gmres with
+// preconditioner = ...; gmres_ilut is that backend, its run identity unchanged with ilut).
+enum class Preconditioner : std::uint8_t {
+    // Eigen's IncompleteLUT (Unit 44), real and complex.
+    ilut,
+    // Smoothed-aggregation algebraic multigrid, one V-cycle per application, real matrices only
+    // (src/linalg/amg.hpp). Its hierarchy is built by factorize, its coarsening once per pattern.
+    // Every thread count gives the same bits.
+    amg,
+};
+
 struct SolverConfig {
     SolverBackend backend = SolverBackend::eigen_sparse_lu;
     // Thread count (6.8: default 1). eigen_sparse_lu accepts only 1; mkl_pardiso 1 to 1024 (MKL
@@ -136,6 +147,19 @@ struct SolverConfig {
     // ILUT fill, 1 to 1000: each row of L and of U keeps at most fill * nnz(A) / (2 n) entries.
     int ilut_fill_factor = 10;
     LinearFallback fallback = LinearFallback::sparse_lu;
+    // gmres_ilut only: anything but ilut with another backend, or amg for a complex matrix, is
+    // invalid_input. The amg_* settings are validated for every backend.
+    Preconditioner preconditioner = Preconditioner::ilut;
+    // AMG strength of connection theta, in [0, 1): j is a strong neighbour of i if
+    // |a_ij| >= theta sqrt(|a_ii a_jj|).
+    double amg_strength_threshold = 0.08;
+    // Chebyshev smoother degree (matrix products per pre- or post-smoothing), 1 to 10.
+    int amg_smoother_degree = 2;
+    // A level of at most this many unknowns is the coarsest and is factorized by SparseLU, 1 to
+    // 100000.
+    int amg_coarse_size = 1000;
+    // Levels including the finest, 2 to 50.
+    int amg_max_levels = 10;
 };
 
 struct FactorizationReport {

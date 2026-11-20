@@ -3,6 +3,7 @@
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_profile]"
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_series]"
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_threads]"   (slice 1)
+//   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_amg]"       (slice 2)
 // Measurement only: nothing here is gated beyond the cases solving, and no product code changes.
 //
 // Two measurements per case and linear-solver configuration, from the same start (the case's bias
@@ -32,6 +33,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/energy.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/deck/build.hpp"
@@ -479,6 +481,108 @@ TEST_CASE("solver profile: GMRES-ILUT with the thread pool (Unit 58 slice 1)", "
                         nodes, x.size(), threads, build, solve, r->iterations.value_or(0), differ);
             std::fflush(stdout);
             REQUIRE(differ == 0);
+        }
+    }
+}
+
+namespace {
+
+// One linear solve with a fresh solver: build (analysis and factorization or preconditioner), solve,
+// GMRES products, held memory; a failure is printed, not fatal (strict runs show their failures).
+void one_solve(const char* name, const linalg::SparseMatrix& a, std::span<const double> b,
+               const linalg::SolverConfig& config) {
+    const ProcessMemory before = process_memory();
+    auto solver = *linalg::LinearSolver::create(config);
+    std::vector<double> x(b.size());
+    std::string error;
+    std::size_t iterations = 0;
+    double backward = 0.0, build_s = 0.0, solve_s = 0.0, held = 0.0;
+    std::optional<std::size_t> fill;
+    auto t0 = clock_type::now();
+    if (auto f = solver.factorize(a); !f) {
+        error = f.error().message;
+    } else {
+        build_s = since(t0);
+        fill = f->fill;
+        held = process_memory().private_MB - before.private_MB;
+        t0 = clock_type::now();
+        if (auto r = solver.solve(b, x); !r) {
+            error = r.error().message;
+        } else {
+            iterations = r->iterations.value_or(0);
+            backward = r->backward_error;
+        }
+        solve_s = since(t0);
+    }
+    std::printf("  %-24s build %.2f s, solve %.2f s, total %.2f s, %zu GMRES products, backward "
+                "error %.1e, fill %zu, held %.0f MB%s%s\n",
+                name, build_s, solve_s, build_s + solve_s, iterations, backward, fill.value_or(0),
+                held, error.empty() ? "" : "; failed: ", error.c_str());
+    std::fflush(stdout);
+}
+
+// The equilibrium Poisson Jacobian (Formulation::equilibrium, one unknown per node) at the given
+// potential (V), and its residual as the right-hand side.
+linalg::SparseMatrix equilibrium_jacobian(const device::Device& d, std::span<const double> potential_V,
+                                          std::vector<double>& rhs) {
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::create_equilibrium(d, scaling);
+    std::vector<double> psi(potential_V.size());
+    for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = potential_V[i] / scaling.V_T;
+    linalg::SparseMatrix j = system.make_jacobian();
+    rhs.assign(psi.size(), 0.0);
+    system.evaluate(psi, rhs, j);
+    return j;
+}
+
+}  // namespace
+
+TEST_CASE("solver profile: GMRES-AMG on the 3D diode series (Unit 58 slice 2)", "[.scale_amg]") {
+    // SG4's AMG part: one solve of the equilibrium Poisson Jacobian, at the charge-neutral guess (the
+    // first Newton step) and at the converged potential, GMRES-AMG against GMRES-ILUT, strict. Then
+    // SD3's comparison: GMRES-AMG on the whole drift-diffusion Jacobian at 0.5 V (as
+    // [.scale_series]), up to 40^3. Threads: AMG at 6 threads on the converged Poisson system.
+    const linalg::SolverConfig ilut{.backend = linalg::SolverBackend::gmres_ilut,
+                                    .fallback = linalg::LinearFallback::none};
+    linalg::SolverConfig amg = ilut;
+    amg.preconditioner = linalg::Preconditioner::amg;
+    linalg::SolverConfig amg6 = amg;
+    amg6.threads = 6;
+    for (const int nodes : {20, 30, 40, 50, 60, 70}) {
+        const auto d = diode_3d(nodes);
+        const auto eq = solve::solve_equilibrium(d, {.linear = helper_solver()});
+        REQUIRE(eq.has_value());
+        std::vector<double> guess_V;
+        {
+            const auto scaling = *assemble::make_scaling(d);
+            const auto system = *assemble::create_equilibrium(d, scaling);
+            for (const double psi : assemble::charge_neutral_potential(system)) {
+                guess_V.push_back(psi * scaling.V_T);
+            }
+        }
+        std::vector<double> rhs;
+        const linalg::SparseMatrix first = equilibrium_jacobian(d, guess_V, rhs);
+        std::printf("\n=== amg %d^3: Poisson %zu unknowns, %zu nonzeros; first Newton step\n", nodes,
+                    static_cast<std::size_t>(first.rows()), first.nonzeros());
+        one_solve("GMRES-ILUT", first, rhs, ilut);
+        one_solve("GMRES-AMG", first, rhs, amg);
+        std::vector<double> rhs_eq;
+        const linalg::SparseMatrix converged = equilibrium_jacobian(d, eq->fields.potential_V, rhs_eq);
+        // At the converged state the residual is at rounding level: solve for a unit-size one.
+        for (std::size_t i = 0; i < rhs_eq.size(); ++i) {
+            rhs_eq[i] = std::sin(0.37 * static_cast<double>(i)) + 1e-3;
+        }
+        std::printf("  converged potential:\n");
+        one_solve("GMRES-ILUT", converged, rhs_eq, ilut);
+        one_solve("GMRES-AMG", converged, rhs_eq, amg);
+        one_solve("GMRES-AMG 6 threads", converged, rhs_eq, amg6);
+        if (nodes <= 40) {
+            std::vector<double> rhs_dd;
+            const linalg::SparseMatrix j =
+                device_jacobian(d, std::vector<double>{0.5, 0.0}, eq->fields.potential_V, rhs_dd);
+            std::printf("  drift-diffusion at 0.5 V, %zu unknowns:\n", static_cast<std::size_t>(j.rows()));
+            one_solve("GMRES-ILUT", j, rhs_dd, ilut);
+            one_solve("GMRES-AMG (whole system)", j, rhs_dd, amg);
         }
     }
 }

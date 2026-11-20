@@ -2157,6 +2157,79 @@ ILUT, one solve; peak memory as the solver's held private bytes):
   fix, which only touches that test. On the rebase onto main 737cfc3 (2026-11-20) this file takes main's own fix
   (PR #103, 9fdffca: `FAIL_CHECK` before the return), so the branch no longer changes it. Not run: NG1-style traces.
 
+**Slice 2 (SD3), 2026-11-20 (owner "start slice 2 of Unit 58"; standing "choose recommended").**
+- **As built.** `src/linalg/amg.{hpp,cpp}` (private, Eigen-free): smoothed-aggregation AMG as GMRES's right
+  preconditioner, one V-cycle per application. `SolverConfig::preconditioner = ilut | amg` (default `ilut`) with
+  `amg_strength_threshold` (θ, default 0.08, [0, 1)), `amg_smoother_degree` (2, 1–10), `amg_coarse_size` (1000,
+  1–100000), `amg_max_levels` (10, 2–50), validated for every backend. `amg` needs the `gmres_ilut` backend and a
+  real matrix (complex is invalid_input: small signal stays on SparseLU, LQ3a). The run record digests
+  `linear.preconditioner` and the `amg_*` keys only when the preconditioner is not ILUT (SG1: identities unchanged).
+  The deck keys (SD6) are not in this slice. A hierarchy that cannot be built (a coarsest level SparseLU rejects, a
+  non-finite entry) is inaccurate_solve, so the fallback and `fallback = none` behave as for ILUT. Setup is serial;
+  the V-cycle's products and vector updates run on the slice-1 pool, per index in fixed chunks.
+- **Design rulings under "choose recommended"** (SD3's text against measurements; no criterion touched):
+  1. *Similarity scaling.* SD3 said "runs on the equilibrated matrix, like ILUT". R A C is not symmetric when A is, and
+     Galerkin with R = Pᵀ then failed: a heterogeneous Poisson problem (conductances 2⁻¹⁰–2¹⁰) did not converge in
+     1000 iterations on R A C. AMG is built on the similar matrix U (R A C) U⁻¹ = G A G (U = √(C/R), G = √(RC)) and
+     applied as U⁻¹ V(U v); the near-null vector is 1/G (the constant of the original unknowns).
+  2. *Weighted lumping.* Weak entries are lumped into the filtered diagonal weighted by the near-null vector
+     (a_ii += a_ij b_j / b_i), so A_F b = A b. With plain lumping the equilibrated heterogeneous case took 146
+     iterations against 20 unscaled; weighted, 22.
+  3. *Diagonal, not l1.* SD3's l1 scaling is not invariant under the symmetric scaling (120 against 46 iterations).
+     The prolongator smoother and the Chebyshev smoother use the true diagonal; λ_max(D⁻¹A) is estimated by 15 power
+     iterations from a fixed pseudo-random vector (serial, so bit-reproducible), times 1.1; ω = 4/(3λ).
+  4. *Chebyshev interval [λ/10, λ]* (not λ/30): 2D Poisson 129² 10 iterations against 14, heterogeneous 17 against 22.
+  5. *A stalled coarsening is smoothed, not factorized.* On the equilibrium Poisson systems (diagonally dominant) the
+     first version made every weakly coupled node a singleton, the coarsening stopped near the full size, and SparseLU
+     got that level (40³: 7.0 M stored against 0.8 M). A level that stalls (no aggregate, or shrinking by less than
+     10%) above `coarse_size` is now only smoothed. Leaving unconnected nodes out of aggregates instead (Vaněk's
+     isolated nodes) measured worse on coarse levels (48³ Poisson 16 against 12 iterations) and was not kept.
+- **Tests (`tests/linalg/amg_test.cpp`, 13 cases):** transpose, product and the pooled product against dense
+  arithmetic; the coarsening of a chain (aggregates, Dirichlet rows isolated, repeatable); strength symmetry and θ;
+  Rᵀ = P and A_c = PᵀAP by dense arithmetic on every level; the configuration checks; GMRES-AMG strict on 2D
+  Poisson 33²–257² (9, 9, 10, 10 iterations) and 3D 16³–48³ (9, 10, 12), each checked by an independent backward
+  error; the equilibrated heterogeneous case (17; homogeneous 10); convection 0.5 (14); degrees 1–5 and level limits;
+  a stalled diagonally dominant matrix (one smoothed level, nothing stored); one analysis per pattern, one hierarchy
+  per matrix, repeat bits; the coarsening kept for a later matrix of the same pattern; a singular coarsest level
+  (strict: inaccurate_solve; fallback: SparseLU's singular_system); 1, 2, 3, 4, 6, 8 threads bit-identical (200²,
+  16 iterations, several cycles). Linalg suite (Release): 96 cases pass.
+- **Limitation (recorded, not hidden): whole-system AMG fails on convection-dominated and coupled systems.** Upwind
+  convection at cell Péclet 2 and the coupled badly scaled fixture do not converge in 1000 iterations (the fallback
+  solves them), nor does the 3D diode's drift-diffusion Jacobian at 0.5 V at 20³, 30³ or 40³ (below). This is the case
+  CPR (SD4, slice 3) exists for: AMG on the ψ block only.
+- **Measured (`[.scale_amg]`, Release, pinned to the P cores; one fresh solve: build and solve).** The equilibrium
+  Poisson Jacobian of the 3D diode (one unknown per node), at the charge-neutral guess and at the converged potential
+  (unit right-hand side), strict:
+
+| Size (unknowns) | GMRES-ILUT, first step: total, its, held | GMRES-AMG, first step | GMRES-ILUT, converged | GMRES-AMG, converged: 1 / 6 threads |
+|---|---|---|---|---|
+| 20³ (8,000) | 0.02 s, 4, 9 MB | 0.01 s, 7, 5 MB | 0.02 s, 3 | 0.01 s, 8 / 0.01 s |
+| 30³ (27,000) | 0.08 s, 5, 30 MB | 0.05 s, 12, 24 MB | 0.09 s, 4 | 0.05 s, 9 / 0.04 s |
+| 40³ (64,000) | 0.26 s, 5, 70 MB | 0.11 s, 11, 35 MB | 0.29 s, 6 | 0.13 s, 9 / 0.09 s |
+| 50³ (125,000) | 0.63 s, 6, 136 MB | 0.25 s, 11, 73 MB | 0.70 s, 7 | 0.25 s, 9 / 0.19 s |
+| 60³ (216,000) | 1.57 s, 7, 236 MB | 0.59 s, 12, 121 MB | 1.71 s, 9 | 0.53 s, 9 / 0.40 s |
+| 70³ (343,000) | 2.45 s, 7, 382 MB | 0.87 s, 12, 182 MB | 3.10 s, 10 | 0.87 s, 9 / 3.90 s (see below) |
+
+  - **SG4 (AMG part), equilibrium Poisson:** iterations grow 7 → 12 (**1.71×, misses ≤ 1.5×**) at the first Newton
+    step and 8 → 9 (**1.13×, passes**) at the converged potential, from 8,000 to 343,000 unknowns. The first step's
+    growth is the 20³ point (7); from 30³ on it is 12, 11, 11, 12, 12. ILUT on these systems grows 4 → 7 and 3 → 10:
+    the equilibrium Poisson rows are strongly diagonally dominant, so they are easy for both. SG4's CPR part is slice 3.
+  - **Speed and memory on these systems:** AMG is 2.6–3.6× faster than ILUT from 40³ and holds half the memory.
+  - **Threads:** 6 threads gave 1.3–1.5× on the AMG solve up to 60³ (bits identical, checked in the unit test). At 70³
+    the 6-thread solve took 3.35 s against 0.41 s at one thread: a single run, not repeated; recorded as observed
+    and to be re-measured with slice 3's thread runs before any SG6 judgement.
+  - **Drift-diffusion at 0.5 V, whole-system AMG** (SD3's comparison): fails strict at 20³, 30³, 40³ (1000 products;
+    2.8, 12.0, 35.9 s); GMRES-ILUT solves them in 40, 60, 90 products (0.88, 4.16, 10.87 s), as in slice 0.
+- **SG9 (mutants): 17 of 17 caught** (scripts `C:\Users\disha\bisect-tools\mutants58s2.sh` and `mutants58s2b.sh`): SG9's
+  aggregation in a hashed order, a missing Galerkin transpose (R from the tentative P), the smoother's and the
+  prolongator's damping off by 2; and the equilibration not passed to AMG, unweighted lumping, the coarse correction
+  dropped, no post-smoothing, λ underestimated by 2, the coarsening rebuilt per matrix, Dirichlet rows with explicit
+  zeros aggregated (survived the first run; caught after a test with explicit-zero contact rows was added), one-way
+  strength, a coarse LU failure ignored, the product overwriting instead of adding, AMG never selected, complex AMG
+  accepted, a stalled level factorized. SG9's CPR and gather mutants belong to slices 3 and 4.
+- **Not run:** the full Release and Debug suites (owner's word needed; Debug builds also need it), FG1/FG2 traces,
+  the cross-core probe (as slice 1: no cache-dependent blocking in the AMG kernels).
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
