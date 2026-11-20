@@ -33,7 +33,8 @@ constexpr std::array<std::string_view, 2> ionization_levels{"fixed", "altermatt"
 constexpr std::array<std::string_view, 2> equations{"drift_diffusion", "equilibrium_poisson"};
 constexpr std::array<std::string_view, 3> line_search{"off", "residual", "natural"};
 constexpr std::array<std::string_view, 2> natural_norm{"convergence", "weighted"};
-constexpr std::array<std::string_view, 3> backends{"eigen", "pardiso", "gmres_ilut"};
+constexpr std::array<std::string_view, 4> backends{"eigen", "pardiso", "gmres", "gmres_ilut"};
+constexpr std::array<std::string_view, 3> preconditioners{"ilut", "amg", "cpr"};
 constexpr std::array<std::string_view, 2> fallbacks{"sparse_lu", "none"};
 constexpr std::array<std::string_view, 2> integrators{"bdf2", "backward_euler"};
 constexpr std::array<std::string_view, 6> waveforms{"constant", "step", "ramp", "pulse", "pwl", "sine"};
@@ -160,7 +161,7 @@ constexpr std::array<KeyInfo, 25> model_keys{{
     {"energy_balance", 0, false, "off", "carrier temperatures (energy balance)", on_off, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 27> solver_keys{{
+constexpr std::array<KeyInfo, 32> solver_keys{{
     {"equations", 0, false, "drift_diffusion", "drift_diffusion | equilibrium_poisson", equations, {}, {}},
     {"max_iterations", 0, false, "100", "Newton iterations per point", {}, {}, {}},
     {"tol_update", 0, false, "1e-8", "convergence: largest scaled update", {}, {}, {}},
@@ -172,7 +173,7 @@ constexpr std::array<KeyInfo, 27> solver_keys{{
     {"max_cuts", 0, false, "0", "bias step cuts (0: off)", {}, {}, {}},
     {"growth", 0, false, "2", "sub-step growth after convergence", {}, {}, {}},
     {"cut_max_iterations", 0, false, "25", "Newton iterations per sub-step", {}, {}, {}},
-    {"backend", 0, false, "eigen", "eigen | pardiso | gmres_ilut", backends, {}, {}},
+    {"backend", 0, false, "eigen", "eigen | pardiso | gmres | gmres_ilut", backends, {}, {}},
     {"mkl", 0, false, "<path to mkl_rt>", "pardiso: the MKL runtime to load", {}, {}, {}},
     {"threads", 0, false, "1", "linear solver threads", {}, {}, {}},
     {"equilibrate", 0, false, "on", "scale the linear system", on_off, {}, {}},
@@ -184,6 +185,11 @@ constexpr std::array<KeyInfo, 27> solver_keys{{
     {"ilut_drop", 0, false, "1e-4", "gmres_ilut: drop tolerance", {}, {}, {}},
     {"ilut_fill", 0, false, "10", "gmres_ilut: fill factor", {}, {}, {}},
     {"linear_fallback", 0, false, "sparse_lu", "gmres_ilut: sparse_lu | none", fallbacks, {}, {}},
+    {"preconditioner", 0, false, "ilut", "gmres: ilut | amg | cpr", preconditioners, {}, {}},
+    {"amg_strength_threshold", 0, false, "0.08", "amg, cpr: strength of connection", {}, {}, {}},
+    {"amg_smoother_degree", 0, false, "2", "amg, cpr: Chebyshev degree", {}, {}, {}},
+    {"amg_coarse_size", 0, false, "1000", "amg, cpr: coarsest level size", {}, {}, {}},
+    {"amg_max_levels", 0, false, "10", "amg, cpr: levels", {}, {}, {}},
     {"Ns", 0, false, "<cm^-3>", "the density scale", {}, {}, {}},
     {"weighted_current", 0, false, "off", "weighted terminal current", on_off, {}, {}},
     {"rates", 0, false, "on", "store generation-recombination rates", on_off, {}, {}},

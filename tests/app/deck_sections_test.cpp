@@ -25,7 +25,8 @@ std::string fingerprint(const deck::Plan& p) {
     const auto& t = p.transient;
     return std::format(
         "T {} mesh {:x} | models {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} | newton {} {} {} {} {} {} {} {} | "
-        "steps {} {} {} | linear {} {} {} {} {} {} {} {} {} {} {} | eq {} w {} r {} | tr {} {} {} {} {}",
+        "steps {} {} {} | linear {} {} {} {} {} {} {} {} {} {} {} | pc {} {} {} {} {} | "
+        "eq {} w {} r {} | tr {} {} {} {} {}",
         p.device.temperature_K(), mesh::graph_digest(p.device.mesh()), m.doping_mobility,
         static_cast<int>(m.hole_mobility), static_cast<int>(m.electron_mobility), m.srh, m.auger, m.bgn,
         m.field_mobility, m.fermi_dirac, m.radiative, m.incomplete_ionization, static_cast<int>(m.ionization_levels),
@@ -35,7 +36,9 @@ std::string fingerprint(const deck::Plan& p) {
         static_cast<int>(n.line_search.norm),
         s.max_cuts, s.growth, s.max_iterations, static_cast<int>(l.backend), l.threads, l.equilibrate,
         l.max_backward_error, l.max_refinement_steps, l.min_pivot_ratio, l.restart, l.max_iterations,
-        l.ilut_drop_tolerance, l.ilut_fill_factor, static_cast<int>(l.fallback), static_cast<int>(p.options.equations),
+        l.ilut_drop_tolerance, l.ilut_fill_factor, static_cast<int>(l.fallback),
+        static_cast<int>(l.preconditioner), l.amg_strength_threshold, l.amg_smoother_degree, l.amg_coarse_size,
+        l.amg_max_levels, static_cast<int>(p.options.equations),
         p.options.weighted_current, p.options.store_rates, static_cast<int>(t.integrator), t.adaptive, t.rtol,
         t.density_ref_cm3, t.fields_every_step);
 }
@@ -80,7 +83,7 @@ TEST_CASE("app deck sections: the menus and the keys they offer", "[app]") {
     CHECK(app::to_string(app::DeckMenu::physics) == "Physics");
     CHECK(app::menu_sections(app::DeckMenu::device).front().kind == "device");
     CHECK(app::menu_sections(app::DeckMenu::physics).size() == 1);
-    CHECK(app::find_section_spec("solver")->keys.size() == 25);
+    CHECK(app::find_section_spec("solver")->keys.size() == 30);  // Unit 58: preconditioner, amg_*
     CHECK(app::find_section_spec("unknown") == nullptr);
     const auto keys_of = [](const std::string& text, const char* kind) {
         std::vector<std::string> out;
@@ -96,7 +99,7 @@ TEST_CASE("app deck sections: the menus and the keys they offer", "[app]") {
     // A key the section has is not offered again.
     const std::string with = app_test::diode_device + "[solver]\nmax_iterations = 50\n";
     const auto solver = keys_of(with, "solver");
-    CHECK(solver.size() == 24);
+    CHECK(solver.size() == 29);
     CHECK(std::ranges::find(solver, "max_iterations") == solver.end());
 }
 

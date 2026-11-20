@@ -45,7 +45,7 @@ constexpr std::array<KeySpec, 25> model_keys{{
     {"energy_balance", "off", "carrier temperatures (energy balance)"},
 }};
 
-constexpr std::array<KeySpec, 25> solver_keys{{
+constexpr std::array<KeySpec, 30> solver_keys{{
     {"equations", "drift_diffusion", "drift_diffusion | equilibrium_poisson"},
     {"max_iterations", "100", "Newton iterations per point"},
     {"tol_update", "1e-8", "convergence: largest scaled update"},
@@ -57,7 +57,7 @@ constexpr std::array<KeySpec, 25> solver_keys{{
     {"max_cuts", "0", "bias step cuts (0: off)"},
     {"growth", "2", "sub-step growth after convergence"},
     {"cut_max_iterations", "25", "Newton iterations per sub-step"},
-    {"backend", "eigen", "eigen | pardiso | gmres_ilut"},
+    {"backend", "eigen", "eigen | pardiso | gmres | gmres_ilut"},
     {"threads", "1", "linear solver threads"},
     {"equilibrate", "on", "scale the linear system"},
     {"max_backward_error", "1e-8", "linear solve acceptance"},
@@ -68,6 +68,11 @@ constexpr std::array<KeySpec, 25> solver_keys{{
     {"ilut_drop", "1e-4", "gmres_ilut: drop tolerance"},
     {"ilut_fill", "10", "gmres_ilut: fill factor"},
     {"linear_fallback", "sparse_lu", "gmres_ilut: sparse_lu | none"},
+    {"preconditioner", "ilut", "gmres: ilut | amg | cpr"},
+    {"amg_strength_threshold", "0.08", "amg, cpr: strength of connection"},
+    {"amg_smoother_degree", "2", "amg, cpr: Chebyshev degree"},
+    {"amg_coarse_size", "1000", "amg, cpr: coarsest level size"},
+    {"amg_max_levels", "10", "amg, cpr: levels"},
     {"weighted_current", "off", "weighted terminal current"},
     {"rates", "on", "store generation-recombination rates"},
     {"minority_floor", "off", "densities against eps of the majority"},

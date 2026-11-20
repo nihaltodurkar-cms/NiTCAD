@@ -2322,6 +2322,31 @@ ILUT, one solve; peak memory as the solver's held private bytes):
 - **Not run:** the full Release and Debug suites (owner's word needed), FG1/FG2 traces, the FinFET deck sweep
   (SG6, needs SD6's deck keys).
 
+**Wrap-up, 2026-11-20 (owner "choose recommended" after slice 3, then "go with item 1").** The recommendation
+chosen: build SD6's deck keys, record slice 4 as not built under SQ4 (a), do not start multigrid on the carrier
+blocks (SQ2 b or c would be a new proposal with its own criteria fixed before code), and update ARCHITECTURE.md.
+- **SD6 (deck), as built.** `[solver] backend = gmres` is `gmres_ilut` (SQ7 a: the same backend and run identity;
+  `gmres_ilut` stays accepted). `preconditioner = ilut | amg | cpr` (default `ilut`); `amg_strength_threshold`
+  ([0, 1)), `amg_smoother_degree` (1–10), `amg_coarse_size` (1–100000), `amg_max_levels` (2–50); `threads` already
+  reached `gmres`. A preconditioner other than ilut with another backend is a deck error. The app's deck vocabulary
+  (`backends`, `preconditioners`, five solver keys) and the section menu carry the new keys. Tests: `deck build:
+  backend = gmres, the preconditioner and the amg keys` (gmres with an unchanged identity, ilut explicit unchanged,
+  amg and cpr selected, each amg key in the identity with cpr, the range and backend errors), the Unit 44 key test's
+  unknown-backend message, the app's deck sections and vocabulary tests (solver keys 25 → 30). Targeted runs pass:
+  those two deck-build cases, `app deck sections*` (4), `app vocabulary*` (8).
+- **Slice 4 (SD5, parallel assembly): not built.** SQ4 (a) builds it only if assembly is ≥ 10% of a Newton iteration
+  after SD4. Slice 0 measured it at ≤ 2% on every 3D case with GMRES-ILUT, and CPR does not shorten the linear part
+  (1.01–1.06× GMRES-ILUT's time per step, slice 3), so the share stays at ≤ 2%. No separate profile was run.
+- **SG6's FinFET deck sweep:** not run. The deck keys now allow it, but slice 3's measurements already show that
+  GMRES-CPR has no thread gain, so it cannot beat PARDISO at 6 threads.
+- **ARCHITECTURE.md:** 6.10 gains "As built (Unit 58)" (the pool, the preconditioners and their deck keys, AMG, CPR
+  and its measured limit, parallel assembly not built). The 11.3 row now says what Unit 58 built; its next step is
+  multigrid on the carrier blocks.
+- **Unit 58's open results:** SG1–SG3 met; SG4–SG7 missed (recorded, not loosened); SG8 not applicable (no parallel
+  assembly); SG9 met per slice (mutants 9, 17, 15); SG10 met (labels are plain integers, no Eigen in public headers,
+  no new dependency). The full Release and Debug suites have not run on slices 2–3 and this wrap-up (owner's word
+  needed).
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

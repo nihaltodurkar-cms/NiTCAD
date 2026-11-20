@@ -601,12 +601,60 @@ linear_fallback = none
         INFO(message);
         CHECK(message.find(what) != std::string::npos);
     };
-    expect("backend = gmres", "t.deck:14: backend is eigen, pardiso or gmres_ilut");
+    expect("backend = cuda", "t.deck:14: backend is eigen, pardiso, gmres or gmres_ilut");
     expect("restart = 0", "t.deck:14: 'restart' must lie in 1..1000");
     expect("max_linear_iterations = 0", "t.deck:14: 'max_linear_iterations' must lie in 1..");
     expect("ilut_drop = 1", "t.deck:14: ilut_drop is in [0, 1)");
     expect("ilut_fill = 1001", "t.deck:14: 'ilut_fill' must lie in 1..1000");
     expect("linear_fallback = pardiso", "t.deck:14: linear_fallback is sparse_lu or none");
+}
+
+TEST_CASE("deck build: backend = gmres, the preconditioner and the amg keys (Unit 58 SD6, SQ7)", "[deck]") {
+    const auto identity = [](const deck::Plan& q) {
+        return solve::make_run_record(q.device, q.options, q.points).input_identity;
+    };
+    // gmres is gmres_ilut, with an unchanged identity; ilut is the default preconditioner.
+    const deck::Plan old = must(diode_deck + "[solver]\nbackend = gmres_ilut\n");
+    const deck::Plan gmres = must(diode_deck + "[solver]\nbackend = gmres\n");
+    CHECK(gmres.options.linear.backend == linalg::SolverBackend::gmres_ilut);
+    CHECK(gmres.options.linear.preconditioner == linalg::Preconditioner::ilut);
+    CHECK(identity(gmres) == identity(old));
+    CHECK(identity(must(diode_deck + "[solver]\nbackend = gmres\npreconditioner = ilut\n")) == identity(old));
+    const std::string cpr = "[solver]\nbackend = gmres\npreconditioner = cpr\n";
+    const deck::Plan c = must(diode_deck + cpr);
+    CHECK(c.options.linear.preconditioner == linalg::Preconditioner::cpr);
+    CHECK(must(diode_deck + "[solver]\nbackend = gmres\npreconditioner = amg\n").options.linear.preconditioner ==
+          linalg::Preconditioner::amg);
+    CHECK(identity(c) != identity(old));
+    const deck::Plan k = must(diode_deck + cpr +
+                              "amg_strength_threshold = 0.1\namg_smoother_degree = 3\namg_coarse_size = 500\n"
+                              "amg_max_levels = 6\nthreads = 4\n");
+    const linalg::SolverConfig& l = k.options.linear;
+    CHECK(l.amg_strength_threshold == 0.1);
+    CHECK(l.amg_smoother_degree == 3);
+    CHECK(l.amg_coarse_size == 500);
+    CHECK(l.amg_max_levels == 6);
+    CHECK(l.threads == 4);
+    for (const char* key : {"amg_strength_threshold = 0.1", "amg_smoother_degree = 3", "amg_coarse_size = 500",
+                            "amg_max_levels = 6"}) {
+        CAPTURE(key);
+        CHECK(identity(must(diode_deck + cpr + key + "\n")) != identity(c));
+    }
+
+    const std::string head = "[mesh]\ntype = tensor\nx = 0, 1um, 2um\n[region si]\nmaterial = silicon\n"
+                             "[contact a]\nkind = ohmic\npatch = x_min\n[contact b]\nkind = ohmic\npatch = x_max\n"
+                             "[equilibrium]\n[solver]\n";
+    const auto expect = [&](const std::string& entry, const std::string& what) {
+        const std::string message = failure(head + entry + "\n");
+        INFO(message);
+        CHECK(message.find(what) != std::string::npos);
+    };
+    expect("preconditioner = jacobi", "t.deck:14: preconditioner is ilut, amg or cpr");
+    expect("preconditioner = cpr", "preconditioner = amg or cpr needs backend = gmres");
+    expect("backend = gmres\namg_strength_threshold = 1", "t.deck:15: amg_strength_threshold is in [0, 1)");
+    expect("amg_smoother_degree = 11", "t.deck:14: 'amg_smoother_degree' must lie in 1..10");
+    expect("amg_coarse_size = 0", "t.deck:14: 'amg_coarse_size' must lie in 1..100000");
+    expect("amg_max_levels = 1", "t.deck:14: 'amg_max_levels' must lie in 2..50");
 }
 
 TEST_CASE("deck build: rates = off (Unit 45, RQ1)", "[deck]") {
