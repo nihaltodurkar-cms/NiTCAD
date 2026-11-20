@@ -1214,6 +1214,26 @@ importing GDS/DXF; meshing controls drawn on the canvas (refinement boxes).
 - **GQ4 — tensor decks.** (a) edited too, rectangles only (a tensor region takes boxes), the grid lines kept;
   (b) converted to `generate2d` on the first edit. **Recommended (a)** with (b) offered by a button; ruled (a).
 
+**Slice 0 results (2026-11-20; GD1, GD2):** `mesh::layered_partition2d` (`src/mesh/layered2d.cpp`) and the deck's
+`layered = on` / `domain` keys with region `box` and `polygon` layered in deck order.
+- **GE2 met:** 1000 seeded random rectilinear layouts (1–30 shapes, past the domain and overlapping, five regions) tile
+  exactly: simple counter-clockwise polygons, no vertex inside another polygon's edge, every unit cell's centre in
+  exactly one polygon of the topmost shape's region, the areas per region exact. A ring (a hole) and a C whose ends
+  touch at a corner are cut into simple pieces. A layered deck (a junction under an oxide, with a T-junction) builds
+  to the same mesh digest and node regions as its hand tiling.
+- **GE5 (partition part) met:** 200 random rectangles on a 1000² lattice resolve in 1.8–2.0 ms (median of 5, three
+  runs; 43 polygons). The first version took 16 ms; what fixed it: each row painted top shape down with every cell
+  written once, parts labelled and their boundary edges found in one pass each, span flood fills, and the breakpoint
+  lines hidden under later shapes merged away first (exact: such a line carries no polygon edge).
+- **GE9 for slice 0 met:** 10 hand mutants caught: the replace order reversed; T-junctions not inserted; a hole not
+  cut; a pinch not cut; hidden rows judged by one column; the background ignored; the clamp past the domain wrong;
+  slanted edges accepted; the deck's domain read wrongly; `domain` accepted without `layered`.
+- **GE1:** the mesh suite passes (147 cases). The deck build suite's four failures are the working tree's own: three
+  FinFET decks deleted from `decks/` and `finfet_3d.deck` edited (uncommitted, not this unit's), so their tests
+  cannot open or match them.
+- **Limitation recorded:** a cut (for a hole or a pinch) is a same-region internal edge; where one ends on the outer
+  boundary it splits that boundary edge, so a patch across that point is refused by the mesher, as on a hand tiling.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

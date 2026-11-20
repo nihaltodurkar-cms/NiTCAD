@@ -489,9 +489,16 @@ std::expected<void, base::Error> Builder::tensor_mesh(const Section& s, device::
 std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
     mesh::Geometry2D g;
     mesh::MeshOptions2D o;
+    bool layered = false;            // Unit 26k (GD1): the regions' shapes layered in deck order
+    const Entry* domain = nullptr;   // the layered domain, x0 x1 y0 y1 (default: the shapes' bounds)
     for (const Entry& e : s.entries) {
         if (e.key == "type") continue;
-        if (e.key.starts_with("patch ")) {
+        if (e.key == "layered") {
+            NITCAD_DECK_TRY(v, flag(e));
+            layered = v;
+        } else if (e.key == "domain") {
+            domain = &e;
+        } else if (e.key.starts_with("patch ")) {
             NITCAD_DECK_TRY(ab, points(e, e.value, 2));
             if (ab.size() != 2) return std::unexpected(at(e.line, "a patch is two points"));
             g.patches.push_back({e.key.substr(6), ab[0], ab[1]});
@@ -514,15 +521,76 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
             return std::unexpected(unknown(e, s));
         }
     }
-    for (std::size_t r = 0; r < regions_.size(); ++r) {
-        const RegionSpec& spec = regions_[r];
-        if (!spec.boxes.empty() || !spec.seeds.empty()) {
-            return std::unexpected(at((spec.boxes.empty() ? spec.seeds : spec.boxes).front()->line,
-                                      "a generate2d mesh takes polygon in its regions"));
+    if (domain != nullptr && !layered) return std::unexpected(at(domain->line, "domain is for a layered generate2d mesh (layered = on)"));
+    if (layered) {
+        // GD1: one region without shapes is the background; every box and polygon, in deck order, replaces what it
+        // covers; the kernel resolves the layers into the tiling (GD2).
+        mesh::LayeredGeometry2D l;
+        std::vector<std::pair<const Entry*, std::int32_t>> shapes;
+        for (std::size_t r = 0; r < regions_.size(); ++r) {
+            const RegionSpec& spec = regions_[r];
+            if (!spec.seeds.empty()) return std::unexpected(at(spec.seeds.front()->line, "a generate2d mesh takes no seed"));
+            if (spec.boxes.empty() && spec.polygons.empty()) {
+                if (l.background >= 0) {
+                    return std::unexpected(at(spec.section->line, "two regions without a shape: only one may be the background"));
+                }
+                l.background = static_cast<std::int32_t>(r);
+            }
+            for (const Entry* e : spec.boxes) shapes.emplace_back(e, static_cast<std::int32_t>(r));
+            for (const Entry* e : spec.polygons) shapes.emplace_back(e, static_cast<std::int32_t>(r));
         }
-        for (const Entry* e : spec.polygons) {
-            NITCAD_DECK_TRY(v, points(*e, e->value, 2));
-            g.polygons.push_back({std::move(v), static_cast<std::int32_t>(r)});
+        std::ranges::sort(shapes, {}, [](const auto& p) { return p.first->line; });
+        double lo[2] = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
+        double hi[2] = {-lo[0], -lo[1]};
+        for (const auto& [e, r] : shapes) {
+            mesh::LayeredShape shape{{}, r};
+            if (e->key == "box") {
+                NITCAD_DECK_TRY(b, box(*e, 2));
+                shape.vertices = {{b.bounds[0], b.bounds[2], 0.0}, {b.bounds[1], b.bounds[2], 0.0},
+                                  {b.bounds[1], b.bounds[3], 0.0}, {b.bounds[0], b.bounds[3], 0.0}};
+            } else {
+                NITCAD_DECK_TRY(v, points(*e, e->value, 2));
+                shape.vertices = std::move(v);
+            }
+            for (const auto& p : shape.vertices) {
+                for (int k = 0; k < 2; ++k) {
+                    lo[k] = std::min(lo[k], p[static_cast<std::size_t>(k)]);
+                    hi[k] = std::max(hi[k], p[static_cast<std::size_t>(k)]);
+                }
+            }
+            l.shapes.push_back(std::move(shape));
+        }
+        if (domain != nullptr) {
+            NITCAD_DECK_TRY(b, box(*domain, 2));
+            l.lo = {b.bounds[0], b.bounds[2], 0.0};
+            l.hi = {b.bounds[1], b.bounds[3], 0.0};
+        } else if (l.shapes.empty()) {
+            return std::unexpected(at(s.line, "a layered generate2d mesh needs a domain or a shape"));
+        } else {
+            l.lo = {lo[0], lo[1], 0.0};
+            l.hi = {hi[0], hi[1], 0.0};
+        }
+        l.patches = std::move(g.patches);
+        auto tiled = mesh::layered_partition2d(l);
+        if (!tiled) {
+            const auto& err = tiled.error();
+            const int line = err.context && err.context->index && *err.context->index < shapes.size()
+                                 ? shapes[*err.context->index].first->line
+                                 : s.line;
+            return std::unexpected(located(line, "[mesh] layered", std::move(tiled.error())));
+        }
+        g = std::move(*tiled);
+    } else {
+        for (std::size_t r = 0; r < regions_.size(); ++r) {
+            const RegionSpec& spec = regions_[r];
+            if (!spec.boxes.empty() || !spec.seeds.empty()) {
+                return std::unexpected(at((spec.boxes.empty() ? spec.seeds : spec.boxes).front()->line,
+                                          "a generate2d mesh takes polygon in its regions (box with layered = on)"));
+            }
+            for (const Entry* e : spec.polygons) {
+                NITCAD_DECK_TRY(v, points(*e, e->value, 2));
+                g.polygons.push_back({std::move(v), static_cast<std::int32_t>(r)});
+            }
         }
     }
     if (refine_ != nullptr) o.size_field = refine_->size_field;

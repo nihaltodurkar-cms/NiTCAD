@@ -68,6 +68,30 @@ struct Geometry2D {
     std::vector<PatchSegment> patches;  // the result's boundary patches, in this order
 };
 
+// Layered 2D geometry (Unit 26k, GD1-GD2): the domain [lo, hi] (z ignored); the background region fills it; each
+// shape, in order, replaces what it covers (a shape past the domain is cut to it). `layered_partition2d` resolves
+// the layers into the tiling generate_mesh takes, exactly: every vertex is one of the inputs' coordinates, never
+// computed, so polygons that meet share bit-identical vertices. Per region, each connected part (cells sharing an
+// edge) becomes one simple polygon, counter-clockwise from its lowest-then-leftmost vertex; a part with a hole or
+// touching itself at a corner is cut along a vertical breakpoint line into simple pieces. Every polygon carries the
+// vertices of the others on its edges (T-junctions), so polygons meet along whole edges. Deterministic.
+// Shapes must be rectilinear (edges horizontal or vertical; slanted edges are a later slice, GD10), simple and of
+// non-zero area; `background` -1 when every point is covered by some shape.
+struct LayeredShape {
+    std::vector<Point> vertices;
+    std::int32_t region = 0;
+};
+
+struct LayeredGeometry2D {
+    Point lo{};
+    Point hi{};
+    std::int32_t background = -1;
+    std::vector<LayeredShape> shapes;  // bottom first
+    std::vector<PatchSegment> patches;  // passed through
+};
+
+[[nodiscard]] std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry2D& layers);
+
 // A structured boundary layer (DECISIONS.md U14): a tensor lattice along a boundary segment, for
 // thin features the isotropic refinement cannot resolve within a node budget (a MOSFET's
 // inversion layer). Its nodes are a + t u + o n for t in `along` and o in {0} and `offsets`, u the
