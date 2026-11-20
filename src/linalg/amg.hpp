@@ -59,14 +59,25 @@ class ThreadPool;
 
 namespace NiTCAD::linalg::detail {
 
+// The strength-of-connection test (Unit 63 MC1; scaled is slice 2's and the only one amg and cpr use).
+enum class StrengthMeasure : std::uint8_t {
+    scaled,     // |a_ij| >= theta sqrt(|a_ii a_jj|)
+    row_max,    // |a_ij| >= theta max_{k != i} |a_ik| (theta in (0, 1])
+    evolution,  // m_ij <= theta min_k m_ik (theta >= 1), amg::coarsen's simplified evolution measure
+};
+
 struct AmgSettings {
-    double strength_threshold;  // theta, in [0, 1)
+    double strength_threshold;  // theta, in [0, 1) for scaled (see StrengthMeasure otherwise)
     int smoother_degree;        // Chebyshev degree, at least 1
     std::size_t coarse_size;    // a level of at most this many unknowns is the coarsest
     int max_levels;             // at least 2
     // Unit 63 MB2 (b): a level where the coarsening stalls above coarse_size is factorized by SparseLU
     // (not only smoothed) when it has at most stalled_factor * coarse_size unknowns. Off for amg and cpr.
     bool factorize_stalled = false;
+    // Unit 63 MC1: the strength test, and the factor on theta per level (level l uses
+    // theta * strength_decay^l; 1 keeps theta on every level). Off (scaled, 1) for amg and cpr.
+    StrengthMeasure strength = StrengthMeasure::scaled;
+    double strength_decay = 1.0;
 };
 
 // A real CSR matrix with sorted, unique columns per row.
@@ -107,6 +118,16 @@ struct Coarsening {
     std::size_t aggregates = 0;
 };
 [[nodiscard]] Coarsening coarsen(const Csr& a, double theta);
+// The same aggregation under another strength test. evolution (Unit 63 MC1 (2), our reading of
+// Olson, Schroder, Tuminaro, NLAA 2010, whose text was not reached): z = (I - omega D^-1 A)^k e_i,
+// k = evolution_steps, omega = 1 / max_r sum_j |a_rj / a_rr| (Gershgorin); for i's off-diagonal
+// neighbour j, m_ij = |1 - (z_j b_i) / (z_i b_j)| with b the candidate (the level's near-null
+// vector); j is strong if m_ij <= theta max(min_k m_ik, evolution_floor). candidate is used only
+// by evolution (empty: b = 1).
+inline constexpr int evolution_steps = 4;
+inline constexpr double evolution_floor = 1e-12;
+[[nodiscard]] Coarsening coarsen(const Csr& a, StrengthMeasure measure, double theta,
+                                 std::span<const double> candidate);
 
 // Algebraic symmetrization (Unit 63 MD2): the diagonal D = diag(d) for which D A D^-1 is symmetric
 // wherever A allows it. A Scharfetter-Gummel continuity block has a_ij / a_ji = c_i / c_j (c the

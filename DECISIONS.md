@@ -2539,6 +2539,42 @@ simulation (shared interpolation over the unknowns).
 | MC2 | **Measured** as slice 0b on the symmetrized electron and hole blocks (and the ψ block, reported), 20³–70³, plus the slice 0b default (θ 0.08) and θ 0.04 again as references. |
 | MC3 | **Criterion (stricter than MB3, never loosened):** a candidate passes if, on **both** carrier blocks, **every** size's iterations are at most 1.5× that block's 20³ count. Among those passing, the least 70³ setup + solve time of the two blocks; within 5%, the simplest (in the order 1, 3, 2). If none passes, recorded, and slice 1 is put to the owner with the best result. |
 | MC4 | Setup time reported for every candidate (the evolution measure's cost grows with its four steps' support). |
+
+**Slice 0c results (2026-11-20).** `StrengthMeasure` (`scaled`, `row_max`, `evolution`) and `strength_decay` in
+`AmgSettings` (defaults `scaled`, 1: `amg` and `cpr` unchanged; `nitcad_linalg_test` 108 cases pass); hidden
+`[.carrier_0c]` (Release, pinned to the P cores). Iterations (setup + solve in seconds at 70³):
+
+| Block, candidate | 20³ | 30³ | 40³ | 50³ | 60³ | 70³ | worst / 20³ |
+|---|---|---|---|---|---|---|---|
+| electrons, θ 0.08 (reference) | 10 | 13 | 13 | 15 | 19 | 21 (1.14) | 2.10 |
+| electrons, θ 0.04 (reference) | 12 | 13 | 13 | 20 | 24 | 16 (1.01) | 2.00 |
+| electrons, falling 0.08 | 10 | 10 | 16 | 18 | 19 | 14 (0.83) | 1.90 |
+| electrons, falling 0.04 | 12 | 14 | 16 | 18 | 29 | 21 (1.23) | 2.42 |
+| electrons, evolution ε 2 | 16 | 19 | 27 | 28 | 35 | 37 (8.98) | 2.31 |
+| electrons, evolution ε 4 | 15 | 19 | 23 | 28 | 31 | 30 (8.69) | 2.07 |
+| electrons, row-relative 0.25 | 11 | 12 | 11 | 21 | 18 | 18 (1.09) | 1.91 |
+| electrons, row-relative 0.5 | 10 | 13 | 15 | 17 | 25 | 25 (1.28) | 2.50 |
+| holes, θ 0.08 (reference) | 11 | 14 | 17 | 19 | 30 | 35 (1.65) | 3.18 |
+| holes, θ 0.04 (reference) | 13 | 14 | 16 | 17 | 24 | 16 (0.95) | 1.85 |
+| holes, falling 0.08 | 11 | 12 | 17 | 21 | 21 | 18 (0.96) | 1.91 |
+| holes, falling 0.04 | 13 | 14 | 17 | 18 | 27 | 19 (1.06) | 2.08 |
+| holes, evolution ε 2 | 13 | 16 | 14 | 18 | 24 | 22 (5.47) | 1.85 |
+| holes, evolution ε 4 | 13 | 16 | 14 | 17 | 21 | 27 (5.64) | 2.08 |
+| holes, row-relative 0.25 | 11 | 12 | 11 | 21 | 18 | 13 (0.88) | 1.91 |
+| holes, row-relative 0.5 | 11 | 15 | 16 | 18 | 23 | 22 (1.18) | 2.00 |
+
+  The ψ block: 9–16 iterations under every candidate (falling 0.08: 9–10 at every size, its best).
+- **MC3: no candidate passes.** Every one exceeds 1.5× at some size on at least one block. The best worst-case
+  ratios are falling 0.08 and row-relative 0.25 (1.90–1.91); of these, **falling 0.08** is the fastest at 70³
+  (1.79 s for the two blocks against 1.97 s) and the simplest, so it is **the best result**. Its end points are
+  1.40× (electrons 10 → 14) and 1.64× (holes 11 → 18); its peaks are at 40³–60³ (16–21).
+- **The counts are not monotone in size** under any test (peaks at 50³ or 60³ fall back at 70³), so the growth is
+  not a smooth function of h: the aggregates' alignment with the junction and the high-field rows changes from mesh
+  to mesh. Changing the strength test moves the peak; it does not remove it.
+- **The simplified evolution measure is the worst** on electrons and costs 5–9 s of setup at 70³ (its 4-step
+  supports), 5–8× the others. Our reading of the abstract is not the paper's algorithm; this rules out only the
+  reading, not the method.
+- **Per MC3, slice 1 is put to the owner** with the best result (falling 0.08). Not loosened.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

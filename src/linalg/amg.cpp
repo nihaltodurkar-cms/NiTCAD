@@ -151,6 +151,11 @@ Csr product(const Csr& a, const Csr& b) {
 }
 
 Coarsening coarsen(const Csr& a, double theta) {
+    return coarsen(a, StrengthMeasure::scaled, theta, {});
+}
+
+Coarsening coarsen(const Csr& a, StrengthMeasure measure, double theta,
+                   std::span<const double> candidate) {
     const std::size_t n = a.rows;
     Coarsening out;
     out.strong.assign(a.nonzeros(), 0);
@@ -169,13 +174,104 @@ Coarsening coarsen(const Csr& a, double theta) {
     Csr directed;
     directed.rows = directed.cols = n;
     directed.offsets.assign(n + 1, 0);
+
+    // The evolution measure's state (Unit 63 MC1 (2)): the transposed pattern (rows reaching a
+    // support node), omega, and the work vectors (zero outside the current support).
+    Csr reach;
+    double omega = 0.0;
+    std::vector<double> z, z_next, measure_of;
+    std::vector<std::size_t> support, next;
+    std::vector<std::size_t> stamp;
+    std::size_t stamp_id = 0;
+    if (measure == StrengthMeasure::evolution) {
+        reach = transpose(a);
+        double gershgorin = 0.0;
+        for (std::size_t r = 0; r < n; ++r) {
+            const double ar = diagonal[r];
+            if (ar == 0.0) continue;
+            double sum = 0.0;
+            for (std::size_t k = at(a.offsets[r]); k < at(a.offsets[r + 1]); ++k) sum += std::abs(a.values[k]);
+            gershgorin = std::max(gershgorin, sum / ar);
+        }
+        omega = gershgorin > 0.0 ? 1.0 / gershgorin : 0.0;
+        z.assign(n, 0.0);
+        z_next.assign(n, 0.0);
+        stamp.assign(n, 0);
+    }
+    const auto b = [&](std::size_t u) { return candidate.empty() ? 1.0 : candidate[u]; };
+    const auto signed_diagonal = [&](std::size_t r) {
+        for (std::size_t k = at(a.offsets[r]); k < at(a.offsets[r + 1]); ++k) {
+            if (at(a.columns[k]) == r) return a.values[k];
+        }
+        return 0.0;
+    };
+    // z = (I - omega D^-1 A)^steps e_i over a growing support; m_ij for row i's entries.
+    const auto evolve = [&](std::size_t i) {
+        support.assign(1, i);
+        z[i] = 1.0;
+        for (int step = 0; step < evolution_steps; ++step) {
+            ++stamp_id;
+            next.clear();
+            for (const std::size_t s : support) {
+                if (stamp[s] != stamp_id) { stamp[s] = stamp_id; next.push_back(s); }
+                for (std::size_t k = at(reach.offsets[s]); k < at(reach.offsets[s + 1]); ++k) {
+                    const std::size_t r = at(reach.columns[k]);
+                    if (stamp[r] != stamp_id) { stamp[r] = stamp_id; next.push_back(r); }
+                }
+            }
+            std::ranges::sort(next);
+            for (const std::size_t r : next) {
+                double az = 0.0;
+                for (std::size_t k = at(a.offsets[r]); k < at(a.offsets[r + 1]); ++k) {
+                    az += a.values[k] * z[at(a.columns[k])];
+                }
+                const double ar = signed_diagonal(r);
+                z_next[r] = ar != 0.0 ? z[r] - omega * az / ar : z[r];
+            }
+            for (const std::size_t r : next) z[r] = z_next[r];
+            support.swap(next);
+        }
+        measure_of.assign(at(a.offsets[i + 1]) - at(a.offsets[i]), std::numeric_limits<double>::infinity());
+        double smallest = std::numeric_limits<double>::infinity();
+        for (std::size_t k = at(a.offsets[i]); k < at(a.offsets[i + 1]); ++k) {
+            const std::size_t j = at(a.columns[k]);
+            if (j == i || isolated[j] != 0 || a.values[k] == 0.0 || z[i] == 0.0 || b(j) == 0.0) continue;
+            const double m = std::abs(1.0 - (z[j] * b(i)) / (z[i] * b(j)));
+            measure_of[k - at(a.offsets[i])] = m;
+            smallest = std::min(smallest, m);
+        }
+        for (const std::size_t r : support) { z[r] = 0.0; z_next[r] = 0.0; }
+        return std::max(smallest, evolution_floor);
+    };
+
     for (std::size_t i = 0; i < n; ++i) {
         if (isolated[i] == 0) {
+            double row_largest = 0.0;
+            double evolution_min = 0.0;
+            if (measure == StrengthMeasure::row_max) {
+                for (std::size_t k = at(a.offsets[i]); k < at(a.offsets[i + 1]); ++k) {
+                    const std::size_t j = at(a.columns[k]);
+                    if (j != i && isolated[j] == 0) row_largest = std::max(row_largest, std::abs(a.values[k]));
+                }
+            } else if (measure == StrengthMeasure::evolution) {
+                evolution_min = evolve(i);
+            }
             for (std::size_t k = at(a.offsets[i]); k < at(a.offsets[i + 1]); ++k) {
                 const std::size_t j = at(a.columns[k]);
                 const double v = std::abs(a.values[k]);
-                if (j != i && isolated[j] == 0 && v > 0.0 &&
-                    v >= theta * std::sqrt(diagonal[i] * diagonal[j])) {
+                bool strong = false;
+                switch (measure) {
+                    case StrengthMeasure::scaled:
+                        strong = v >= theta * std::sqrt(diagonal[i] * diagonal[j]);
+                        break;
+                    case StrengthMeasure::row_max:
+                        strong = v >= theta * row_largest;
+                        break;
+                    case StrengthMeasure::evolution:
+                        strong = measure_of[k - at(a.offsets[i])] <= theta * evolution_min;
+                        break;
+                }
+                if (j != i && isolated[j] == 0 && v > 0.0 && strong) {
                     directed.columns.push_back(static_cast<Index>(j));
                     // The scale-free strength, so pass 2 compares like with like.
                     const double d = std::sqrt(diagonal[i] * diagonal[j]);
@@ -414,7 +510,11 @@ std::expected<Factorization, base::Error> AmgBackend::factorize(std::span<const 
                                   a.rows <= settings_.coarse_size;
         if (!coarsened_) {
             if (last_allowed) break;
-            amg::Coarsening c = amg::coarsen(a, settings_.strength_threshold);
+            const double theta_l =
+                settings_.strength_threshold * std::pow(settings_.strength_decay, static_cast<double>(l));
+            amg::Coarsening c = settings_.strength == StrengthMeasure::scaled && settings_.strength_decay == 1.0
+                                    ? amg::coarsen(a, settings_.strength_threshold)
+                                    : amg::coarsen(a, settings_.strength, theta_l, candidate);
             if (c.aggregates == 0 ||
                 static_cast<double>(c.aggregates) > amg::min_coarsening * static_cast<double>(a.rows)) {
                 // Stalled above coarse_size: only smoothed, unless factorize_stalled and small enough.
