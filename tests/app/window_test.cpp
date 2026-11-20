@@ -253,10 +253,13 @@ TEST_CASE("app window: the console logs the run's banner, Newton table, points a
     const fs::path dir = app_test::scratch("window_console");
     const fs::path deck = app_test::write(dir, "m.deck", app_test::mosfet2d);
     auto w = window();
+    // Design D at the bottom of the centre (Unit 26j), the Points tab first.
     const app::Rect& c = w->panes().console;
     CHECK(c.height > 0);
-    CHECK(c.x == w->panes().inspector.x);
-    CHECK(c.y > w->panes().inspector.y);
+    CHECK(c.x == w->panes().tabs.x);
+    CHECK(c.y > w->panes().page.y);
+    CHECK(w->console_tab() == 0);
+    CHECK(w->console_body_shown());
     REQUIRE(w->open_deck(deck));
     REQUIRE(pump_until([&] { return w->workspace() != nullptr; }));
     CHECK(w->console_log().text().find("] Open m.deck") != std::string::npos);
@@ -276,19 +279,37 @@ TEST_CASE("app window: the console logs the run's banner, Newton table, points a
     }
     CHECK(rows == w->runner().iterations().size());
     CHECK(static_cast<std::size_t>(w->console_line_count()) == w->console_log().lines().size());
-    // Show: no Newton detail hides the rows; Save log writes what is shown.
-    w->set_console_filter(app::LogFilter::summary);
-    CHECK(w->console_filter() == app::LogFilter::summary);
-    const std::string summary = w->console_log().text(app::LogFilter::summary);
-    CHECK(static_cast<std::size_t>(w->console_line_count()) == static_cast<std::size_t>(std::ranges::count(summary, '\n')));
-    CHECK(summary.find("     Iter ") == std::string::npos);
+    // Points: a row per solver point, the currents once done, every point converged; Save writes the table.
+    const app::PointsTable& pts = w->points();
+    CHECK(static_cast<std::size_t>(w->console_row_count()) == pts.rows.size());
+    CHECK(pts.rows.size() == w->runner().points().size());
+    CHECK(std::ranges::all_of(pts.states, [](app::PointState s) { return s == app::PointState::done; }));
+    CHECK(std::ranges::any_of(pts.columns, [](const std::string& s) { return s.starts_with("I(drain)"); }));
+    CHECK(pts.progress.contains(" Newton iterations · "));
+    const fs::path csv = dir / "points.csv";
+    REQUIRE(w->save_console(csv));
+    {
+        std::ifstream in(csv, std::ios::binary);
+        CHECK(std::string{std::istreambuf_iterator<char>(in), {}} == app::points_text(pts, ','));
+    }
+    // Messages: warnings and errors only; Log: every line.
+    w->set_console_tab(2);
+    CHECK(w->console_body_shown());
+    CHECK(static_cast<std::size_t>(w->console_line_count()) == w->console_log().lines().size());
+    w->set_console_tab(1);
+    const std::string messages = w->console_log().text(app::LogFilter::warnings);
+    CHECK(static_cast<std::size_t>(w->console_line_count()) == static_cast<std::size_t>(std::ranges::count(messages, '\n')));
     const fs::path log = dir / "run.log";
     REQUIRE(w->save_console(log));
-    std::ifstream in(log, std::ios::binary);
-    const std::string saved{std::istreambuf_iterator<char>(in), {}};
-    CHECK(saved == summary);
-    w->set_console_filter(app::LogFilter::all);
-
+    {
+        std::ifstream in(log, std::ios::binary);
+        CHECK(std::string{std::istreambuf_iterator<char>(in), {}} == messages);
+    }
+    // Folded, the console is its strip alone; a run opens it again.
+    w->set_console_collapsed(true);
+    CHECK(w->panes().console.height == app::scaled(app::console_strip_96, w->dpi()));
+    CHECK_FALSE(w->console_body_shown());
+    w->set_console_tab(0);
     std::string bad = app_test::mosfet2d;
     bad.insert(bad.find("[contact source]"), "[bogus]\n");
     w->deck().set_text(bad);
@@ -299,7 +320,12 @@ TEST_CASE("app window: the console logs the run's banner, Newton table, points a
     CHECK(errors.find(std::format("  line {}: ", w->runner().diagnostics()[0].line)) != std::string::npos);
     CHECK(errors.find("] The deck does not build: ") != std::string::npos);
     CHECK(w->console_log().text().find("] Check m.deck") != std::string::npos);
+    w->set_console_collapsed(true);
+    w->execute(Command::run);  // a run opens the folded console (the bad deck fails at once)
+    CHECK_FALSE(w->console_collapsed());
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
 }
+
 TEST_CASE("app window: the start page, the run monitor, Stop and the results (WG1, WG8, VA3, VA5)", "[app]") {
     const fs::path copies = app_test::scratch("window_examples");
     app::WindowOptions o;

@@ -27,12 +27,13 @@ struct Panes {
 // Default and minimum sizes at 96 DPI.
 inline constexpr int tree_width_96 = 215, inspector_width_96 = 260, splitter_96 = 4, metrics_height_96 = 46,
                      tab_strip_96 = 28, min_side_96 = 120, min_centre_96 = 200,
-                     console_height_96 = 200;
+                     console_height_96 = 200, console_strip_96 = 30, min_page_96 = 80;
 
 // The panes for a client area at a DPI. toolbar_height and status_height are the controls' own heights
 // (in pixels at this DPI); the tree and inspector widths come from the saved layout (96-DPI pixels, 0 the
 // default), narrowed so the centre keeps its minimum width while the sides keep theirs. The console's
-// height comes from the saved layout too (0 the default), lowered so the inspector keeps min_side_96.
+// height comes from the saved layout too (0 the default; its tool strip alone when folded), lowered so the
+// page keeps min_page_96.
 [[nodiscard]] Panes layout_panes(int client_width, int client_height, int dpi, const Layout& saved,
                                  int toolbar_height, int status_height);
 

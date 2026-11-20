@@ -176,14 +176,21 @@ public:
     [[nodiscard]] const std::string& readout_text() const noexcept { return readout_text_; }
     [[nodiscard]] bool hover_readout() const noexcept { return state_.hover_readout; }
     [[nodiscard]] const AppState& app_state() const noexcept { return state_; }
-    // Unit 26j: the console under the inspector: its log, the lines its rich edit shows, the Show filter
-    // (as the combo box sets it), the Copy button (the shown lines as text) and Save log (to a file).
+    // Unit 26j (design D): the console at the bottom of the centre: its log; the tab shown (0 Points,
+    // 1 Messages, 2 Log, as clicking the tab strip sets it); the points table and the rows its list shows; the
+    // lines the log's rich edit shows; folded or not (the fold button); Copy and Save (the table, or the
+    // tab's lines); whether the tab's body is shown.
     [[nodiscard]] const ConsoleLog& console_log() const noexcept { return console_log_; }
+    [[nodiscard]] int console_tab() const noexcept { return console_tab_; }
+    void set_console_tab(int tab);
+    [[nodiscard]] const PointsTable& points() const noexcept { return points_; }
+    [[nodiscard]] int console_row_count() const;
     [[nodiscard]] int console_line_count() const;
-    [[nodiscard]] LogFilter console_filter() const noexcept { return console_filter_; }
-    void set_console_filter(LogFilter filter);
+    [[nodiscard]] bool console_collapsed() const noexcept { return state_.layout.console_collapsed; }
+    void set_console_collapsed(bool collapsed);
     bool copy_console();
     bool save_console(const std::filesystem::path& path);
+    [[nodiscard]] bool console_body_shown() const;
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
@@ -203,8 +210,8 @@ public:
         // Unit 26h (JD1): the axis box.
         id_axis_box,
         // Unit 26j: the console's rich edit and tool strip.
-        id_console_text, id_console_title, id_console_show, id_console_filter, id_console_clear, id_console_copy,
-        id_console_save,
+        id_console_text, id_console_title, id_console_tabs, id_console_clear, id_console_copy, id_console_save,
+        id_console_fold, id_console_points, id_console_foot,
         id_first_label = 5100,
     };
 
@@ -232,6 +239,10 @@ private:
     void flush_console(bool rebuild = false);
     void layout_console();
     void on_console(int id, int code);
+    LRESULT on_console_notify(const NMHDR& n, LPARAM l);
+    void update_points();
+    void update_console_footer();
+    [[nodiscard]] LogFilter console_text_filter() const noexcept;
     void on_run_events();
     void on_run_timer();
     void on_live_check();
@@ -320,9 +331,10 @@ private:
     WindowOptions options_;
     HWND hwnd_ = nullptr;
     HWND toolbar_ = nullptr, status_ = nullptr, tree_ = nullptr, tabs_ = nullptr, metrics_ = nullptr,
-         inspector_ = nullptr, console_panel_ = nullptr, console_ = nullptr;
+         inspector_ = nullptr, console_panel_ = nullptr, console_ = nullptr, console_points_ = nullptr;
     ConsoleLog console_log_;
-    LogFilter console_filter_ = LogFilter::all;
+    PointsTable points_;
+    int console_tab_ = 0;
     std::size_t console_shown_ = 0;        // the log's lines (by number, ConsoleLog::total) flushed so far
     std::size_t console_lines_shown_ = 0;  // of those, the lines the filter shows in the rich edit
     std::unique_ptr<Viewport> viewport_;

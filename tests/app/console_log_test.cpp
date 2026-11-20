@@ -119,3 +119,42 @@ TEST_CASE("app console: the rich text escapes, colours by level and continues; t
     CHECK(log.lines().empty());
     CHECK(log.total() == ConsoleLog::max_lines + 3);
 }
+
+TEST_CASE("app console: the Points table, its live and pending rows, and its text (design D)", "[app]") {
+    const app::PlanSummary summary{.description = {}, .contacts = {"drain", "gate"},
+                                   .points = {{0.05, 0.0}, {0.05, 0.5}, {0.05, 1.0}}};
+    const std::vector<PointRow> rows{
+        {.phase = solve::Phase::equilibrium, .iterations = 3, .update = 1e-9, .residual = 1e-12, .converged = true, .seconds = 0.4},
+        {.phase = solve::Phase::bias, .point = 0, .point_count = 3, .iterations = 2, .update = 2e-9, .residual = 3e-12,
+         .converged = true, .seconds = 0.2},
+        {.phase = solve::Phase::bias, .point = 1, .point_count = 3, .iterations = 1, .update = 0.25, .residual = 7.0,
+         .seconds = 0.1}};
+    const std::vector<Iteration> its(6);
+    auto t = app::points_table(RunView{.rows = rows, .iterations = its, .summary = &summary, .seconds = 61.0, .running = true});
+    CHECK(t.columns == std::vector<std::string>{"Point", "V(gate)", "It", "|update|", "|residual|", "Time (s)", "Status"});
+    CHECK(t.numeric == std::vector<bool>{false, true, true, true, true, true, false});
+    REQUIRE(t.rows.size() == 4);
+    CHECK(t.rows[0] == std::vector<std::string>{"Eq", "–", "3", "1.00e-09", "1.00e-12", "0.40", "converged"});
+    CHECK(t.rows[1] == std::vector<std::string>{"1", "0.000", "2", "2.00e-09", "3.00e-12", "0.20", "converged"});
+    CHECK(t.rows[2] == std::vector<std::string>{"2", "0.500", "1", "2.50e-01", "7.00e+00", "0.10", "solving"});
+    CHECK(t.rows[3] == std::vector<std::string>{"3", "1.000", "", "", "", "", ""});
+    CHECK(t.states == std::vector<app::PointState>{app::PointState::done, app::PointState::done, app::PointState::live,
+                                                   app::PointState::pending});
+    CHECK(t.progress == "Bias point 2 of 3 · 6 Newton iterations · 1:01");
+
+    // Stopped there: the point that did not converge is a warning, the rest "not run".
+    t = app::points_table(RunView{.rows = rows, .iterations = its, .summary = &summary, .seconds = 1.0});
+    CHECK(t.states[2] == app::PointState::warning);
+    CHECK(t.rows[2].back() == "not converged");
+    CHECK(t.rows[3].back() == "not run");
+    // Planned but not run (a check): every point pending, blank status.
+    t = app::points_table(RunView{.summary = &summary});
+    CHECK(t.rows.size() == 3);
+    CHECK(t.rows[0].back().empty());
+    CHECK(t.progress.empty());
+
+    const app::PointsTable small{.columns = {"Point", "Note"}, .numeric = {false, false},
+                                 .rows = {{"1", "a,b"}, {"2", "say \"hi\""}}, .states = {}, .progress = {}};
+    CHECK(app::points_text(small, ',') == "Point,Note\n1,\"a,b\"\n2,\"say \"\"hi\"\"\"\n");
+    CHECK(app::points_text(small, '\t') == "Point\tNote\n1\ta,b\n2\t\"say \"\"hi\"\"\"\n");
+}

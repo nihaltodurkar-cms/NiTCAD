@@ -258,12 +258,151 @@ void ConsoleLog::finish(const RunController& r) {
                    .error = r.state() == RunState::failed && r.error() ? &*r.error() : nullptr});
 }
 
+std::size_t ConsoleLog::count(LogLevel level) const {
+    return static_cast<std::size_t>(std::ranges::count(lines_, level, &LogLine::level));
+}
+
+PointsTable points_table(const RunView& run) {
+    PointsTable t;
+    const PlanSummary* s = run.summary;
+    // The swept contacts: those whose voltage changes over the planned points.
+    std::vector<std::size_t> swept;
+    if (s && !s->points.empty()) {
+        for (std::size_t c = 0; c < s->contacts.size(); ++c) {
+            if (std::ranges::any_of(s->points, [&](const auto& p) {
+                    return c < p.size() && c < s->points.front().size() && p[c] != s->points.front()[c];
+                })) {
+                swept.push_back(c);
+            }
+        }
+    }
+    const bool has_t = std::ranges::any_of(run.rows, [](const PointRow& r) { return r.phase == solve::Phase::transient; });
+    const bool has_f = std::ranges::any_of(run.rows, [](const PointRow& r) { return r.phase == solve::Phase::small_signal; });
+    // The contacts' currents, once the run is done (a gate carries none).
+    const results::Sweep* sweep = run.report && run.report->sweep ? &*run.report->sweep : nullptr;
+    std::vector<std::size_t> carrying;
+    if (sweep && run.plan) {
+        const auto contacts = run.plan->device.contacts();
+        for (std::size_t c = 0; c < contacts.size(); ++c) {
+            if (contacts[c].kind != device::ContactKind::gate) carrying.push_back(c);
+        }
+    }
+    const auto column = [&](std::string name, bool numeric) {
+        t.columns.push_back(std::move(name));
+        t.numeric.push_back(numeric);
+    };
+    column("Point", false);
+    for (std::size_t c : swept) column("V(" + s->contacts[c] + ")", true);
+    if (has_t) column("t (s)", true);
+    if (has_f) column("f (Hz)", true);
+    column("It", true);
+    column("|update|", true);
+    column("|residual|", true);
+    const std::string unit = run.plan ? std::string(current_unit(run.plan->device.mesh().dimension())) : "";
+    for (std::size_t c : carrying) column("I(" + run.plan->device.contacts()[c].name + ") " + unit, true);
+    column("Time (s)", true);
+    column("Status", false);
+
+    const auto biases = [&](std::vector<std::string>& cells, std::size_t point, bool bias) {
+        for (std::size_t c : swept) {
+            cells.push_back(bias && point < s->points.size() && c < s->points[point].size()
+                                ? std::format("{:.3f}", s->points[point][c])
+                                : "–");
+        }
+    };
+    std::size_t converged_bias = 0, last_bias = static_cast<std::size_t>(-1);
+    std::size_t total_iterations = 0;
+    for (std::size_t k = 0; k < run.rows.size(); ++k) {
+        const PointRow& r = run.rows[k];
+        const bool bias = r.phase == solve::Phase::bias;
+        std::vector<std::string> cells;
+        cells.push_back(r.phase == solve::Phase::equilibrium ? std::string("Eq") : std::to_string(r.point + 1));
+        biases(cells, r.point, bias);
+        if (has_t) cells.push_back(r.phase == solve::Phase::transient ? std::format("{:.4g}", r.time_s) : "");
+        if (has_f) cells.push_back(r.phase == solve::Phase::small_signal ? std::format("{:.4g}", r.frequency_Hz) : "");
+        cells.push_back(std::to_string(r.iterations));
+        cells.push_back(std::format("{:.2e}", r.update));
+        cells.push_back(std::format("{:.2e}", r.residual));
+        const bool reported = bias && r.converged && sweep && converged_bias < sweep->points.size();
+        for (std::size_t c : carrying) {
+            const auto& cur = reported ? sweep->points[converged_bias].terminal_current : std::vector<double>{};
+            cells.push_back(c < cur.size() ? std::format("{:.3e}", cur[c]) : "");
+        }
+        if (bias && r.converged) ++converged_bias;
+        if (bias) last_bias = r.point;
+        total_iterations += static_cast<std::size_t>(std::max(r.iterations, 0));
+        cells.push_back(std::format("{:.2f}", r.seconds));
+        PointState state = PointState::done;
+        if (r.converged) {
+            cells.push_back("converged");
+        } else if (run.running && k + 1 == run.rows.size()) {
+            cells.push_back("solving");
+            state = PointState::live;
+        } else {
+            cells.push_back("not converged");
+            state = PointState::warning;
+        }
+        t.rows.push_back(std::move(cells));
+        t.states.push_back(state);
+    }
+    // The sweep's points not yet solved.
+    if (s && !s->points.empty() && !has_t) {
+        const std::size_t from = last_bias == static_cast<std::size_t>(-1) ? 0 : last_bias + 1;
+        for (std::size_t p = from; p < s->points.size(); ++p) {
+            std::vector<std::string> cells{std::to_string(p + 1)};
+            biases(cells, p, true);
+            cells.resize(t.columns.size());
+            cells.back() = run.running || run.rows.empty() ? "" : "not run";
+            t.rows.push_back(std::move(cells));
+            t.states.push_back(PointState::pending);
+        }
+    }
+    if (!run.rows.empty()) {
+        const PointRow& r = run.rows.back();
+        switch (r.phase) {
+        case solve::Phase::equilibrium: t.progress = "Equilibrium"; break;
+        case solve::Phase::bias:
+            t.progress = r.point_count > 0 ? std::format("Bias point {} of {}", r.point + 1, r.point_count)
+                                           : std::format("Bias point {}", r.point + 1);
+            break;
+        case solve::Phase::transient: t.progress = std::format("Time step {}, t = {:.4g} s", r.point + 1, r.time_s); break;
+        case solve::Phase::small_signal:
+            t.progress = std::format("Frequency {} of {}", r.point + 1, r.point_count);
+            break;
+        }
+        const auto secs = static_cast<long long>(run.seconds);
+        t.progress += std::format(" · {} · {}:{:02}", plural(total_iterations, "Newton iteration"), secs / 60, secs % 60);
+    }
+    return t;
+}
+
+std::string points_text(const PointsTable& table, char sep) {
+    std::string out;
+    const auto line = [&](const std::vector<std::string>& cells) {
+        for (std::size_t k = 0; k < cells.size(); ++k) {
+            if (k > 0) out += sep;
+            const std::string& c = cells[k];
+            if (c.find(sep) != std::string::npos || c.find('"') != std::string::npos) {
+                out += '"';
+                for (char ch : c) out += ch == '"' ? std::string("\"\"") : std::string(1, ch);
+                out += '"';
+            } else {
+                out += c;
+            }
+        }
+        out += '\n';
+    };
+    line(table.columns);
+    for (const auto& r : table.rows) line(r);
+    return out;
+}
+
 std::string console_rtf(const std::deque<LogLine>& lines, std::size_t from, LogFilter filter, bool continues,
                         int points) {
-    // The colour table: 1 detail, 2 info, 3 header, 4 success, 5 warning, 6 error (a dark theme).
+    // The colour table: 1 detail, 2 info, 3 header, 4 success, 5 warning, 6 error (on white, design D).
     std::string out = "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fmodern Consolas;}}"
-                      "{\\colortbl;\\red140\\green140\\blue140;\\red212\\green212\\blue212;\\red86\\green156\\blue214;"
-                      "\\red106\\green200\\blue106;\\red229\\green192\\blue123;\\red244\\green71\\blue71;}";
+                      "{\\colortbl;\\red107\\green114\\blue128;\\red27\\green27\\blue27;\\red31\\green95\\blue191;"
+                      "\\red46\\green138\\blue70;\\red168\\green115\\blue12;\\red198\\green40\\blue40;}";
     out += std::format("\\f0\\fs{} ", 2 * points);
     bool first = !continues;
     for (std::size_t k = from; k < lines.size(); ++k) {

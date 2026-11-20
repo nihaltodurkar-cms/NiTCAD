@@ -41,20 +41,25 @@ Panes layout_panes(int client_width, int client_height, int dpi, const Layout& s
     }
     p.tree = {0, top, tree, body};
     p.left_splitter = {tree, top, split, body};
-    // The console under the inspector, as tall as saved but leaving the inspector its minimum height.
-    const int csplit = std::min(split, body);
-    int console = scaled(saved.console_height > 0 ? saved.console_height : console_height_96, dpi);
-    console = std::clamp(console, 0, std::max(body - csplit - min_side, 0));
-    p.inspector = {w - inspector, top, inspector, body - csplit - console};
-    p.console_splitter = {p.inspector.x, p.inspector.bottom(), inspector, csplit};
-    p.console = {p.inspector.x, p.console_splitter.bottom(), inspector, console};
+    p.inspector = {w - inspector, top, inspector, body};
     p.right_splitter = {p.inspector.x - split, top, split, body};
     const int cx = p.left_splitter.right(), cw = std::max(p.right_splitter.x - cx, 0);
-    p.tabs = {cx, top, cw, body};
+    // The centre top to bottom: the tab strip, the page, the metrics strip, a splitter and the console (Unit 26j:
+    // as tall as saved, or only its tool strip when folded), the console lowered so the page keeps a minimum.
     const int strip = std::min(scaled(tab_strip_96, dpi), body);
-    const int metrics = std::min(scaled(metrics_height_96, dpi), body - strip);
-    p.page = {cx, top + strip, cw, body - strip - metrics};
+    const int csplit = std::min(split, body - strip);
+    int console = scaled(saved.console_collapsed ? console_strip_96
+                                                 : saved.console_height > 0 ? saved.console_height : console_height_96,
+                         dpi);
+    const int room = body - strip - scaled(metrics_height_96, dpi) - csplit - scaled(min_page_96, dpi);
+    console = std::clamp(console, 0, std::max(room, 0));
+    const int centre_h = body - csplit - console;
+    p.tabs = {cx, top, cw, centre_h};
+    const int metrics = std::clamp(scaled(metrics_height_96, dpi), 0, centre_h - strip);
+    p.page = {cx, top + strip, cw, centre_h - strip - metrics};
     p.metrics = {cx, p.page.bottom(), cw, metrics};
+    p.console_splitter = {cx, p.metrics.bottom(), cw, csplit};
+    p.console = {cx, p.console_splitter.bottom(), cw, console};
     return p;
 }
 

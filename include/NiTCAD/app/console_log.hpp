@@ -1,4 +1,4 @@
-// The console under the inspector (Unit 26j): a running, levelled log of what the window and the solver
+// The console at the bottom of the centre (Unit 26j): a running, levelled log of what the window and the solver
 // did, as a device simulator's log reads —
 //   a banner per run (analysis, equations, device, linear solver, Newton tolerances, points planned);
 //   per solver point a header (the bias point with its contact voltages, the transient time, the
@@ -51,7 +51,26 @@ struct RunView {
     std::span<const Diagnostic> diagnostics;
     const base::Error* stopped = nullptr;      // why a done run stopped early
     const base::Error* error = nullptr;        // why it failed
+    bool running = false;                      // the last row is still being solved
 };
+
+// The console's Points tab (Unit 26j, design D): a row per solver point — its label, the swept contacts'
+// voltages (or the time, or the frequency), Newton iterations, last |update| and |residual|, the contacts'
+// currents once the run is done, seconds and status — then the sweep's points not yet solved.
+enum class PointState : unsigned char { done, warning, live, pending };
+struct PointsTable {
+    std::vector<std::string> columns;
+    std::vector<bool> numeric;  // per column: right-aligned
+    std::vector<std::vector<std::string>> rows;
+    std::vector<PointState> states;
+    // Where the run is: "Bias point 5 of 11 · 29 Newton iterations · 0:12" (empty before any point).
+    std::string progress;
+    bool operator==(const PointsTable&) const = default;
+};
+[[nodiscard]] PointsTable points_table(const RunView& run);
+// The table as text: a header line and a line per row, cells separated by sep (a cell holding sep or a
+// quote is quoted), for Copy (tab) and Save (comma).
+[[nodiscard]] std::string points_text(const PointsTable& table, char sep);
 
 // The banner of a built plan, and the summary lines of a finished run's report (the I-V table at most
 // max_table_rows rows, then how many more).
@@ -80,6 +99,8 @@ public:
     [[nodiscard]] std::size_t dropped() const noexcept { return dropped_; }
     // The lines as plain text, one per line ("\n"), those the filter shows.
     [[nodiscard]] std::string text(LogFilter filter = LogFilter::all) const;
+    // The lines kept at a level (the Messages tab's count: warnings plus errors).
+    [[nodiscard]] std::size_t count(LogLevel level) const;
 
 private:
     void header(const RunView& run, std::size_t index);
@@ -95,7 +116,7 @@ private:
     bool following_ = false;
 };
 
-// Rich text of lines (those the filter shows), for a rich edit: a colour per level on a dark background,
+// Rich text of lines (those the filter shows), for a rich edit: a colour per level on white,
 // Consolas at `points` size; `continues` starts with a paragraph break (appending to shown text).
 // Lines from index `from` on.
 [[nodiscard]] std::string console_rtf(const std::deque<LogLine>& lines, std::size_t from, LogFilter filter,

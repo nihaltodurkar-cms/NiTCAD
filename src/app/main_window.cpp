@@ -214,31 +214,38 @@ bool MainWindow::create_children() {
     results_ = std::make_unique<ResultsPage>(hwnd_, id_results);
     results_->on_pass = [this](std::size_t k) { results_show_pass(k); };
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
-    // Unit 26j: the console under the inspector: its tool strip (title, Show filter, Clear, Copy, Save log) over
-    // a read-only rich edit, unwrapped, light text on dark.
+    // Unit 26j (design D): the console at the bottom of the centre: a tool strip (its title; the tabs Points,
+    // Messages and Log; Clear, Copy, Save and the fold button) over the points table or the log, and a footer.
     console_panel_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
                                      10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_console)),
                                      GetModuleHandleW(nullptr), this);
     make(L"STATIC", L"Console", WS_VISIBLE | SS_CENTERIMAGE, console_panel_, id_console_title);
-    make(L"STATIC", L"Show", WS_VISIBLE | SS_CENTERIMAGE | SS_RIGHT, console_panel_, id_console_show);
     {
-        std::vector<std::string> names;
-        for (std::string_view n : filter_names()) names.emplace_back(n);
-        HWND combo = make(L"COMBOBOX", L"", WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, console_panel_,
-                          id_console_filter);
-        combo_fill(combo, names, 0);
+        HWND tabs = make(WC_TABCONTROLW, L"", WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, console_panel_, id_console_tabs);
+        for (const wchar_t* t : {L"Points", L"Messages", L"Log"}) {
+            TCITEMW item{};
+            item.mask = TCIF_TEXT;
+            item.pszText = const_cast<wchar_t*>(t);
+            SendMessageW(tabs, TCM_INSERTITEMW, static_cast<WPARAM>(SendMessageW(tabs, TCM_GETITEMCOUNT, 0, 0)),
+                         reinterpret_cast<LPARAM>(&item));
+        }
     }
     make(L"BUTTON", L"Clear", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_clear);
     make(L"BUTTON", L"Copy", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_copy);
-    make(L"BUTTON", L"Save log...", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_save);
+    make(L"BUTTON", L"Save...", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_save);
+    make(L"BUTTON", L"", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_fold);
+    console_points_ = make(WC_LISTVIEWW, L"", WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL |
+                                                  LVS_SHOWSELALWAYS,
+                           console_panel_, id_console_points, WS_EX_CLIENTEDGE);
+    SendMessageW(console_points_, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     LoadLibraryW(L"Msftedit.dll");
     console_ = make(MSFTEDIT_CLASS, L"",
-                    WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
-                        ES_NOHIDESEL,
-                    console_panel_, id_console_text);
+                    WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL,
+                    console_panel_, id_console_text, WS_EX_CLIENTEDGE);
     SendMessageW(console_, EM_EXLIMITTEXT, 0, 0x7FFFFFFE);
     SendMessageW(console_, EM_SETTARGETDEVICE, 0, 1);  // no wrapping: the tables keep their columns
-    SendMessageW(console_, EM_SETBKGNDCOLOR, 0, RGB(30, 30, 30));    inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
+    make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, console_panel_, id_console_foot);
+    inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
                                  10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_inspector)),
                                  GetModuleHandleW(nullptr), this);
     // The inspector's controls, each after its label.
@@ -682,23 +689,32 @@ DWORD CALLBACK read_rtf(DWORD_PTR cookie, LPBYTE buffer, LONG size, LONG* read) 
     return 0;
 }
 
+constexpr int tab_points = 0, tab_messages = 1, tab_log = 2;  // the console's tabs
+
 }  // namespace
 
-// The console's lines since the last flush, appended at the end (the whole text again when lines it shows
-// were dropped, or rebuild). It follows the end while the view is at the bottom; scrolled up, it stays put.
+LogFilter MainWindow::console_text_filter() const noexcept {
+    return console_tab_ == tab_messages ? LogFilter::warnings : LogFilter::all;
+}
+
+// The log's lines since the last flush, appended to the rich edit (the whole text again when lines it shows
+// were dropped, or rebuild); it follows the end while the view is at the bottom, and stays put scrolled up.
+// The Messages tab shows warnings and errors, the Log tab everything. The footer and the Messages count too.
 void MainWindow::flush_console(bool rebuild) {
     if (!console_) return;
+    update_console_footer();
     if (console_shown_ < console_log_.dropped()) rebuild = true;
     if (!rebuild && console_shown_ == console_log_.total()) return;
+    const LogFilter filter = console_text_filter();
     const std::size_t from = rebuild ? 0 : console_shown_ - console_log_.dropped();
     const bool any_before = !rebuild && console_lines_shown_ > 0;
     std::size_t adding = 0;
     for (std::size_t k = from; k < console_log_.lines().size(); ++k) {
-        if (shows(console_filter_, console_log_.lines()[k].level)) ++adding;
+        if (shows(filter, console_log_.lines()[k].level)) ++adding;
     }
     console_shown_ = console_log_.total();
     if (!rebuild && adding == 0) return;
-    const std::string rtf = console_rtf(console_log_.lines(), from, console_filter_, any_before);
+    const std::string rtf = console_rtf(console_log_.lines(), from, filter, any_before);
     console_lines_shown_ = (rebuild ? 0 : console_lines_shown_) + adding;
 
     SCROLLINFO si{sizeof(si), SIF_ALL};
@@ -732,54 +748,180 @@ void MainWindow::flush_console(bool rebuild) {
     InvalidateRect(console_, nullptr, TRUE);
 }
 
+// The Points tab from the controller's state (before a run's results are taken: its currents).
+void MainWindow::update_points() {
+    const RunState s = runner_.state();
+    const auto stopped = runner_.stopped_early();
+    PointsTable t = points_table(RunView{.rows = runner_.points(),
+                                         .iterations = runner_.iterations(),
+                                         .summary = runner_.plan_summary() ? &*runner_.plan_summary() : nullptr,
+                                         .plan = runner_.plan() ? &*runner_.plan() : nullptr,
+                                         .report = runner_.report() ? &*runner_.report() : nullptr,
+                                         .seconds = runner_.elapsed_seconds(),
+                                         .diagnostics = runner_.diagnostics(),
+                                         .stopped = stopped ? &*stopped : nullptr,
+                                         .running = s == RunState::running || s == RunState::stopping});
+    if (t == points_) return;
+    if (t.columns != points_.columns) {
+        SendMessageW(console_points_, WM_SETREDRAW, FALSE, 0);
+        while (SendMessageW(console_points_, LVM_DELETECOLUMN, 0, 0)) {
+        }
+        for (std::size_t c = 0; c < t.columns.size(); ++c) {
+            std::wstring name = win32::widen(t.columns[c]);
+            LVCOLUMNW col{};
+            col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+            col.fmt = t.numeric[c] ? LVCFMT_RIGHT : LVCFMT_LEFT;
+            const int chars = c == 0 ? 6 : c + 1 == t.columns.size() ? 13 : std::max<int>(static_cast<int>(name.size()) + 2, 10);
+            col.cx = scaled(7 * chars + 8, dpi_);
+            col.pszText = name.data();
+            SendMessageW(console_points_, LVM_INSERTCOLUMNW, c, reinterpret_cast<LPARAM>(&col));
+        }
+        SendMessageW(console_points_, WM_SETREDRAW, TRUE, 0);
+    }
+    points_ = std::move(t);
+    SendMessageW(console_points_, LVM_SETITEMCOUNT, points_.rows.size(), LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+    InvalidateRect(console_points_, nullptr, FALSE);
+    // While a run goes, its point in view.
+    const auto live = std::ranges::find(points_.states, PointState::live);
+    if (live != points_.states.end()) {
+        SendMessageW(console_points_, LVM_ENSUREVISIBLE, static_cast<WPARAM>(live - points_.states.begin()), FALSE);
+    }
+    update_console_footer();
+}
+
+void MainWindow::update_console_footer() {
+    const std::size_t warnings = console_log_.count(LogLevel::warning), errors = console_log_.count(LogLevel::error);
+    std::string text = points_.progress;
+    const auto add = [&](std::size_t n, std::string_view what) {
+        if (n == 0) return;
+        text += std::format("{}{} {}{}", text.empty() ? "" : " · ", n, what, n == 1 ? "" : "s");
+    };
+    add(warnings, "warning");
+    add(errors, "error");
+    win32::set_text(GetDlgItem(console_panel_, id_console_foot), text);
+    // The Messages tab carries their count.
+    const std::wstring label = warnings + errors == 0 ? std::wstring(L"Messages") : std::format(L"Messages ({})", warnings + errors);
+    TCITEMW item{};
+    item.mask = TCIF_TEXT;
+    item.pszText = const_cast<wchar_t*>(label.c_str());
+    SendMessageW(GetDlgItem(console_panel_, id_console_tabs), TCM_SETITEMW, tab_messages, reinterpret_cast<LPARAM>(&item));
+}
+
 void MainWindow::layout_console() {
     RECT r{};
     GetClientRect(console_panel_, &r);
-    const int pad = scaled(4, dpi_), gap = scaled(4, dpi_), row = scaled(23, dpi_);
-    const int strip = row + 2 * pad;
-    const auto put = [&](int id, int x, int width) {
-        MoveWindow(GetDlgItem(console_panel_, id), x, pad, std::max(width, 0), row, TRUE);
+    const int pad = scaled(3, dpi_), gap = scaled(4, dpi_), row = scaled(22, dpi_), strip = scaled(console_strip_96, dpi_);
+    const int foot = scaled(18, dpi_);
+    const auto put = [&](int id, int x, int y, int width, int height) {
+        MoveWindow(GetDlgItem(console_panel_, id), x, y, std::max(width, 0), std::max(height, 0), TRUE);
     };
-    // Left to right: the title and the filter; the buttons on the right, as room allows.
-    int x = pad;
-    const int title = scaled(56, dpi_), show = scaled(36, dpi_), button = scaled(48, dpi_), save = scaled(72, dpi_);
-    put(id_console_title, x, title);
-    x += title + gap;
-    put(id_console_show, x, show);
-    x += show + gap;
+    // The strip: the title and the tabs on the left, Clear, Copy, Save and the fold button on the right.
+    const int title = scaled(58, dpi_), tabs = scaled(250, dpi_);
+    put(id_console_title, pad + gap, 0, title, strip);
+    put(id_console_tabs, pad + gap + title, pad + scaled(2, dpi_), tabs, strip - pad - scaled(2, dpi_));
     int right = r.right - pad;
-    for (const auto& [id, width] : {std::pair{id_console_save, save}, std::pair{id_console_copy, button},
-                                    std::pair{id_console_clear, button}}) {
+    for (const auto& [id, width] : {std::pair{id_console_fold, scaled(26, dpi_)}, std::pair{id_console_save, scaled(64, dpi_)},
+                                    std::pair{id_console_copy, scaled(50, dpi_)}, std::pair{id_console_clear, scaled(50, dpi_)}}) {
         right -= width;
-        put(id, right, width);
+        put(id, right, (strip - row) / 2, width, row);
         right -= gap;
     }
-    MoveWindow(GetDlgItem(console_panel_, id_console_filter), x, pad, std::max(right - x, scaled(60, dpi_)), row * 8, TRUE);
-    MoveWindow(console_, 0, strip, r.right, std::max<int>(r.bottom - strip, 0), TRUE);
+    // The body: the points table or the log, then the footer; none of it when folded.
+    const bool open = !state_.layout.console_collapsed;
+    const int body = std::max<int>(r.bottom - strip - foot, 0);
+    MoveWindow(console_points_, 0, strip, r.right, body, TRUE);
+    MoveWindow(console_, 0, strip, r.right, body, TRUE);
+    put(id_console_foot, pad + gap, strip + body, r.right - 2 * (pad + gap), foot);
+    ShowWindow(console_points_, open && console_tab_ == tab_points ? SW_SHOW : SW_HIDE);
+    ShowWindow(console_, open && console_tab_ != tab_points ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(console_panel_, id_console_foot), open ? SW_SHOW : SW_HIDE);
+    win32::set_text(GetDlgItem(console_panel_, id_console_fold), open ? "▾" : "▴");
 }
 
 void MainWindow::on_console(int id, int code) {
-    if (id == id_console_filter && code == CBN_SELCHANGE) {
-        const auto k = SendMessageW(GetDlgItem(console_panel_, id_console_filter), CB_GETCURSEL, 0, 0);
-        if (k >= 0 && static_cast<std::size_t>(k) < filter_names().size()) {
-            console_filter_ = static_cast<LogFilter>(k);
-            flush_console(true);
-        }
-    } else if (code == BN_CLICKED && id == id_console_clear) {
+    if (code != BN_CLICKED) return;
+    if (id == id_console_clear) {
         console_log_.clear();
         console_lines_shown_ = 0;
         flush_console(true);
-    } else if (code == BN_CLICKED && id == id_console_copy) {
+    } else if (id == id_console_copy) {
         copy_console();
-    } else if (code == BN_CLICKED && id == id_console_save) {
-        const fs::path p = win32::save_dialog(hwnd_, L"Logs (*.log)\0*.log\0Text (*.txt)\0*.txt\0All files\0*.*\0",
-                                              L"Save the console log", L"log");
+    } else if (id == id_console_save) {
+        const bool table = console_tab_ == tab_points;
+        const fs::path p = table ? win32::save_dialog(hwnd_, L"CSV (*.csv)\0*.csv\0All files\0*.*\0", L"Save the points table", L"csv")
+                                 : win32::save_dialog(hwnd_, L"Logs (*.log)\0*.log\0Text (*.txt)\0*.txt\0All files\0*.*\0",
+                                                      L"Save the console log", L"log");
         if (!p.empty()) save_console(p);
+    } else if (id == id_console_fold) {
+        set_console_collapsed(!state_.layout.console_collapsed);
     }
 }
 
+LRESULT MainWindow::on_console_notify(const NMHDR& n, LPARAM l) {
+    if (n.idFrom == static_cast<UINT_PTR>(id_console_tabs) && n.code == TCN_SELCHANGE) {
+        set_console_tab(static_cast<int>(SendMessageW(n.hwndFrom, TCM_GETCURSEL, 0, 0)));
+        return 0;
+    }
+    if (n.hwndFrom != console_points_) return 0;
+    if (n.code == LVN_GETDISPINFOW) {
+        auto& d = reinterpret_cast<NMLVDISPINFOW*>(l)->item;
+        if ((d.mask & LVIF_TEXT) && d.iItem >= 0 && static_cast<std::size_t>(d.iItem) < points_.rows.size()) {
+            const auto& cells = points_.rows[static_cast<std::size_t>(d.iItem)];
+            const std::wstring w = d.iSubItem >= 0 && static_cast<std::size_t>(d.iSubItem) < cells.size()
+                                       ? win32::widen(cells[static_cast<std::size_t>(d.iSubItem)])
+                                       : std::wstring();
+            if (d.cchTextMax > 0) {
+                const auto n2 = std::min<std::size_t>(w.size(), static_cast<std::size_t>(d.cchTextMax - 1));
+                std::wmemcpy(d.pszText, w.data(), n2);
+                d.pszText[n2] = L'\0';
+            }
+        }
+        return 0;
+    }
+    if (n.code == NM_CUSTOMDRAW) {
+        // The rows coloured by state: the point being solved on light blue, an unconverged point amber, the
+        // points not yet solved grey; "converged" in green.
+        auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(l);
+        switch (cd->nmcd.dwDrawStage) {
+        case CDDS_PREPAINT: return CDRF_NOTIFYITEMDRAW;
+        case CDDS_ITEMPREPAINT: return CDRF_NOTIFYSUBITEMDRAW;
+        case CDDS_ITEMPREPAINT | CDDS_SUBITEM: {
+            const auto k = static_cast<std::size_t>(cd->nmcd.dwItemSpec);
+            if (k >= points_.states.size()) return CDRF_DODEFAULT;
+            const PointState st = points_.states[k];
+            const bool status = static_cast<std::size_t>(cd->iSubItem) + 1 == points_.columns.size();
+            cd->clrTextBk = st == PointState::live ? RGB(232, 241, 254) : GetSysColor(COLOR_WINDOW);
+            cd->clrText = st == PointState::pending ? RGB(160, 166, 174)
+                          : st == PointState::warning ? RGB(168, 115, 12)
+                          : st == PointState::live    ? RGB(31, 95, 191)
+                          : status                    ? RGB(46, 138, 70)
+                                                      : GetSysColor(COLOR_WINDOWTEXT);
+            return CDRF_NEWFONT;
+        }
+        default: return CDRF_DODEFAULT;
+        }
+    }
+    return 0;
+}
+
+void MainWindow::set_console_tab(int tab) {
+    if (tab < tab_points || tab > tab_log) return;
+    const bool text_changed = (tab == tab_messages) != (console_tab_ == tab_messages);
+    console_tab_ = tab;
+    SendMessageW(GetDlgItem(console_panel_, id_console_tabs), TCM_SETCURSEL, static_cast<WPARAM>(tab), 0);
+    if (tab != tab_points && text_changed) flush_console(true);
+    layout_console();
+}
+
+void MainWindow::set_console_collapsed(bool collapsed) {
+    if (state_.layout.console_collapsed == collapsed) return;
+    state_.layout.console_collapsed = collapsed;
+    layout();
+}
+
 bool MainWindow::copy_console() {
-    const std::wstring text = win32::widen(console_log_.text(console_filter_));
+    const std::wstring text = win32::widen(console_tab_ == tab_points ? points_text(points_, '\t')
+                                                                          : console_log_.text(console_text_filter()));
     if (!OpenClipboard(hwnd_)) return false;
     EmptyClipboard();
     bool ok = false;
@@ -796,14 +938,15 @@ bool MainWindow::copy_console() {
 }
 
 bool MainWindow::save_console(const fs::path& path) {
+    const bool table = console_tab_ == tab_points;
     std::ofstream out(path, std::ios::binary);
-    out << console_log_.text(console_filter_);
+    out << (table ? points_text(points_, ',') : console_log_.text(console_text_filter()));
     out.close();
     if (!out) {
         set_status(status_state, "Could not write " + path.filename().string(), LogLevel::error);
         return false;
     }
-    set_status(status_state, "Saved the console log to " + path.filename().string());
+    set_status(status_state, (table ? "Saved the points table to " : "Saved the console log to ") + path.filename().string());
     return true;
 }
 
@@ -811,9 +954,12 @@ int MainWindow::console_line_count() const {
     return console_lines_shown_ == 0 ? 0 : static_cast<int>(SendMessageW(console_, EM_GETLINECOUNT, 0, 0));
 }
 
-void MainWindow::set_console_filter(LogFilter filter) {
-    SendMessageW(GetDlgItem(console_panel_, id_console_filter), CB_SETCURSEL, static_cast<WPARAM>(filter), 0);
-    on_console(id_console_filter, CBN_SELCHANGE);
+int MainWindow::console_row_count() const {
+    return static_cast<int>(SendMessageW(console_points_, LVM_GETITEMCOUNT, 0, 0));
+}
+
+bool MainWindow::console_body_shown() const {
+    return (GetWindowLongPtrW(console_tab_ == tab_points ? console_points_ : console_, GWL_STYLE) & WS_VISIBLE) != 0;
 }
 
 std::string MainWindow::status(int part) const {
@@ -1928,6 +2074,7 @@ void MainWindow::on_run_events() {
     run_page_->update(runner_, renderer(), true);  // before the results are taken: how the run ended
     console_log_.finish(runner_);
     flush_console();
+    update_points();  // before the results are taken: their currents
     deck_->set_diagnostics(runner_.diagnostics());
     on_run_finished(pending, s);
 }
@@ -1954,6 +2101,7 @@ void MainWindow::on_run_timer() {
         }
         show_status(status_state, text);
         flush_console();
+        update_points();
         run_page_->update(runner_, renderer());
         update_command_states();
         update_taskbar(pending_ == Pending::run);
@@ -2268,8 +2416,10 @@ void MainWindow::execute(Command c) {
         select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
         pending_ = Pending::run;
         console_log_.begin_run();
+        set_console_collapsed(false);  // Unit 26j: the console opens for a run
         log_line(LogLevel::header, "Run " + document_.path().filename().string());
         runner_.start_run(document_.text(), document_.path());
+        update_points();  // the last run's rows cleared
         update_taskbar(true);
         show_status(status_state, "Running...");
         SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
@@ -2722,6 +2872,9 @@ LRESULT CALLBACK MainWindow::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARA
             }
             self->on_inspector(LOWORD(w), HIWORD(w));
             return 0;
+        case WM_NOTIFY:
+            if (hwnd == self->console_panel_) return self->on_console_notify(*reinterpret_cast<const NMHDR*>(l), l);
+            break;
         case WM_HSCROLL:  // a slider (Unit 26c, YD5, YD6)
             if (l != 0) self->on_slider(reinterpret_cast<HWND>(l));
             return 0;
@@ -2917,7 +3070,8 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_MOUSEMOVE:
-        if (dragging_splitter_ == 3) {  // up makes the console taller; never under 40 px (0 is the default)
+        if (dragging_splitter_ == 3) {  // up makes the console taller (and opens it); never under 40 px
+            state_.layout.console_collapsed = false;
             const int height = std::max(drag_width_ - (GET_Y_LPARAM(l) - drag_origin_), scaled(40, dpi_));
             state_.layout.console_height = MulDiv(height, 96, dpi_);
             layout();

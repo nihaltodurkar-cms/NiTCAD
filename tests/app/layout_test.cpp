@@ -24,26 +24,25 @@ void check_tiles(const Panes& p, int w, int h) {
     CHECK(p.right_splitter.x == p.tabs.right());
     CHECK(p.inspector.x == p.right_splitter.right());
     CHECK(p.inspector.right() == w);
-    for (const Rect& r : {p.tree, p.tabs, p.left_splitter, p.right_splitter}) {
+    for (const Rect& r : {p.tree, p.inspector, p.left_splitter, p.right_splitter}) {
         CHECK(r.y == p.toolbar.bottom());
         CHECK(r.bottom() == p.status.y);
         CHECK(r.width >= 0);
     }
-    // The right column top to bottom (Unit 26j): inspector, splitter, console, as wide as the inspector.
-    CHECK(p.inspector.y == p.toolbar.bottom());
-    CHECK(p.console_splitter.y == p.inspector.bottom());
+    // The centre top to bottom (Unit 26j): the tabs (strip, page, metrics), a splitter, the console.
+    CHECK(p.tabs.y == p.toolbar.bottom());
+    CHECK(p.console_splitter.y == p.tabs.bottom());
     CHECK(p.console.y == p.console_splitter.bottom());
     CHECK(p.console.bottom() == p.status.y);
-    for (const Rect& r : {p.inspector, p.console_splitter, p.console}) {
-        CHECK(r.x == p.inspector.x);
-        CHECK(r.width == p.inspector.width);
+    for (const Rect& r : {p.console_splitter, p.console}) {
+        CHECK(r.x == p.tabs.x);
+        CHECK(r.width == p.tabs.width);
         CHECK(r.height >= 0);
-    }
-    CHECK(p.page.x == p.tabs.x);
+    }    CHECK(p.page.x == p.tabs.x);
     CHECK(p.page.width == p.tabs.width);
     CHECK(p.page.y > p.tabs.y);
     CHECK(p.metrics.y == p.page.bottom());
-    CHECK(p.metrics.bottom() == p.status.y);
+    CHECK(p.metrics.bottom() == p.tabs.bottom());
 }
 
 }  // namespace
@@ -93,11 +92,12 @@ TEST_CASE("app layout: the panes tile the window and scale with the DPI (WG5)", 
     CHECK(f.page.height >= 0);
 }
 
-TEST_CASE("app layout: the console under the inspector, its saved height kept within the column (Unit 26j)", "[app]") {
+TEST_CASE("app layout: the console at the bottom of the centre, its height saved, folded to its strip (Unit 26j)", "[app]") {
     const app::Layout defaults;
     const Panes a = app::layout_panes(1280, 800, 96, defaults, 30, 22);
     CHECK(a.console.height == app::console_height_96);
     CHECK(a.console_splitter.height == app::splitter_96);
+    CHECK(a.inspector.height == a.tree.height);
     const Panes b = app::layout_panes(2560, 1600, 192, defaults, 60, 44);
     CHECK(b.console.height == 2 * a.console.height);
     CHECK(b.console.y == 2 * a.console.y);
@@ -106,11 +106,16 @@ TEST_CASE("app layout: the console under the inspector, its saved height kept wi
     const Panes c = app::layout_panes(2560, 1600, 192, saved, 60, 44);
     check_tiles(c, 2560, 1600);
     CHECK(c.console.height == 640);
-    // A short window lowers the console so the inspector keeps its minimum height; shorter still, none.
+    saved.console_collapsed = true;
+    const Panes f = app::layout_panes(1280, 800, 96, saved, 30, 22);
+    check_tiles(f, 1280, 800);
+    CHECK(f.console.height == app::console_strip_96);
+    // A short window lowers the console so the page keeps its minimum; shorter still, none.
+    saved = {};
     saved.console_height = 2000;
     const Panes d = app::layout_panes(1280, 800, 96, saved, 30, 22);
     check_tiles(d, 1280, 800);
-    CHECK(d.inspector.height == app::min_side_96);
+    CHECK(d.page.height == app::min_page_96);
     const Panes e = app::layout_panes(600, 150, 96, defaults, 30, 22);
     check_tiles(e, 600, 150);
     CHECK(e.console.height == 0);
