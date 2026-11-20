@@ -2671,7 +2671,46 @@ Up to r = 10 the counts are the uncoupled fixture's (40–55 at 27,648), and the
 or better (55 against 100 at 27,648, bias 20, r = 10): the coupling it carries helps. Only strong recombination
 under bias (r ≥ 100, where h exceeds the diffusion length by a factor of 10) grows, by up to 15 times, and `cpr`
 grows there as well. M1 stays a survivor: Jacobi is the weaker form, but no count bound separates the two
-reliably (they cross at 27,648, bias 20, r = 1000).
+reliably (they cross at 27,648, bias 20, r = 1000). The owner then took the recommended option (2026-11-20,
+"choose recommended"): keep the forward sweep, measure MD5, and build a coupled carrier stage only if MD5's devices
+show the strong regime.
+
+**MD5, 2026-11-20: MG6 and MG8 met, MG7 met on the FinFET sweep but missed on the diode series' threads, MG5
+missed.** Release, pinned to the six P cores (mask 3C3; the owner's four-core cap of earlier the same day was
+lifted before these runs). The 3D diode series is `[.scale_cpr_amg]` (log `C:\Users\disha\ssrun\md5series.log`):
+one Newton step's linear solve, the Jacobian at 0.5 V on the equilibrium potential, a fresh solver, strict.
+Seconds (build + solve), GMRES products and held memory:
+
+| size, unknowns | cpr_amg, 1 thread | cpr_amg, 6 threads | GMRES-ILUT | GMRES-CPR |
+|---|---|---|---|---|
+| 20³, 24,000 | 0.06 + 0.06, 22, 34 MB | 0.06 + 0.06 | 0.56 + 0.16, 40, 46 MB | 0.57 + 0.22, 42, 57 MB |
+| 30³, 81,000 | 0.23 + 0.37, 28, 122 MB | 0.22 + 1.61 | 2.97 + 1.22, 60, 156 MB | 3.21 + 1.36, 60, 192 MB |
+| 40³, 192,000 | 0.60 + 1.47, 42, 269 MB | 0.58 + 1.49 | 7.82 + 3.17, 90, 379 MB | 6.98 + 2.98, 71, 471 MB |
+| 50³, 375,000 | 1.00 + 3.31, 52, 526 MB | 1.19 + 1.52 | 15.23 + 8.61, 108, 735 MB | 16.13 + 9.15, 96, 905 MB |
+| 60³, 648,000 | 1.81 + 7.25, 71, 918 MB | 1.97 + 3.69 | 29.03 + 21.21, 116, 1,270 MB | 29.70 + 21.43, 112, 1,570 MB |
+| 70³, 1,029,000 | 3.71 + 17.83, 83, 1,437 MB | 3.50 + 7.37 | 46.76 + 35.36, 142, 2,017 MB | 48.37 + 38.81, 138, 2,487 MB |
+
+- **MG6 met:** at one thread the linear time is 0.19× GMRES-ILUT's at 40³ and 0.26× at 70³ (target ≤ 0.5×), and
+  0.15–0.26× at every size; GMRES-CPR is no faster than ILUT at any size.
+- **MG8 met:** held memory 0.71× GMRES-ILUT's at 40³ and at 70³ (269 against 379 MB, 1,437 against 2,017).
+- **MG7, the series: missed.** Six threads against one: 1.0× at 40³, 1.98× at 70³ (the solve alone 2.42×), against
+  ≥ 2.5×; the build (aggregation, symmetrization) is serial. At 30³ six threads are slower (solve 1.61 s against
+  0.37 s, as `[.scale_amg]`'s 70³ six-thread anomaly in Unit 58); not explained. The bits agree (MG2): the same
+  GMRES products at 1 and 6 threads at every size.
+- **MG7, the FinFET sweep: met.** `decks/finfet_3d.deck` (45,375 nodes, 17 points), copies with `[solver]` keys
+  only (`C:\Users\disha\ssrun\md5`), both at 6 threads: PARDISO 526 s (17:16:47–17:25:33), `gmres` + `cpr_amg`
+  224 s (17:25:33–17:29:17), 2.35× faster. The drain currents agree at every point to 7.6e-11 relative (worst
+  absolute 3.7e-20 A, at Vg = 0), within any terminal-current resolution. `cpr_amg` took more Newton iterations
+  at Vg = 0.30–0.40 V (point 6 retried: 32, then 38; points 7 and 8 20 and 18, against PARDISO's 7 and 8), and
+  PARDISO retried point 1 (33, then 41) where `cpr_amg` took 11: the strong-recombination regime of the probe did
+  not show (no point failed and no linear solve fell back), so no coupled carrier stage is built.
+- **MG5 missed:** GMRES products grow 3.8× from 24,000 to 1,029,000 unknowns (22 → 83; target ≤ 1.5×, `cpr` 3.5×
+  here) and on the fixture from 24² to 96² 1.19× at bias 20 (36 → 43) but from 2 to 40 at bias 0. Slices 0b–0c
+  had already found no strength test that meets 1.5× at every size.
+- A first run at four threads (the cap then in force; `md5series_4threads.log`) gave the same one-thread figures
+  within timing noise but 77 GMRES products at 60³ against 71 here: the series' equilibrium comes from PARDISO at
+  6 threads, which is not bit-reproducible between runs, so the Jacobian differs in its last bits. Within each run
+  the thread counts agree.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

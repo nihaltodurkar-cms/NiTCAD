@@ -6,6 +6,7 @@
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_amg]"       (slice 2)
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_cpr]"       (slice 3)
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_carrier_blocks]"  (Unit 63 slice 0)
+//   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_cpr_amg]"   (Unit 63 MD5)
 // Measurement only: nothing here is gated beyond the cases solving, and no product code changes.
 //
 // Two measurements per case and linear-solver configuration, from the same start (the case's bias
@@ -635,6 +636,41 @@ TEST_CASE("solver profile: GMRES-CPR on the 3D diode series (Unit 58 slice 3)", 
             one_solve("GMRES-AMG", converged, rhs, amg);
             one_solve("GMRES-AMG 6 threads", converged, rhs, amg6);
         }
+    }
+}
+
+TEST_CASE("solver profile: GMRES-CPR-AMG on the 3D diode series (Unit 63 MD5)", "[.scale_cpr_amg]") {
+    // MG5, MG6 and MG8: one Newton step's linear solve as [.scale_cpr] (the Jacobian at 0.5 V on the
+    // equilibrium potential, a fresh solver), strict. cpr_amg first (the least memory expected: the
+    // peak is the process's), then GMRES-ILUT and GMRES-CPR at one thread; MG7's linear part with
+    // cpr_amg at 6 threads.
+    const linalg::SolverConfig ilut{.backend = linalg::SolverBackend::gmres_ilut,
+                                    .fallback = linalg::LinearFallback::none};
+    linalg::SolverConfig cpr = ilut;
+    cpr.preconditioner = linalg::Preconditioner::cpr;
+    linalg::SolverConfig cpr_amg = ilut;
+    cpr_amg.preconditioner = linalg::Preconditioner::cpr_amg;
+    linalg::SolverConfig cpr_amg6 = cpr_amg;
+    cpr_amg6.threads = 6;
+    for (const int nodes : {20, 30, 40, 50, 60, 70}) {
+        const auto d = diode_3d(nodes);
+        const auto eq = solve::solve_equilibrium(d, {.linear = helper_solver()});
+        REQUIRE(eq.has_value());
+        std::vector<double> rhs;
+        const linalg::SparseMatrix j =
+            device_jacobian(d, std::vector<double>{0.5, 0.0}, eq->fields.potential_V, rhs);
+        REQUIRE(j.rows() % 3 == 0);
+        std::vector<std::int32_t> labels(static_cast<std::size_t>(j.rows()));
+        for (std::size_t u = 0; u < labels.size(); ++u) labels[u] = static_cast<std::int32_t>(u % 3);
+        std::printf("\n=== cpr_amg %d^3: %zu unknowns, %zu nonzeros\n", nodes,
+                    static_cast<std::size_t>(j.rows()), j.nonzeros());
+        const ProcessMemory start = process_memory();
+        one_solve("GMRES-CPR-AMG", j, rhs, cpr_amg, labels);
+        std::printf("    peak rise so far %.0f MB\n", process_memory().peak_working_set_MB - start.peak_working_set_MB);
+        one_solve("GMRES-CPR-AMG 6 threads", j, rhs, cpr_amg6, labels);
+        one_solve("GMRES-ILUT", j, rhs, ilut);
+        std::printf("    peak rise so far %.0f MB\n", process_memory().peak_working_set_MB - start.peak_working_set_MB);
+        one_solve("GMRES-CPR", j, rhs, cpr, labels);
     }
 }
 
