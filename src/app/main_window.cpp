@@ -155,6 +155,7 @@ MainWindow::~MainWindow() {
     if (accelerators_) DestroyAcceleratorTable(accelerators_);
     if (font_) DeleteObject(font_);
     if (bold_) DeleteObject(bold_);
+    if (console_font_) DeleteObject(console_font_);
     if (com_) CoUninitialize();  // after the taskbar list's release
 }
 
@@ -211,6 +212,11 @@ bool MainWindow::create_children() {
     results_ = std::make_unique<ResultsPage>(hwnd_, id_results);
     results_->on_pass = [this](std::size_t k) { results_show_pass(k); };
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
+    // Unit 26j: the console under the inspector, read-only, wrapped, as long as it gets (ConsoleLog's cap).
+    console_ = make(L"EDIT", L"",
+                    WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+                    hwnd_, id_console, WS_EX_CLIENTEDGE);
+    SendMessageW(console_, EM_SETLIMITTEXT, 0, 0);
     inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
                                  10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_inspector)),
                                  GetModuleHandleW(nullptr), this);
@@ -476,6 +482,9 @@ void MainWindow::apply_dpi(int dpi) {
     const auto set = [&](HWND h) { SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE); };
     for (HWND h : {toolbar_, status_, tree_, tabs_, metrics_}) set(h);
     for (HWND c = GetWindow(inspector_, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) set(c);
+    if (console_font_) DeleteObject(console_font_);
+    console_font_ = win32::code_font(dpi);
+    SendMessageW(console_, WM_SETFONT, reinterpret_cast<WPARAM>(console_font_), TRUE);
     SendMessageW(toolbar_, TB_AUTOSIZE, 0, 0);
     deck_->set_dpi(dpi);
     start_->set_dpi(dpi, font_, bold_);
@@ -503,6 +512,7 @@ void MainWindow::layout() {
     place(tree_, panes_.tree);
     place(tabs_, panes_.tabs);
     place(inspector_, panes_.inspector);
+    place(console_, panes_.console);
     const bool view = tab_ == tab_view || tab_ == tab_curves;
     Rect page = panes_.page;
     if (tab_ != tab_view) page.height += panes_.metrics.height;  // the metrics strip is the device view's
@@ -617,8 +627,46 @@ void MainWindow::update_title() {
     set_status(status_file, document_.is_untitled() ? std::string("untitled deck") : document_.path().string());
 }
 
-void MainWindow::set_status(int part, const std::string& text) {
+void MainWindow::set_status(int part, const std::string& text, bool log) {
     SendMessageW(status_, SB_SETTEXTW, static_cast<WPARAM>(part), reinterpret_cast<LPARAM>(win32::widen(text).c_str()));
+    if (log && part == status_state && !text.empty()) log_line(text);
+}
+
+void MainWindow::log_line(const std::string& text) {
+    SYSTEMTIME t{};
+    GetLocalTime(&t);
+    console_log_.add(std::format("[{:02}:{:02}:{:02}] {}", t.wHour, t.wMinute, t.wSecond, text));
+    flush_console();
+}
+
+// The console's lines since the last flush, appended at the end (which scrolls there); the whole text again
+// when lines it shows were dropped.
+void MainWindow::flush_console() {
+    if (!console_ || console_shown_ == console_log_.total()) return;
+    const auto& lines = console_log_.lines();
+    const bool rebuild = console_shown_ < console_log_.dropped();
+    std::wstring text;
+    for (std::size_t k = rebuild ? 0 : console_shown_ - console_log_.dropped(); k < lines.size(); ++k) {
+        if (!text.empty() || (!rebuild && console_shown_ > console_log_.dropped())) text += L"\r\n";
+        text += win32::widen(lines[k]);
+    }
+    console_shown_ = console_log_.total();
+    if (rebuild) {
+        SetWindowTextW(console_, text.c_str());
+        const auto end = GetWindowTextLengthW(console_);
+        SendMessageW(console_, EM_SETSEL, static_cast<WPARAM>(end), static_cast<LPARAM>(end));
+    } else {
+        const auto end = GetWindowTextLengthW(console_);
+        SendMessageW(console_, EM_SETSEL, static_cast<WPARAM>(end), static_cast<LPARAM>(end));
+        SendMessageW(console_, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(text.c_str()));
+    }
+    SendMessageW(console_, EM_SCROLLCARET, 0, 0);
+}
+
+std::wstring MainWindow::console_text() const {
+    std::wstring w(static_cast<std::size_t>(GetWindowTextLengthW(console_)) + 1, L'\0');
+    w.resize(static_cast<std::size_t>(GetWindowTextW(console_, w.data(), static_cast<int>(w.size()))));
+    return w;
 }
 
 std::string MainWindow::status(int part) const {
@@ -1669,9 +1717,11 @@ bool MainWindow::open_deck(const fs::path& path) {
     scene_.reset();
     fill_tree();
     pending_ = Pending::open;
+    console_log_.begin_run();
+    log_line("Open " + document_.path().filename().string());
     runner_.start_check(document_.text(), document_.path());
     update_taskbar(false);  // ZD5: a check clears a failed run's state
-    set_status(status_state, "Building the deck...");
+    set_status(status_state, "Building the deck...", false);
     refresh();
     update_command_states();
     return true;
@@ -1716,6 +1766,7 @@ bool MainWindow::compare_result(const fs::path& result, const fs::path& device, 
 
 void MainWindow::on_run_events() {
     if (!runner_.process()) return;
+    console_log_.follow(runner_);  // the text only: shown with the status, at most every 50 ms
     const RunState s = runner_.state();
     if (s == RunState::running || s == RunState::stopping) {
         // The events of a fast solve arrive as fast as the window takes them; showing them costs more than
@@ -1728,6 +1779,8 @@ void MainWindow::on_run_events() {
     KillTimer(hwnd_, run_timer);
     const Pending pending = std::exchange(pending_, Pending::none);
     run_page_->update(runner_, renderer(), true);  // before the results are taken: how the run ended
+    console_log_.finish(runner_);
+    flush_console();
     deck_->set_diagnostics(runner_.diagnostics());
     on_run_finished(pending, s);
 }
@@ -1752,7 +1805,8 @@ void MainWindow::on_run_timer() {
             else text += std::format(": point {}", r.point + 1);
             text += std::format(", iteration {}, update {:.2g}", r.iterations, r.update);
         }
-        set_status(status_state, text);
+        set_status(status_state, text, false);
+        flush_console();
         run_page_->update(runner_, renderer());
         update_command_states();
         update_taskbar(pending_ == Pending::run);
@@ -2051,9 +2105,11 @@ void MainWindow::execute(Command c) {
         if (runner_.busy()) return;
         document_.set_text(deck_->text());
         pending_ = Pending::check;
+        console_log_.begin_run();
+        log_line("Check " + (document_.is_untitled() ? std::string("Untitled") : document_.path().filename().string()));
         runner_.start_check(document_.text(), document_.path());
         update_taskbar(false);
-        set_status(status_state, "Checking...");
+        set_status(status_state, "Checking...", false);
         update_command_states();
         return;
     case Command::run:
@@ -2062,9 +2118,11 @@ void MainWindow::execute(Command c) {
         if (document_.is_untitled() && !save(true)) return;  // a run writes its outputs beside the deck
         select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
         pending_ = Pending::run;
+        console_log_.begin_run();
+        log_line("Run " + document_.path().filename().string());
         runner_.start_run(document_.text(), document_.path());
         update_taskbar(true);
-        set_status(status_state, "Running...");
+        set_status(status_state, "Running...", false);
         SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
         run_page_->update(runner_, renderer(), true);  // the last run's rows cleared
         update_command_states();
@@ -2681,22 +2739,35 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
                 SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
                 return TRUE;
             }
+            const Rect& c = panes_.console_splitter;  // Unit 26j: the console's, along y
+            if (p.x >= c.x && p.x < c.right() && p.y >= c.y - 2 && p.y < c.bottom() + 2) {
+                SetCursor(LoadCursorW(nullptr, IDC_SIZENS));
+                return TRUE;
+            }
         }
         break;
     }
     case WM_LBUTTONDOWN: {
         const int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
         const auto in = [&](const Rect& r) { return x >= r.x - 2 && x < r.right() + 2 && y >= r.y && y < r.bottom(); };
-        dragging_splitter_ = in(panes_.left_splitter) ? 1 : in(panes_.right_splitter) ? 2 : 0;
+        const Rect& c = panes_.console_splitter;
+        const bool console = x >= c.x && x < c.right() && y >= c.y - 2 && y < c.bottom() + 2;
+        dragging_splitter_ = in(panes_.left_splitter) ? 1 : in(panes_.right_splitter) ? 2 : console ? 3 : 0;
         if (dragging_splitter_) {
             SetCapture(hwnd_);
-            drag_origin_ = x;
-            drag_width_ = dragging_splitter_ == 1 ? panes_.tree.width : panes_.inspector.width;
+            drag_origin_ = dragging_splitter_ == 3 ? y : x;
+            drag_width_ = dragging_splitter_ == 1   ? panes_.tree.width
+                          : dragging_splitter_ == 2 ? panes_.inspector.width
+                                                    : panes_.console.height;
         }
         return 0;
     }
     case WM_MOUSEMOVE:
-        if (dragging_splitter_) {
+        if (dragging_splitter_ == 3) {  // up makes the console taller; never under 40 px (0 is the default)
+            const int height = std::max(drag_width_ - (GET_Y_LPARAM(l) - drag_origin_), scaled(40, dpi_));
+            state_.layout.console_height = MulDiv(height, 96, dpi_);
+            layout();
+        } else if (dragging_splitter_) {
             const int dx = GET_X_LPARAM(l) - drag_origin_;
             const int width = std::max(drag_width_ + (dragging_splitter_ == 1 ? dx : -dx), scaled(min_side_96, dpi_));
             (dragging_splitter_ == 1 ? state_.layout.tree_width : state_.layout.inspector_width) = MulDiv(width, 96, dpi_);

@@ -23,6 +23,7 @@
 
 #include "NiTCAD/app/app_state.hpp"
 #include "NiTCAD/app/commands.hpp"
+#include "NiTCAD/app/console_log.hpp"
 #include "NiTCAD/app/deck_sections.hpp"
 #include "NiTCAD/app/document.hpp"
 #include "NiTCAD/app/layout.hpp"
@@ -175,11 +176,14 @@ public:
     [[nodiscard]] const std::string& readout_text() const noexcept { return readout_text_; }
     [[nodiscard]] bool hover_readout() const noexcept { return state_.hover_readout; }
     [[nodiscard]] const AppState& app_state() const noexcept { return state_; }
+    // Unit 26j: the console under the inspector (its text, and the edit control showing it).
+    [[nodiscard]] const ConsoleLog& console_log() const noexcept { return console_log_; }
+    [[nodiscard]] std::wstring console_text() const;
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
         id_tree = 4000, id_tabs, id_viewport, id_deck, id_metrics, id_inspector, id_toolbar, id_status, id_start,
-        id_run_page, id_results,
+        id_run_page, id_results, id_console,
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
         id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_cut, id_probe_text,
         // Unit 26c (YD1-YD3): arrows, streamlines and their seeds; the exploded view; the curves' pickers.
@@ -210,7 +214,11 @@ private:
     void layout();
     void layout_inspector();
     void update_title();
-    void set_status(int part, const std::string& text);
+    // The state part's messages also go to the console (log false: the run's live progress, which does not).
+    void set_status(int part, const std::string& text, bool log = true);
+    // Unit 26j: a timestamped line in the console; the console's new lines into its edit control.
+    void log_line(const std::string& text);
+    void flush_console();
     void on_run_events();
     void on_run_timer();
     void on_live_check();
@@ -299,7 +307,10 @@ private:
     WindowOptions options_;
     HWND hwnd_ = nullptr;
     HWND toolbar_ = nullptr, status_ = nullptr, tree_ = nullptr, tabs_ = nullptr, metrics_ = nullptr,
-         inspector_ = nullptr;
+         inspector_ = nullptr, console_ = nullptr;
+    HFONT console_font_ = nullptr;
+    ConsoleLog console_log_;
+    std::size_t console_shown_ = 0;  // the console's lines (by number, ConsoleLog::total) in its edit control
     std::unique_ptr<Viewport> viewport_;
     std::unique_ptr<DeckPane> deck_;
     std::unique_ptr<StartPage> start_;
@@ -381,7 +392,7 @@ private:
     std::vector<KeyItem> key_items_;
 
     // Splitters.
-    int dragging_splitter_ = 0;  // 1 left, 2 right
+    int dragging_splitter_ = 0;  // 1 left, 2 right, 3 the console's (a height, along y)
     int drag_origin_ = 0, drag_width_ = 0;
 };
 

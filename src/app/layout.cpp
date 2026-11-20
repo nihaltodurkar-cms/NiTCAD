@@ -41,7 +41,13 @@ Panes layout_panes(int client_width, int client_height, int dpi, const Layout& s
     }
     p.tree = {0, top, tree, body};
     p.left_splitter = {tree, top, split, body};
-    p.inspector = {w - inspector, top, inspector, body};
+    // The console under the inspector, as tall as saved but leaving the inspector its minimum height.
+    const int csplit = std::min(split, body);
+    int console = scaled(saved.console_height > 0 ? saved.console_height : console_height_96, dpi);
+    console = std::clamp(console, 0, std::max(body - csplit - min_side, 0));
+    p.inspector = {w - inspector, top, inspector, body - csplit - console};
+    p.console_splitter = {p.inspector.x, p.inspector.bottom(), inspector, csplit};
+    p.console = {p.inspector.x, p.console_splitter.bottom(), inspector, console};
     p.right_splitter = {p.inspector.x - split, top, split, body};
     const int cx = p.left_splitter.right(), cw = std::max(p.right_splitter.x - cx, 0);
     p.tabs = {cx, top, cw, body};

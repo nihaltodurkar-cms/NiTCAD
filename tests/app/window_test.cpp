@@ -16,8 +16,10 @@
 #include <dxgidebug.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <set>
 #include <string>
@@ -242,6 +244,42 @@ TEST_CASE("app window: a deck opened, run, shown, probed; the deck menus (WG7)",
     CHECK(w->tab() == MainWindow::tab_deck);
     CHECK(w->deck().caret_line() == w->runner().diagnostics()[0].line);
     CHECK(w->runner().diagnostics()[0].line > 0);
+}
+
+TEST_CASE("app window: the console logs the run's iterations and points, and a check's errors (Unit 26j)", "[app]") {
+    const fs::path dir = app_test::scratch("window_console");
+    const fs::path deck = app_test::write(dir, "m.deck", app_test::mosfet2d);
+    auto w = window();
+    const app::Rect& c = w->panes().console;
+    CHECK(c.height > 0);
+    CHECK(c.x == w->panes().inspector.x);
+    CHECK(c.y > w->panes().inspector.y);
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr; }));
+    CHECK(w->console_text().find(L"] Open ") != std::wstring::npos);
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    const std::wstring ran = w->console_text();
+    for (const wchar_t* s : {L"] Run ", L"  equilibrium\r\n", L"  bias point 1 of ", L"    Newton   1  update ",
+                             L"    converged in ", L" Newton iterations, ", L"] Done in "}) {
+        CHECK(ran.find(s) != std::wstring::npos);
+    }
+    // Every iteration of the run is one line, and the edit control shows every line of the log.
+    std::size_t newton = 0;
+    for (std::size_t at = ran.find(L"    Newton "); at != std::wstring::npos; at = ran.find(L"    Newton ", at + 1)) ++newton;
+    CHECK(newton == w->runner().iterations().size());
+    CHECK(static_cast<std::size_t>(std::ranges::count(ran, L'\n')) + 1 == w->console_log().lines().size());
+
+    std::string bad = app_test::mosfet2d;
+    bad.insert(bad.find("[contact source]"), "[bogus]\n");
+    w->deck().set_text(bad);
+    w->execute(Command::check);
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    REQUIRE(w->runner().diagnostics().size() == 1);
+    const std::wstring checked = w->console_text();
+    CHECK(checked.find(L"] Check ") != std::wstring::npos);
+    CHECK(checked.find(std::format(L"  line {}: ", w->runner().diagnostics()[0].line)) != std::wstring::npos);
+    CHECK(checked.find(L"] The deck does not build: ") != std::wstring::npos);
 }
 
 TEST_CASE("app window: the start page, the run monitor, Stop and the results (WG1, WG8, VA3, VA5)", "[app]") {
