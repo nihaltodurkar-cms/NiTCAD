@@ -359,6 +359,7 @@ add_executable(nitcad_mesh_test
   tests/mesh/layered2d_test.cpp
   tests/mesh/layered3d_test.cpp
   tests/mesh/layered3d_slanted_test.cpp
+  tests/mesh/interface_pieces_test.cpp
   tests/mesh/triangulation3d_test.cpp
   tests/mesh/generate3d_test.cpp
   tests/mesh/complex_test.cpp
@@ -674,6 +675,7 @@ add_executable(nitcad_solve_test
   tests/solve/unstructured_test.cpp
   tests/solve/unstructured3d_test.cpp
   tests/solve/complex_convergence_test.cpp
+  tests/solve/interface_pieces_accuracy_test.cpp
   tests/solve/field_mobility_test.cpp
   tests/solve/fermi_dirac_test.cpp
   tests/solve/heterojunction_test.cpp

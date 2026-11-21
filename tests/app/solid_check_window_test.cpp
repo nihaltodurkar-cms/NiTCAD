@@ -143,7 +143,7 @@ TEST_CASE("app window solid check: invalid layouts carry the build's message and
         {"a patch on no boundary face", with(mos, "patch gate = 0.3um 0 0.6um  0.7um 0.6um 0.6um", "patch gate = 0.3um 0.1um 0.3um  0.7um 0.5um 0.3um"),
          false, "patch", solid::Marker::Kind::contact, 1},
         {"a degenerate domain", with(mos, "domain = 0 1um 0 0.6um 0 0.6um", "domain = 0 1um 0 0.6um 0 0"), false, "domain", solid::Marker::Kind::domain, 1},
-        {"a box inside the oxide's interface plane (a hole in it)",
+        {"a box 0.1 um tall through the oxide's interface plane (feature lines under 6 s; a hole meshes since Unit 64)",
          with(mos, "[doping]", "[region well]\nmaterial = silicon\nbox = 0.3um 0.6um 0.1um 0.3um 0.4um 0.5um\n\n[doping]"), false, "interface",
          solid::Marker::Kind::point, 1, true},
     };
@@ -175,9 +175,9 @@ TEST_CASE("app window solid check: invalid layouts carry the build's message and
         CHECK(has(p.message, row.where));
         CHECK(count_of(p, row.marker) == row.markers);
         if (row.point) {
-            // The point lies on the si/ox interface piece with the hole (z = 0.4 um): the oxide, whose face it is, marked.
+            // The point lies on the box's side (z = 0.45 um), whose feature lines are under 6 s: the oxide, whose face it is, marked.
             const solid::Marker& mk = *std::ranges::find(p.markers, solid::Marker::Kind::point, &solid::Marker::kind);
-            CHECK(mk.at.z == 4000);
+            CHECK(mk.at.z == 4500);
             CHECK(std::ranges::any_of(p.markers, [](const solid::Marker& k) { return k.kind == solid::Marker::Kind::solid && k.solid.region == 1; }));
         }
         CHECK(has(page.banner(), p.message));

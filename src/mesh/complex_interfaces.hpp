@@ -3,7 +3,7 @@
 // the mesh layer.
 //
 // A piece is a maximal connected union of coplanar interface facets of one region pair: a planar
-// simple polygon (holes refused). Its edges are feature lines: a bend (two pieces of one pair), a
+// simple polygon, possibly with holes (Unit 64). Its edges are feature lines: a bend (two pieces of one pair), a
 // junction (three or more regions), or a trace (the piece meets the outer boundary, which must be
 // planar across it). Feature points: where feature lines meet, where a trace crosses a domain
 // edge, and where a constrained patch edge crosses a trace or ends on it (FD8 b). A patch edge
@@ -51,13 +51,18 @@ struct InterfacePieceLayout {
     Point normal{};                 // unit; (u, w, normal) right-handed for oblique pieces
     std::vector<Point> local;       // the corners in the frame
     std::vector<Point> inset;       // the polygon inset by 1.5 s, in the frame
+    // Holes (Unit 64, IP2): each as the outer loop's fields, clockwise in the frame; its inset grows the hole.
+    std::vector<std::vector<std::size_t>> hole_loops;
+    std::vector<std::vector<Point>> holes;
+    std::vector<std::vector<Point>> local_holes;
+    std::vector<std::vector<Point>> inset_holes;
     double spacing = 0.0;           // pair spacing: min(h of both regions, max(4 s, L of the clearance))
     double band = 0.0;              // its protected band b = sqrt(spacing^2 / 3 + s^2 / 4)
 
     [[nodiscard]] Point to_local(const Point& p) const;
     // The point at frame coordinates l, offset along the normal (exact on the axis for axis pieces).
     [[nodiscard]] Point to_world(const Point& l, double offset) const;
-    // Distance to the polygon (closed), in double.
+    // Distance to the polygon (closed, less its holes' interiors), in double.
     [[nodiscard]] double distance(const Point& x) const;
 };
 
@@ -91,6 +96,8 @@ struct InterfaceLayout {
 
 // The pair set P of a piece in its frame: the 2D generator's nodes on the inset polygon at the
 // piece's spacing, with boundary nodes on each inset edge at the lattice of the feature line beside it.
+// A holed piece's inset domain is cut along lines of constant v (one through each hole) into simple
+// polygons of one region, so the 2D generator meshes it with its holes.
 [[nodiscard]] std::expected<std::vector<Point>, base::Error> pair_set(const InterfacePieceLayout& piece, double s,
                                                                       std::size_t max_nodes);
 

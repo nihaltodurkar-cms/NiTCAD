@@ -332,13 +332,17 @@ struct MeshOptions3D {
 //
 // Interfaces (FD7-FD9): facets between volumes of different regions. A piece is a maximal
 // connected set of coplanar interface facets of one region pair: a simple polygon, possibly
-// non-convex, without holes. Its edges are feature lines (bends, junctions of three or more
+// non-convex, possibly with holes (Unit 64: their edges are feature lines like the outer ones, each hole inset by
+// 1.5 s). Facets of one pair folded by about an ulp along an edge (normals parallel to 1e-12,
+// across the edge: a slanted wall cut by a plane) join one piece, and pieces of different pairs so
+// folded are a 180-degree junction (Unit 64 slice 3); a fold vertex straight to 1e-12 is not a
+// corner. Its edges are feature lines (bends, junctions of three or more
 // regions, traces where it meets the outer boundary) and their meeting points feature points.
 // With interfaces, interface_resolution s is required, and (invalid_input, the index an interface
 // facet): every sector about a feature line at least 60 degrees, also within a boundary face
 // about a feature point; feature lines and traces at least 6 s long; unrelated features, pieces
 // (thin layers), boundary faces a piece does not meet, and domain edges at least 4 s apart; every
-// piece wide enough for its 1.5 s inset. Unsupported, and refused: holes, pinched pieces, a piece
+// piece wide enough for its 1.5 s inset. Unsupported, and refused: pinched pieces, a piece
 // ending on a domain edge, two pieces ending on the boundary along one line, a trace at a domain
 // corner, a feature line on a domain edge other than a single crossing. Placement: each piece's
 // pair set (the 2D generator's nodes in its 1.5 s inset at min(h of both regions, 4 s)) mirrored
