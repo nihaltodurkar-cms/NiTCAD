@@ -1855,6 +1855,103 @@ limits found), 6.14 (as built, the modeller) and the two 11.3 rows (geometry and
 Left for later units: curved solids, oblique planes, slanted sidewalls crossed by a plane (the generator's 4 s rule),
 interface pieces with holes, snapping onto slanted faces.
 
+### Unit 26m — minimal modeller tools (proposed 2026-11-21; on `app/modeller-tools`)
+
+**Owner request (2026-11-21):** after "too many bugs, visually bad" on the 26l modeller and the drag-to-start fix,
+the owner asked for a minimal, easy modeller: tool groups (Solid, Edges, Faces, Transform, and later Advanced and
+Semiconductor), then "check Sentaurus, Silvaco and other CAD modellers … improve the plan", then "ignore the
+emulator things" (no process emulation), then a button that fixes the camera, with the view moved by the mouse when
+it is off. The design canvas the owner approved ("Its good plan it") is the private artifact
+`DkqARw6W5TT8wz9nKHsGXr` (two artboards: the Geometry tab and the 23 tools). The branch starts from
+`app/solid-modeller` `a8ca49f` (Unit 26l, PR #111 open), since every tool edits 26l's model.
+
+**Where things stand.** The 3D modeller (26l) has Select, Box, Prism, Contact, Pan and Measure in a fixed tool row,
+a move gizmo, face handles, prism vertex handles, duplicate and mirror as model operations, slanted prisms, live
+validation and the drag-to-start gesture. The camera orbits on the right button and pans on the middle one; nothing
+fixes it. The 2D editor (26k) has its own tool row. The deck already has `[doping]` profiles (`constant`,
+`gaussian`, `erfc`, with axis, centre, width and lateral spread) and the mesh keys `max_size` and `layer`; it has no
+named values. Solids only replace what they cover.
+
+**What the canvas fixed, and where it came from:**
+- **Selection decides the tools.** Picking a solid, an edge or a face opens its group as a small floating bar beside
+  it; with nothing picked, Solid. Six groups, at most five tools showing.
+- **Every tool is one drag.** The value shows at the cursor; a typed number makes it exact; Enter applies, Esc
+  cancels; a refusal (the build's own check) shows before the button is released.
+- **From Sentaurus Structure Editor:** an overlap rule per solid ("replaces" or "fills only empty space") in place
+  of Union, Subtract and Intersect; the deck line each action writes is shown as it is dragged (as SDE echoes Scheme);
+  dragged values can be named parameters (as Workbench substitutes them); doping and refinement are drawn like
+  geometry.
+- **Camera:** a "Camera fixed / Camera free" button; free, the mouse moves the view of the 3D model or the 2D
+  layout; fixed, drags only edit the model.
+
+**Standing conditions:** as Unit 26l. The deck is the only source of truth, written by minimal edits through the
+deck editor's undo. Every deck that builds today builds to the same bits (new keys opt-in). Win32 + D3D12 + Direct2D
+only, no new dependency. The models have no Win32 type. Criteria fixed before code. Targeted Release tests per
+slice; full suites and Debug only on the owner's word; builds `-j 6`, runs on 6 threads. No screen automation.
+Nothing pushed or merged without authorization.
+
+**Left out:** process emulation (deposit, etch, fill, planarize, spacer, masks; owner, 2026-11-21); sweeping
+geometry parameters across runs (a batch-run unit); variable fillets and rounded 3D corners (boxes and prisms cannot
+hold them); oblique planes and fillets on edges not parallel to a prism's axis (26l SQ4); relaxing the 3D
+generator's rules; GDS/STEP import.
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| MT1 | 0 | **Camera lock and mouse navigation** in the 3D modeller and the 2D editor. A toggle button "Camera free / Camera fixed" (lock icon, pressed when fixed; shortcut L). Free: left-drag on empty background orbits in 3D and pans in 2D; Shift+left-drag and middle-drag pan; right-drag orbits (as now); the wheel zooms about the cursor. Fixed: no mouse drag or wheel moves the view; every drag goes to the model; view presets and Reset view still work. A Reset view button. The state is per view and kept in the view settings. | Orbit pitch kept off the poles as now. |
+| MT2 | 0 | **The context toolbar.** The fixed tool row becomes a group switcher (Solid, Edges, Faces, Transform, Doping, Mesh). The armed group's tools float in a small bar beside the selection's screen bounds (clamped inside the viewport, not over the picked thing); with nothing picked, in the viewport's top-left corner. Picking a solid, an edge or a face opens its group; the bar's line names the armed tool and how to drag it. Section and Measure move to the view's corner. The same switcher on the 2D editor. | Pure presentation over 26l/26k tools. |
+| MT3 | 0 | **The live deck line and the value chip.** The status bar shows the deck line the current drag will write (the same text the minimal edit produces), updated each frame. The chip at the cursor shows the value; digits typed during a drag set it exactly (units as the deck's), Enter applies, Esc cancels. | |
+| MT4 | 1 | **The overlap rule.** A region's solid may say `overlap = fill` (default `replace`): it takes only the cells no earlier solid holds (the background's), in both layered kernels (2D 26k, 3D 26l). Set from the inspector's two-way switch or the Solid group's Overlap tool (click a solid). | Exact: decided per cell on grid indices, as the replace rule. |
+| MT5 | 1 | **Transform group:** Move (gizmo, as now), Copy (Alt+drag, or the tool: drag and release to place; one new region), Mirror (click a plane through the solid's centre or a picked face; Shift: a quarter turn about the view axis instead), Array (drag the pitch, the wheel sets the count; writes one region per copy), Align (click a face; the selected solids' matching faces move to its plane). | Each one deck edit and one undo step. |
+| MT6 | 2 | **Faces group:** Push/Pull (the face handle, as now), Inset (drag inward for the margin: a new solid on the face, inset, of the chosen material, then pushed or pulled), Extrude (drag off a face: a new solid on it), Contact (as now). | Inset and Extrude are new solids, so they obey the overlap rule. |
+| MT7 | 2 | **Edges group and Cylinder,** on edges parallel to a prism's axis (a box is first written as its rectilinear prism): Chamfer (one slanted segment), Fillet (an arc of segments, MQ4), Round vertex (a prism polygon's corner, or a 2D corner in the 2D editor), Taper (drag the edge sideways; the wall angle shows; 26l slanted prisms). Cylinder in the Solid group: a prism whose polygon is a regular polygon (MQ4), drawn by dragging the radius. | Exact as 26l SD6; the generator's refusals shown, not loosened. |
+| MT8 | 3 | **Named parameters.** `[parameters]` holds `name = <length or number>`; a length value anywhere in `[mesh]`, region solids and `[doping]` may be `$name` or `$a + $b`, `$a - 5nm` (MQ1). Pressing N during a drag names the value (a new parameter, or an existing one picked); the model then writes the reference, and dragging a tied dimension edits the parameter's line. The inspector lists the parameters, editable. | Substituted before the build parses values, errors placed on the referring line. |
+| MT9 | 4 | **Doping group:** Region profile (click a solid: a `constant` profile over its box; drag up or down for the level, a log scale), Implant (drag a window on a face, then its peak depth and lateral spread: a `gaussian` profile), Junction (drag where the junction sits: an `erfc` profile's depth). Profiles show as translucent boxes coloured by concentration; each writes one `[doping]` profile by minimal edit. | Uses the existing profile keys only. |
+| MT10 | 4 | **Mesh group:** Max size (drag anywhere: `max_size`; the node count estimate shows), Interface layers (click an interface: `layer`, drag for the count and first thickness), Refine box only if MQ5 finds the generators already take a local size. | |
+| MT11 | — | **Commits:** this proposal, a commit per slice, then ARCHITECTURE (6.14, the deck chapter for `overlap` and `[parameters]`, 11.3) and the records. The owner may stop after any slice. | |
+
+**Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
+
+| # | Criterion |
+|---|---|
+| MC1 | **Nothing else moves:** every example and test deck builds to the same bits; the 26k and 26l test suites pass unchanged except where a test names the removed fixed tool row (recorded). |
+| MC2 | **Camera lock:** window tests by messages: with the camera fixed, left, middle and right drags and the wheel leave the camera bit-identical and a left drag on a face still resizes it; free, a left drag on empty background changes yaw/pitch in 3D and the pan in 2D, the wheel the zoom; Reset view restores the start camera exactly; the state survives a reload of the deck. |
+| MC3 | **Context toolbar:** for each selection kind the right group opens; the bar's rectangle lies inside the viewport and does not overlap the selection's screen bounds at 96, 144 and 192 dpi and six camera directions (table test, except where the selection fills the view: then the corner). |
+| MC4 | **Deck line:** for every tool, the line shown during the drag equals, byte for byte, the line the applied edit writes. |
+| MC5 | **Overlap rule exact:** 1000 seeded random layouts in 2D and in 3D with `fill` solids mixed in pass `check_complex` / the 2D tiling check; the region at 200 random points equals a brute-force layered resolution with the fill rule; `fill` on a solid that only covers background gives the same bits as `replace`. |
+| MC6 | **Transform, Faces, Edges:** each tool's edit round-trips (undo restores the deck byte-identical; redo replays), and a table of cases builds (Array of 3 fins, Copy, Mirror, Align, Inset, Extrude, Chamfer and Fillet on a fin's top edges, Taper, a Cylinder nanowire), or is refused with the build's own message where the generator's rules refuse it (recorded). |
+| MC7 | **Parameters:** decks with references build to the same bits as the same decks with the values written out; an undefined name, a cycle, or a non-length where a length is needed is an error on the referring line; changing `Lg` in the inspector moves every tied face. |
+| MC8 | **Doping and mesh tools:** each writes exactly the profile or mesh line expected (table), and the built device's net doping at sample points equals the profile's formula to 1e-12 relative. |
+| MC9 | **Speed:** with 100 solids on WARP, an orbit frame ≤ 16 ms median (26l SE5 unchanged); the floating bar and the deck line add ≤ 1 ms per frame. |
+| MC10 | **Interaction:** a FinFET drawn by window messages only (box, Array of fins, Fillet on the fin tops, Extrude a gate over them with `fill`, Contacts, a Gaussian source/drain implant, one named `Lg`) builds and runs its equilibrium (coarse, ≤ 20k nodes). |
+| MC11 | **Mutants:** at least 8 per slice caught (e.g. the fixed camera still zooming on the wheel; `fill` taking a non-background cell; a parameter substituted on the wrong line; the deck line built from stale drag state). |
+| MC12 | **Layering:** models in `app` without Win32 headers; kernels in `mesh` without `app` or `deck`; parameters in `deck`; no new dependency. |
+
+**Questions (each with a recommendation; ruled by the standing "choose recommended" rule, 2026-11-11):**
+
+- **MQ1 — parameter syntax.** (a) `[parameters]` with `$name` references and only `+`/`-` of lengths, substituted
+  before parsing; the model writes `$x0 + $Lg` for a tied far face. (b) A full expression language (×, ÷,
+  functions). **Recommended (a)**: enough for tied dimensions and readable; (b) later if sweeps need it. Ruled (a).
+- **MQ2 — camera default.** (a) Free on open, fixed by the button or L. (b) Fixed on open. **Recommended (a)**: the
+  owner's complaint was not being able to move the view. Ruled (a).
+- **MQ3 — left-drag on empty background when free.** (a) Orbit in 3D, pan in 2D; drawing a new solid needs a tool
+  armed (or an empty deck's drag-to-start, unchanged). (b) Left-drag always rubber-band selects. **Recommended (a)**,
+  as the canvas; rubber-band selection with Shift held. Ruled (a).
+- **MQ4 — arcs.** (a) A fillet of radius r is n = max(2, ⌈θ/15°⌉) segments over its turn angle θ (6 for a right
+  angle); a cylinder 16 sides; both on the 0.1 nm quantum; where a segment is shorter than the generator's 6 s
+  trace, fewer segments and the reason shown. (b) A user-set count. **Recommended (a)** with the count editable in the
+  inspector. Ruled (a).
+- **MQ5 — Refine box.** (a) Slice 4 checks whether the 2D and 3D generators take a local size field; if they do,
+  Refine box writes it; if not, the tool is left out and recorded (a mesh unit). (b) Add a size field in this unit.
+  **Recommended (a)**: generator work has its own criteria. Ruled (a).
+- **MQ6 — the 2D editor.** (a) Gets MT1–MT3 and the Edges group's corner tools and the overlap rule; the 3D-only
+  tools are hidden there. (b) 3D only. **Recommended (a)**: one way of working in both. Ruled (a).
+
+**Risks:** the 3D generator's rules (26l SQ6) refuse many fillets, cylinders and arrays at small sizes, so MC6 and
+MC10 record refusals rather than pass them; the floating bar and live deck line touch every drag path, so MC4 and MC9
+are the gates there; `[parameters]` is a deck change, so MC1 and MC7 guard every existing deck.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
