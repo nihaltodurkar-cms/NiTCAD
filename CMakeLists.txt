@@ -691,6 +691,11 @@ target_compile_definitions(nitcad_solve_test PRIVATE
   NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" NITCAD_GIT="${GIT_EXECUTABLE}"
   NITCAD_PROJECT_VERSION="${PROJECT_VERSION}")
 nitcad_add_file_tests(solve nitcad_solve_test)
+# Debug CI (4 cores, 150 minutes) ran past its limit on 4db99cd: solve.quantum_confinement took 6228 s and
+# solve.energy_balance 2411 s in Debug. Release only, as the other slow gates; Debug reports them disabled.
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+  set_tests_properties(solve.quantum_confinement solve.energy_balance PROPERTIES DISABLED TRUE)
+endif()
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
 # Release and far longer in Debug, so they run in the Release configuration only.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
@@ -770,6 +775,10 @@ add_executable(nitcad_adapt_test
 # analysis: the derived goals' formulas held equal to dc.hpp's (Unit 17c, DG12).
 target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck NiTCAD::analysis Catch2::Catch2WithMain)
 nitcad_add_file_tests(adapt nitcad_adapt_test)
+# adapt.adapt_derived took 2927 s in Debug CI on 4db99cd: Release only, as solve.quantum_confinement above.
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+  set_tests_properties(adapt.adapt_derived PROPERTIES DISABLED TRUE)
+endif()
 # The adaptive gates on 2D MOSFETs (AC7 [.adapt_goal]; AC14, AC17 [.adapt_intelligent]): tens of
 # seconds in Release, tens of minutes in Debug (AC13), so in the Release configuration only.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
