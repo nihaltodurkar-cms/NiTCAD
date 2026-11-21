@@ -1832,6 +1832,29 @@ under the owner's 6-core cap: builds `-j 6`.
   ran no test (Catch2 refused the window case's full name as a filter); all four were rerun as compiling
   equivalents, the window case by a name prefix.
 
+**Test speed (2026-11-21; owner "optimize").** The full Debug suite was first run on this branch at the owner's word
+and took hours: CI's last green Debug job ran 7695 s, with `solve.quantum_confinement` 6007 s,
+`adapt.adapt_derived` 2720 s, `render.image` 2577 s, `solve.energy_balance` 2430 s and `linalg` 1175 s; in Release
+`solve_mosfet` 2334 s and `deck_lombardi` 1001 s. Commit `d974da3`:
+- `nitcad_linalg` (Eigen's sparse LU and ILUT, AMG) is built `/O2 /Ob2` in Debug too (target property
+  `NITCAD_FAST_DEBUG`); every other target keeps `/Od /Ob0 /RTC1`, and the Debug CRT, checked iterators and asserts
+  stay on, so the ABI is one. Locally, Debug: quantum confinement 5928 s → 39 s, derived goals 2654 s → 24 s,
+  `render.image` 48 s, energy balance 28 s, `linalg` 29 s; the whole Debug suite 835 s.
+- `solve_mosfet` and `deck_lombardi` are one ctest entry per case (`catch_discover_tests`, `COST 1000`), so `ctest -j`
+  spreads them; the slowest case is 392 s. CI's 4 jobs are unchanged.
+- Debug only: the two 1000-layout sweeps run every 20th seed (Release all); SE5's timing limits (and the 2D
+  partition's, as main's GE5 fix) are checked in Release only, as KG6 (owner, 2026-11-19), the times recorded. The
+  limits are unchanged.
+- A C4702 in `solid_window_test.cpp` (slice 2) broke the Debug build; fixed.
+- Suites: Release 277/277 (1014 s; the PARDISO case skipped locally, no MKL runtime configured in this worktree).
+  Debug: after the timing guards, all pass; `app.solid` failed once with no assertion output and passed four reruns
+  (recorded, not reproduced). Merged main (PR 110) as `95b243b`; pushed; PR #111 opened (owner "push", "open pr").
+
+**SD7 (2026-11-21):** ARCHITECTURE.md updated: 6.11 (layered 3D decks, the partition kernel, slanted prisms, the
+limits found), 6.14 (as built, the modeller) and the two 11.3 rows (geometry and meshing; visualization and GUI).
+Left for later units: curved solids, oblique planes, slanted sidewalls crossed by a plane (the generator's 4 s rule),
+interface pieces with holes, snapping onto slanted faces.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
