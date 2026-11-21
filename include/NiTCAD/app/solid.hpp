@@ -81,6 +81,7 @@ struct Region {
     std::string name, material;
     std::vector<Solid> solids;  // empty: the background
     int origin = -1;            // the deck's region section it came from (its index among them), -1 new
+    bool fill = false;          // Unit 26m (MT4): `overlap = fill`, its shapes taking only what no earlier shape covers
     friend bool operator==(const Region&, const Region&) = default;
 };
 
@@ -157,6 +158,20 @@ bool raise_region(Model& m, int region);  // one layer up (later in the deck)
 bool lower_region(Model& m, int region);
 int duplicate_solid(Model& m, SolidRef s, P3 delta);  // a new region on top, its index
 bool mirror_solid(Model& m, SolidRef s, int axis);    // about its bounds' centre across `axis`
+// --- Unit 26m slice 1 (MT4, MT5) ---
+// The region's overlap rule (refused for the background or no change).
+bool set_overlap(Model& m, int region, bool fill);
+// Mirrored across the plane across `axis` at twice / 2 quanta (a face's plane, or its centre's).
+bool mirror_solid_at(Model& m, SolidRef s, int axis, Coord twice);
+// A quarter turn about `axis` (counter-clockwise looking down it) through its bounds' centre, rounded down to the
+// quantum when the centre is off it; a prism across another axis becomes one across the turned axis.
+bool rotate_solid(Model& m, SolidRef s, int axis);
+// `count` - 1 copies, the k-th moved k × pitch, each a new region on top (its overlap rule kept); the first one's
+// index (-1 refused: count 2..100, a non-zero pitch, every copy valid).
+int array_solid(Model& m, SolidRef s, P3 pitch, int count);
+// Each solid moved along the face's axis so its bounds' face (0..5: x_min, x_max, ..., z_max) lies at `at` (refused if
+// any is invalid or none would move).
+bool align_solids(Model& m, const std::vector<SolidRef>& solids, int face, Coord at);
 
 // Contacts: a patch box inside the domain that reaches a face of it with some area (it selects boundary facets).
 [[nodiscard]] bool selects_boundary(const Box3& domain, const Box3& b) noexcept;
@@ -223,8 +238,11 @@ struct Problem {
 // bounds hold it; the domain for the [mesh] section's other lines. No markers outside the geometry.
 [[nodiscard]] Problem locate_problem(const Model& m, std::string_view deck, int line, std::string message);
 
-// The region a point strictly inside one solid lies in: the last solid in deck order holding it, else the background
+// The region a point strictly inside one solid lies in: the last solid in paint_order holding it, else the background
 // (-1 when there is none). Points on a solid's boundary count as outside it (the mesh preview asks at tet centroids).
 [[nodiscard]] int region_at(const Model& m, P3 p);
+// The regions with solids in the order that paints them so the last painted holds each point (Unit 26m MT4): the
+// `fill` regions last first, then the others in deck order. A view drawing in this order shows the build's layers.
+[[nodiscard]] std::vector<int> paint_order(const Model& m);
 
 }  // namespace NiTCAD::app::solid

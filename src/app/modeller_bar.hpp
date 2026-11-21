@@ -33,7 +33,7 @@ public:
 
     [[nodiscard]] modeller::Group group() const noexcept { return group_; }
     void set_group(modeller::Group g);
-    void set_tool(int tool);  // the armed tool: its button pressed, the bar's line its how
+    void set_tool(int tool);  // the armed tool (modeller::armed_key): its button pressed, the bar's line its how
     void set_camera_fixed(bool fixed);
     void set_mesh(bool on);
     void set_measure(bool on);
@@ -45,8 +45,8 @@ public:
 
     // A command's meaning; false when the id is not the bar's.
     struct Command {
-        enum class Kind { group, tool, duplicate, corner } kind = Kind::group;
-        int index = 0;  // the group, the tool's page number, or the corner's button
+        enum class Kind { group, tool, mode, duplicate, overlap, corner } kind = Kind::group;
+        int index = 0;  // the group, the tool's page number, the mode (modeller::Mode), or the corner's button
     };
     [[nodiscard]] std::optional<Command> command(int id) const;
 

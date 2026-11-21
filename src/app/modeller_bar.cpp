@@ -89,7 +89,7 @@ void ModellerBar::rebuild() {
     tools_.clear();
     const auto list = tools(group_);
     for (std::size_t k = 0; k < list.size(); ++k) {
-        const bool action = list[k].action != Action::tool;
+        const bool action = list[k].action == Action::duplicate || list[k].action == Action::overlap;  // pressed once
         tools_.push_back(make(L"BUTTON", win32::widen(list[k].label).c_str(),
                               WS_TABSTOP | (k == 0 ? WS_GROUP : 0) | (action ? BS_PUSHBUTTON : BS_AUTOCHECKBOX | BS_PUSHLIKE), bar_,
                               first_ + tool0 + static_cast<int>(k)));
@@ -104,8 +104,9 @@ void ModellerBar::set_tool(int tool) {
     std::string how;
     std::string_view name;
     for (std::size_t k = 0; k < list.size(); ++k) {
-        const bool armed = list[k].action == Action::tool && list[k].tool == tool;
-        if (list[k].action == Action::tool) SendMessageW(tools_[k], BM_SETCHECK, armed ? BST_CHECKED : BST_UNCHECKED, 0);
+        const bool armable = list[k].action == Action::tool || list[k].action == Action::mode;
+        const bool armed = armable && (list[k].action == Action::tool ? list[k].tool : 100 + list[k].tool) == tool;
+        if (armable) SendMessageW(tools_[k], BM_SETCHECK, armed ? BST_CHECKED : BST_UNCHECKED, 0);
         if (armed && name.empty()) {
             name = list[k].label;
             how = std::string(three_d_ ? list[k].how_3d : list[k].how_2d);
@@ -169,6 +170,8 @@ std::optional<ModellerBar::Command> ModellerBar::command(int id) const {
     if (k >= tool0 && k < tool0 + static_cast<int>(list.size())) {
         const ToolEntry& t = list[static_cast<std::size_t>(k - tool0)];
         if (t.action == Action::duplicate) return Command{Command::Kind::duplicate, 0};
+        if (t.action == Action::overlap) return Command{Command::Kind::overlap, 0};
+        if (t.action == Action::mode) return Command{Command::Kind::mode, t.tool};
         return Command{Command::Kind::tool, t.tool};
     }
     return std::nullopt;

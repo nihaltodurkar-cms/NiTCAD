@@ -146,7 +146,18 @@ TEST_CASE("modeller: what is picked opens its group; each group's tools", "[app]
         CHECK(list.size() <= 5);  // at most five tools showing
         CHECK_FALSE(group_name(static_cast<Group>(g)).empty());
     }
-    CHECK(tools(Group::solid).size() == 3);
+    // Slice 1: Fill / Replace joins Solid (MT4); Transform holds Move and its four modes (MT5).
+    CHECK(tools(Group::solid).size() == 4);
+    CHECK(tools(Group::solid)[3].action == Action::overlap);
+    REQUIRE(tools(Group::transform).size() == 5);
+    CHECK(tools(Group::transform)[0].action == Action::tool);
+    for (std::size_t k = 1; k < 5; ++k) {
+        CHECK(tools(Group::transform)[k].action == Action::mode);
+        CHECK(tools(Group::transform)[k].tool == static_cast<int>(k));  // Mode::copy .. Mode::align
+    }
+    CHECK(later(Group::transform).empty());
+    CHECK(armed_key(0, Mode::none) == 0);
+    CHECK(armed_key(0, Mode::array) == 103);
     CHECK(tools(Group::edges).empty());
     CHECK_FALSE(later(Group::edges).empty());
 }

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <ranges>
 #include <set>
 
 #include "deck_text.hpp"
@@ -297,6 +298,7 @@ std::expected<Model, std::string> read_model(std::string_view text) {
         Region r{s.name, {}, {}, region_index++};
         for (const auto& e : s.entries) {
             if (e.key == "material") r.material = std::string(trim(e.value));
+            if (e.key == "overlap") r.fill = trim(e.value) == "fill";
             if (m.mesh == MeshKind::layered && is_solid_key(e.key)) {
                 auto solid = parse_solid(e);
                 if (!solid) return refuse(at_line(e, "a solid the modeller cannot read"));
@@ -388,6 +390,7 @@ std::expected<std::string, std::string> write_model(std::string_view text, const
         if (r.origin < 0 || r.origin >= static_cast<int>(regions.size())) {
             std::vector<std::string> out{"", "[region " + r.name + "]"};
             if (!r.material.empty()) out.push_back("material = " + r.material);
+            if (r.fill) out.emplace_back("overlap = fill");
             for (const Solid& s : r.solids) out.push_back(solid_line(s));
             return out;
         }
@@ -397,14 +400,20 @@ std::expected<std::string, std::string> write_model(std::string_view text, const
         std::size_t solid = 0;
         int last_solid = -1;
         const int last_entry = s.entries.empty() ? -1 : static_cast<int>(s.entries.size()) - 1;
-        bool material = false;
+        bool material = false, overlap = false;
+        int material_at = -1;
         for (std::size_t k = 0; k < s.entries.size(); ++k) {
             const auto& en = s.entries[k];
             if (en.key == "material") {
                 material = true;
+                material_at = static_cast<int>(k);
                 if (std::string(trim(en.value)) != r.material) {
                     e.replace[k] = r.material.empty() ? std::nullopt : std::optional<std::string>("material = " + r.material);
                 }
+            } else if (en.key == "overlap") {
+                overlap = true;
+                const bool says_fill = trim(en.value) == "fill";
+                if (says_fill != r.fill) e.replace[k] = r.fill ? std::optional<std::string>("overlap = fill") : std::nullopt;
             } else if (solid_entry(en.key)) {
                 last_solid = static_cast<int>(k);
                 if (solid >= r.solids.size()) {
@@ -416,6 +425,7 @@ std::expected<std::string, std::string> write_model(std::string_view text, const
             }
         }
         if (!material && !r.material.empty()) e.after.emplace(-1, "material = " + r.material);
+        if (!overlap && r.fill) e.after.emplace(material ? material_at : -1, "overlap = fill");
         for (; solid < r.solids.size(); ++solid) e.after.emplace(last_solid >= 0 ? last_solid : last_entry, solid_line(r.solids[solid]));
         return w.rewrite(s, e);
     };
@@ -590,6 +600,7 @@ mesh::LayeredGeometry3D to_layered(const Model& m) {
         for (const Solid& s : m.regions[r].solids) {
             mesh::LayeredSolid v;
             v.region = static_cast<std::int32_t>(r);
+            v.fill = m.regions[r].fill;
             if (s.kind == SolidKind::box) {
                 v.kind = mesh::LayeredSolid::Kind::box;
                 v.lo = point(s.box.lo);
@@ -824,6 +835,116 @@ bool mirror_solid(Model& m, SolidRef s, int axis) {
     return true;
 }
 
+
+// --- Unit 26m slice 1 (MT4, MT5) ---
+
+bool set_overlap(Model& m, int region, bool fill) {
+    if (!valid_region(m, region)) return false;
+    Region& r = m.regions[static_cast<std::size_t>(region)];
+    if (r.solids.empty() || r.fill == fill) return false;
+    r.fill = fill;
+    return true;
+}
+
+namespace {
+
+Coord floor_half(Coord v) noexcept { return v >= 0 ? v / 2 : -((-v + 1) / 2); }
+
+double turn_of(const std::vector<Pt>& p) {
+    double a = 0.0;
+    for (std::size_t k = 0; k < p.size(); ++k) {
+        const Pt& u = p[k];
+        const Pt& w = p[(k + 1) % p.size()];
+        a += static_cast<double>(u.x) * static_cast<double>(w.y) - static_cast<double>(w.x) * static_cast<double>(u.y);
+    }
+    return a;
+}
+
+// `s` under a map of the quanta's lattice onto itself (axes permuted, signs flipped, shifted); a prism's polygon kept
+// in its orientation.
+template <class Map>
+Solid mapped(const Solid& s, Map&& map) {
+    Solid t = s;
+    if (s.kind == SolidKind::box) {
+        t.box = normalized(map(s.box.lo), map(s.box.hi));
+        return t;
+    }
+    const P3 a0 = map(from_uv(s.axis, s.polygon[0], s.from)), a1 = map(from_uv(s.axis, s.polygon[0], s.to));
+    int axis = 0;
+    while (axis < 2 && a0[axis] == a1[axis]) ++axis;
+    t.axis = axis;
+    t.from = std::min(a0[axis], a1[axis]);
+    t.to = std::max(a0[axis], a1[axis]);
+    t.polygon.clear();
+    for (const Pt& uv : s.polygon) t.polygon.push_back(uv_of(axis, map(from_uv(s.axis, uv, s.from))));
+    if ((turn_of(t.polygon) > 0) != (turn_of(s.polygon) > 0)) std::ranges::reverse(t.polygon);
+    return t;
+}
+
+}  // namespace
+
+bool mirror_solid_at(Model& m, SolidRef s, int axis, Coord twice) {
+    if (!valid(m, s) || axis < 0 || axis > 2) return false;
+    return replace(at(m, s), mapped(at(m, s), [&](P3 p) {
+                       p[axis] = twice - p[axis];
+                       return p;
+                   }));
+}
+
+bool rotate_solid(Model& m, SolidRef s, int axis) {
+    if (!valid(m, s) || axis < 0 || axis > 2) return false;
+    const Box3 b = at(m, s).bounds();
+    const int u = (axis + 1) % 3, v = (axis + 2) % 3;
+    const Coord cu2 = b.lo[u] + b.hi[u], cv2 = b.lo[v] + b.hi[v];
+    const Coord su = floor_half(cu2 + cv2), sv = floor_half(cv2 - cu2);  // u' = cu + cv - v, v' = cv - cu + u
+    return replace(at(m, s), mapped(at(m, s), [&](P3 p) {
+                       const Coord pu = p[u], pv = p[v];
+                       p[u] = su - pv;
+                       p[v] = sv + pu;
+                       return p;
+                   }));
+}
+
+int array_solid(Model& m, SolidRef s, P3 pitch, int count) {
+    if (!valid(m, s) || count < 2 || count > 100 || pitch == P3{}) return -1;
+    const Model before = m;
+    const bool fill = m.regions[static_cast<std::size_t>(s.region)].fill;
+    int first = -1;
+    for (int k = 1; k < count; ++k) {
+        const int r = duplicate_solid(m, s, {k * pitch.x, k * pitch.y, k * pitch.z});
+        if (r < 0) {
+            m = before;
+            return -1;
+        }
+        m.regions[static_cast<std::size_t>(r)].fill = fill;
+        if (first < 0) first = r;
+    }
+    return first;
+}
+
+bool align_solids(Model& m, const std::vector<SolidRef>& picked, int face, Coord to) {
+    if (face < 0 || face > 5 || picked.empty()) return false;
+    std::vector<SolidRef> solids;  // each once
+    for (const SolidRef s : picked) {
+        if (!valid(m, s)) return false;
+        if (std::ranges::find(solids, s) == solids.end()) solids.push_back(s);
+    }
+    const int axis = face / 2;
+    const Model before = m;
+    bool moved = false;
+    for (const SolidRef s : solids) {
+        const Box3 b = at(m, s).bounds();
+        P3 d{};
+        d[axis] = to - (face % 2 == 0 ? b.lo[axis] : b.hi[axis]);
+        if (d == P3{}) continue;
+        if (!move_solid(m, s, d)) {
+            m = before;
+            return false;
+        }
+        moved = true;
+    }
+    return moved;
+}
 bool selects_boundary(const Box3& d, const Box3& b) noexcept {
     for (int a = 0; a < 3; ++a) {
         if (b.lo[a] > b.hi[a] || b.lo[a] < d.lo[a] || b.hi[a] > d.hi[a]) return false;
@@ -1159,18 +1280,29 @@ Problem locate_problem(const Model& m, std::string_view text, int line, std::str
 
 
 int region_at(const Model& m, P3 p) {
-    for (std::size_t r = m.regions.size(); r-- > 0;) {
-        for (const Solid& s : m.regions[r].solids) {
+    const auto holds = [&](const Region& reg) {
+        return std::ranges::any_of(reg.solids, [&](const Solid& s) {
             if (s.kind == SolidKind::box) {
-                if (p.x > s.box.lo.x && p.x < s.box.hi.x && p.y > s.box.lo.y && p.y < s.box.hi.y && p.z > s.box.lo.z && p.z < s.box.hi.z) {
-                    return static_cast<int>(r);
-                }
-            } else if (p[s.axis] > s.from && p[s.axis] < s.to && inside(s.polygon, uv_of(s.axis, p))) {
-                return static_cast<int>(r);
+                return p.x > s.box.lo.x && p.x < s.box.hi.x && p.y > s.box.lo.y && p.y < s.box.hi.y && p.z > s.box.lo.z && p.z < s.box.hi.z;
             }
-        }
+            return p[s.axis] > s.from && p[s.axis] < s.to && inside(s.polygon, uv_of(s.axis, p));
+        });
+    };
+    for (const int r : std::views::reverse(paint_order(m))) {
+        if (holds(m.regions[static_cast<std::size_t>(r)])) return r;
     }
     return m.background();
+}
+
+std::vector<int> paint_order(const Model& m) {
+    std::vector<int> order;
+    for (std::size_t r = m.regions.size(); r-- > 0;) {
+        if (m.regions[r].fill && !m.regions[r].solids.empty()) order.push_back(static_cast<int>(r));
+    }
+    for (std::size_t r = 0; r < m.regions.size(); ++r) {
+        if (!m.regions[r].fill && !m.regions[r].solids.empty()) order.push_back(static_cast<int>(r));
+    }
+    return order;
 }
 
 }  // namespace NiTCAD::app::solid

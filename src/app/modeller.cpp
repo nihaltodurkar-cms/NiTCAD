@@ -11,22 +11,32 @@ namespace {
 
 constexpr std::array<std::string_view, group_count> names{"Solid", "Edges", "Faces", "Transform", "Doping", "Mesh"};
 
-constexpr std::array<ToolEntry, 3> solid_tools{{
+constexpr std::array<ToolEntry, 4> solid_tools{{
     {"Select (V)", Action::tool, 0, "Click a shape to pick it; drag it to move it.", "Click a solid to pick it; drag it to move it."},
     {"Box (B)", Action::tool, 1, "Drag the rectangle; type a size for it exactly.",
      "Drag the base on the work plane, release, move for the height, click. Type a size for it exactly."},
     {"Prism (P)", Action::tool, 2, "Click the polygon's corners; Enter or the first corner closes it.",
      "Click the polygon's corners on the work plane; Enter closes it; then its height, a click ending it."},
+    {"Fill / Replace", Action::overlap, 0, "The picked shapes' regions fill only empty space, or replace again.",
+     "The picked solids' regions fill only empty space, or replace again."},
 }};
 constexpr std::array<ToolEntry, 2> face_tools{{
     {"Push/Pull", Action::tool, 0, "Drag a side's handle along its normal; type the distance.",
      "Drag a face's handle along its normal; type the distance."},
     {"Contact (C)", Action::tool, 3, "Drag along a side of the domain.", "Drag a rectangle on a face of the domain."},
 }};
-constexpr std::array<ToolEntry, 2> transform_tools{{
+constexpr std::array<ToolEntry, 5> transform_tools{{
     {"Move", Action::tool, 0, "Drag the shape; type the distance along the larger offset.",
      "Drag the solid, or the gizmo's arrow or square; type the distance."},
-    {"Duplicate", Action::duplicate, 0, "A copy beside it, one grid step on.", "A copy beside it, one grid step on."},
+    {"Copy", Action::mode, static_cast<int>(Mode::copy), "Drag a copy of the picked shapes to its place (or Alt+drag).",
+     "Drag a copy of the picked solids to its place (or Alt+drag)."},
+    {"Mirror", Action::mode, static_cast<int>(Mode::mirror),
+     "Click a shape: mirrored left-right about its centre; Ctrl: up-down; on a side's handle: across that side; Shift: a quarter turn.",
+     "Click a face: mirrored about the solid's centre across it; Ctrl: across the face's own plane; Shift: a quarter turn about the view's axis."},
+    {"Array", Action::mode, static_cast<int>(Mode::array), "Drag the pitch from the shape; the wheel sets the count.",
+     "Drag the pitch from the solid; the wheel sets the count."},
+    {"Align", Action::mode, static_cast<int>(Mode::align), "Click a side's handle: the other picked shapes' matching sides move to its line.",
+     "Click a face: the other picked solids' matching faces move to its plane."},
 }};
 
 }  // namespace
@@ -55,10 +65,10 @@ std::span<const ToolEntry> tools(Group g) noexcept {
 
 std::string_view later(Group g) noexcept {
     switch (g) {
-    case Group::solid: return "Cylinder and the overlap rule come in later slices.";
+    case Group::solid: return "Cylinder comes in slice 2.";
     case Group::edges: return "Chamfer, Fillet, Round vertex and Taper come in slice 2.";
     case Group::faces: return "Inset and Extrude come in slice 2.";
-    case Group::transform: return "Copy, Mirror, Array and Align come in slice 1.";
+    case Group::transform: return "";
     case Group::doping: return "Region profile, Implant and Junction come in slice 4.";
     case Group::mesh: return "Max size, Interface layers and Refine box come in slice 4.";
     }

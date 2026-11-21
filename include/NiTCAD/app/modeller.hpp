@@ -13,6 +13,8 @@
 //   deck; shown while dragging, the same function on the applied text (MC4).
 // - The value chip (MT3): digits typed during a drag (with nm, um or cm; µm when none) set the dragged value
 //   exactly; Enter applies, Esc cancels.
+// - Slice 1 (MT4, MT5): the Solid group's Fill / Replace (a region's `overlap`, Action::overlap) and the Transform
+//   group's modes (Copy, Mirror, Array, Align: Action::mode); an armed mode is shown as armed_key(tool, mode).
 #pragma once
 
 #include <optional>
@@ -32,8 +34,16 @@ enum class Picked : unsigned char { nothing, solid, edge, face, contact };
 [[nodiscard]] Group group_for(Picked p) noexcept;
 
 // A tool of a group's bar: one of the page's tools (the pages' Tool numbers: select 0, box or rectangle 1, prism or
-// polygon 2, contact 3, pan 4, measure 5) or an action done at once.
-enum class Action : unsigned char { tool, duplicate };
+// polygon 2, contact 3, pan 4, measure 5), a Transform mode of the Select tool (MT5: `tool` the Mode), or an action
+// done at once on the selection (duplicate; overlap: the picked regions' rule switched, MT4).
+enum class Action : unsigned char { tool, mode, duplicate, overlap };
+// The Select tool's Transform modes (Unit 26m slice 1, MT5): how a press on a solid acts. Move drags it (none);
+// Copy drags a copy (also Alt+drag in any mode); Mirror clicks a face (its centre plane; Ctrl: the face's own plane;
+// Shift: a quarter turn about the view's axis); Array drags the pitch, the wheel setting the count; Align clicks a
+// face, the other picked solids' matching faces moving to its plane.
+enum class Mode : unsigned char { none, copy, mirror, array, align };
+// The bar's armed key: a tool's number, or 100 + a mode.
+[[nodiscard]] constexpr int armed_key(int tool, Mode m) noexcept { return m == Mode::none ? tool : 100 + static_cast<int>(m); }
 struct ToolEntry {
     std::string_view label;  // with its key
     Action action = Action::tool;

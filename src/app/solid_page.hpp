@@ -20,6 +20,10 @@
 // - Unit 26m slice 0 (MT1-MT3): the fixed tool row is a group switcher; the armed group's tools float beside the
 //   selection; Camera free / fixed (L) decides whether the mouse moves the view (modeller.hpp); Reset view; the status
 //   bar shows the deck line a drag will write, the chip at the cursor its value, typed digits setting it exactly.
+// - Unit 26m slice 1 (MT4, MT5): Fill / Replace and the inspector's overlap switch; the Transform modes: Copy (or
+//   Alt+drag) moves a copy, Mirror clicks (about the centre; Ctrl: the face's plane; Shift: a quarter turn about the
+//   view's axis), Array drags (pitch; the wheel sets the count), Align clicks (the picked solids' matching face to
+//   the clicked face's plane). Each is one deck edit and one undo step.
 //
 // The tests drive the view by its messages (SE8; no screen automation).
 #pragma once
@@ -99,6 +103,12 @@ public:
     [[nodiscard]] const std::string& live_line() const noexcept { return live_line_; }  // "" when no drag
     [[nodiscard]] std::string chip() const { return bar_->chip_text(); }
     [[nodiscard]] const modeller::Entry& typed() const noexcept { return entry_; }
+    // --- Unit 26m slice 1 (MT4, MT5) ---
+    void set_mode(modeller::Mode m);  // a Transform mode of the Select tool (modeller.hpp)
+    [[nodiscard]] modeller::Mode mode() const noexcept { return mode_; }
+    bool toggle_overlap();  // the picked solids' regions: fill <-> replace
+    [[nodiscard]] int array_count() const noexcept { return array_count_; }
+    [[nodiscard]] int view_axis() const;  // the model axis most nearly along the view
 
     // State, for the tests.
     [[nodiscard]] const solid::Model& model() const noexcept { return m_; }
@@ -141,7 +151,7 @@ public:
         c_x0_label, c_x0, c_x1_label, c_x1, c_y0_label, c_y0, c_y1_label, c_y1, c_z0_label, c_z0, c_z1_label, c_z1,
         c_axis_label, c_axis, c_from_label, c_from, c_to_label, c_to, c_vertices_label, c_vertices, c_apply,
         c_kind_label, c_kind, c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset,
-        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_count
+        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_overlap, c_count
     };
     [[nodiscard]] HWND control(int c) const;
 
@@ -190,7 +200,7 @@ private:
     std::string material_ = "silicon";
 
     // A drag or a drawing in progress.
-    enum class Drag { none, orbit, pan, move, axis, plane, face, vertex, contact_move, base, height, polygon, contact, measure };
+    enum class Drag { none, orbit, pan, move, axis, plane, face, vertex, contact_move, base, height, polygon, contact, measure, array };
     Drag drag_ = Drag::none;
     bool button_ = false;  // the left button is down
     solid::Model m_start_;
@@ -233,6 +243,13 @@ private:
     void finish_height();
     void place_bar();
     void end_drag_ui();
+
+    // Unit 26m slice 1.
+    modeller::Mode mode_ = modeller::Mode::none;
+    int array_count_ = 3;
+    std::optional<solid::Model> copy_from_;  // a copy drag: the model before the copies were made
+    solid::Selection copy_sel_;
+    bool transform_click(const solid::Pick& p, bool shift, bool ctrl);  // Mirror and Align
 };
 
 }  // namespace NiTCAD::app

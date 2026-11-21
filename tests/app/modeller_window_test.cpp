@@ -582,3 +582,245 @@ TEST_CASE("app window modeller: the bar and the deck line add at most 1 ms a fra
     CHECK(added[added.size() / 2] <= 1.0);
 #endif
 }
+
+// --- Unit 26m slice 1 (MT4, MT5): the overlap switch and the Transform modes, by window messages ------------------
+
+namespace {
+
+// A pixel where the pick finds face `face` of solid `s` (not a handle), and the hit point (µm).
+std::pair<std::array<double, 2>, solid::V3> face_pixel(const SolidPage& page, solid::SolidRef s, int face) {
+    const auto px = find_pick(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::face && p.solid == s && p.index == face; });
+    if (!px) {
+        std::string seen;
+        for (int f = 0; f < 6; ++f) {
+            if (find_pick(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::face && p.solid == s && p.index == f; })) seen += std::to_string(f);
+        }
+        UNSCOPED_INFO("faces of the solid seen: " << seen << "; solid " << s.region << "," << s.solid);
+    }
+    REQUIRE(px);
+    const solid::Pick p = solid::pick(page.model(), page.view(), (*px)[0], (*px)[1], page.selection());
+    return {*px, p.at};
+}
+
+// A drag from a face's pixel by `d` µm in the face's plane; the deck line shown at the last move.
+std::string drag_by(SolidPage& page, std::array<double, 2> from, solid::V3 at, solid::V3 d, const std::function<void()>& during = {}) {
+    const HWND c = page.canvas();
+    const auto to = page.screen_of_um({at[0] + d[0], at[1] + d[1], at[2] + d[2]});
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, from[0], from[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, (from[0] + to[0]) / 2, (from[1] + to[1]) / 2);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+    if (during) during();
+    const std::string shown = page.live_line();
+    send(c, WM_LBUTTONUP, 0, to[0], to[1]);
+    page.render();
+    return shown;
+}
+
+}  // namespace
+
+TEST_CASE("app window modeller: Copy, Mirror, Align, Array and Fill/Replace in 3D, each one undo step (MC4, MC6, MT4, MT5)",
+          "[app][window][modeller][transform]") {
+    auto [w, pp] = open_3d("transform3d", mos);
+    SolidPage& page = *pp;
+    const HWND c = page.canvas();
+    const solid::SolidRef a = draw_box(*w, page);  // 0 0.2um 0 0.3um 0.4um 0.5um, region 2
+    // Its top raised to the domain's (a face under the oxide is hidden from every pick): 0.4 to 0.6um.
+    win32::set_text(page.control(SolidPage::c_z1), "0.6");
+    REQUIRE(page.commit(SolidPage::c_z1));
+    REQUIRE(has(w->deck().text(), "box = 0 0.2um 0 0.3um 0.4um 0.6um\n"));
+    page.render();
+    std::vector<std::string> texts{w->deck().text()};
+    const auto step = [&](const std::string& shown) {
+        const std::string now = w->deck().text();
+        CHECK(now != texts.back());
+        if (!shown.empty()) CHECK(shown == modeller::deck_line(texts.back(), now));  // MC4
+        texts.push_back(now);
+    };
+
+    // Copy: the drag moves a copy; the original stays.
+    page.set_mode(modeller::Mode::copy);
+    CHECK(page.group() == modeller::Group::transform);
+    CHECK(page.tool() == SolidPage::Tool::select);
+    auto [px, at] = face_pixel(page, a, 5);
+    std::string shown = drag_by(page, px, at, {0.8, 0.0, 0.0});  // clear of the gate contact over x 0.3-0.7um
+    REQUIRE(has(w->deck().text(), "box = 0 0.2um 0 0.3um 0.4um 0.6um\n"));
+    REQUIRE(has(w->deck().text(), "box = 0.8um 1um 0 0.3um 0.4um 0.6um\n"));
+    step(shown);
+    REQUIRE(page.selection().solids.size() == 1);
+    const solid::SolidRef b = page.selection().solids[0];
+    CHECK(b.region == 3);
+    // A copy pressed and released in place, or cancelled by Esc, is no copy.
+    std::tie(px, at) = face_pixel(page, a, 5);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+    send(c, WM_LBUTTONUP, 0, px[0], px[1]);
+    CHECK(w->deck().text() == texts.back());
+    CHECK(page.model().regions.size() == 4);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, px[0] + 30, px[1]);
+    CHECK(page.model().regions.size() == 5);
+    SendMessageW(c, WM_KEYDOWN, VK_ESCAPE, 0);
+    send(c, WM_LBUTTONUP, 0, px[0] + 30, px[1]);
+    CHECK(w->deck().text() == texts.back());
+    CHECK(page.model().regions.size() == 4);
+    page.render();
+    // Mirror: a plain click on B's top mirrors about its centre (a box is symmetric: nothing to write); Ctrl+click,
+    // across that face's own plane (z = 0.6um to 0.8um: out of the domain, refused, the deck kept).
+    page.set_mode(modeller::Mode::mirror);
+    std::tie(px, at) = face_pixel(page, b, 5);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+    send(c, WM_LBUTTONUP, 0, px[0], px[1]);
+    CHECK(w->deck().text() == texts.back());
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON | MK_CONTROL, px[0], px[1]);
+    send(c, WM_LBUTTONUP, MK_CONTROL, px[0], px[1]);
+    CHECK(w->deck().text() == texts.back());
+    page.render();
+
+    // Align: B lowered by the inspector (its top to 0.5um), then A's top clicked: B moved up, its top to 0.6um.
+    REQUIRE(page.selection().solids == std::vector<solid::SolidRef>{b});
+    win32::set_text(page.control(SolidPage::c_z1), "0.5");
+    REQUIRE(page.commit(SolidPage::c_z1));
+    REQUIRE(has(w->deck().text(), "box = 0.8um 1um 0 0.3um 0.4um 0.5um\n"));
+    step("");
+    page.render();
+    page.set_mode(modeller::Mode::align);
+    std::tie(px, at) = face_pixel(page, a, 5);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+    send(c, WM_LBUTTONUP, 0, px[0], px[1]);
+    REQUIRE(has(w->deck().text(), "box = 0.8um 1um 0 0.3um 0.5um 0.6um\n"));
+    step("");
+    page.render();
+
+    // Array: a drag of 0.1um along y from A, the wheel up once: four of it.
+    page.set_mode(modeller::Mode::array);
+    std::tie(px, at) = face_pixel(page, a, 5);
+    shown = drag_by(page, px, at, {0.0, 0.1, 0.0}, [&] {
+        CHECK(has(page.chip(), "\xC3\x97 3"));
+        wheel(c, px[0], px[1], 120);
+        CHECK(page.array_count() == 4);
+        CHECK(has(page.chip(), "\xC3\x97 4"));
+    });
+    const std::string arrayed = w->deck().text();
+    CHECK(has(arrayed, "box = 0 0.2um 0.1um 0.4um 0.4um 0.6um\n"));
+    CHECK(has(arrayed, "box = 0 0.2um 0.2um 0.5um 0.4um 0.6um\n"));
+    CHECK(has(arrayed, "box = 0 0.2um 0.3um 0.6um 0.4um 0.6um\n"));
+    CHECK(page.model().regions.size() == 7);
+    step(shown);
+
+    // Fill / Replace on A: its region's line; the inspector's switch shows it, and takes it back.
+    page.set_mode(modeller::Mode::none);
+    std::tie(px, at) = face_pixel(page, a, 5);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+    send(c, WM_LBUTTONUP, 0, px[0], px[1]);
+    REQUIRE(page.selection().solids == std::vector<solid::SolidRef>{a});
+    REQUIRE(page.toggle_overlap());
+    CHECK(has(w->deck().text(), "[region silicon_1]\nmaterial = silicon\noverlap = fill\nbox = 0 0.2um 0 0.3um 0.4um 0.6um\n"));
+    CHECK(SendMessageW(page.control(SolidPage::c_overlap), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    step("");
+    SendMessageW(page.control(SolidPage::c_overlap), BM_SETCHECK, BST_UNCHECKED, 0);
+    REQUIRE(page.commit(SolidPage::c_overlap));
+    CHECK(w->deck().text() == texts[texts.size() - 2]);
+    step("");
+
+    // Each one undo step: undone one by one, every earlier text comes back byte for byte; redone, the last.
+    for (std::size_t k = texts.size() - 1; k-- > 0;) {
+        REQUIRE(page.undo());
+        CHECK(w->deck().text() == texts[k]);
+    }
+    for (std::size_t k = 1; k < texts.size(); ++k) REQUIRE(page.redo());
+    CHECK(w->deck().text() == texts.back());
+}
+
+TEST_CASE("app window modeller: Copy, Mirror, Align, Array and Fill/Replace in 2D, each one undo step (MC4, MC6, MQ6)",
+          "[app][window][modeller][transform]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("transform2d", layered2d)));
+    pump();
+    w->execute(Command::tab_geometry);
+    GeometryPage& page = w->geometry_page();
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    const HWND c = page.canvas();
+    const auto at = [&](geo::Coord x, geo::Coord y) { return std::array<double, 2>{page.view().sx(x), page.view().sy(y)}; };
+    const auto click = [&](std::array<double, 2> p, WPARAM keys = 0) {
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON | keys, p[0], p[1]);
+        send(c, WM_LBUTTONUP, keys, p[0], p[1]);
+    };
+    const auto drag = [&](std::array<double, 2> a, std::array<double, 2> b, const std::function<void()>& during = {}) {
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, a[0], a[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, b[0], b[1]);
+        if (during) during();
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, b[0], b[1]);
+        return shown;
+    };
+    // A rectangle A: 0.4 0.8 0.2 0.5um.
+    page.set_material("sio2");
+    page.set_tool(GeometryPage::Tool::rectangle);
+    drag(at(4000, 2000), at(8000, 5000));
+    REQUIRE(has(w->deck().text(), "box = 0.4um 0.8um 0.2um 0.5um\n"));
+    std::vector<std::string> texts{w->deck().text()};
+    const auto step = [&](const std::string& shown) {
+        const std::string now = w->deck().text();
+        CHECK(now != texts.back());
+        if (!shown.empty()) CHECK(shown == modeller::deck_line(texts.back(), now));  // MC4
+        texts.push_back(now);
+    };
+
+    // Copy: the copy moved 0.6um right, A kept.
+    page.set_mode(modeller::Mode::copy);
+    CHECK(page.tool() == GeometryPage::Tool::select);
+    std::string shown = drag(at(6000, 3500), at(12000, 3500));
+    REQUIRE(has(w->deck().text(), "box = 0.4um 0.8um 0.2um 0.5um\n"));
+    REQUIRE(has(w->deck().text(), "box = 1um 1.4um 0.2um 0.5um\n"));
+    step(shown);
+    REQUIRE(page.selection().size() == 1);
+    const geo::ShapeRef b = page.selection()[0];
+    CHECK(b.region == 3);
+    click(at(6000, 3500));  // pressed and released in place: no copy
+    CHECK(w->deck().text() == texts.back());
+    CHECK(page.geometry().regions.size() == 4);
+
+    // Mirror: Shift+click B, a quarter turn about its centre (1.2, 0.35): 0.3 wide, 0.4 high.
+    page.set_mode(modeller::Mode::mirror);
+    click(at(12000, 3500), MK_SHIFT);
+    REQUIRE(has(w->deck().text(), "box = 1.05um 1.35um 0.15um 0.55um\n"));
+    step("");
+
+    // Align: B picked, a click near A's bottom side: B's bottom to y = 0.2um.
+    page.set_mode(modeller::Mode::align);
+    REQUIRE(page.selection() == std::vector<geo::ShapeRef>{b});
+    click(at(6000, 2100));
+    REQUIRE(has(w->deck().text(), "box = 1.05um 1.35um 0.2um 0.6um\n"));
+    step("");
+
+    // Array: from A, 0.1um up; the wheel down once from 3 leaves 2.
+    page.set_mode(modeller::Mode::array);
+    shown = drag(at(6000, 3500), at(6000, 4500), [&] {
+        wheel(c, at(6000, 4500)[0], at(6000, 4500)[1], -120);
+        CHECK(page.array_count() == 2);
+        CHECK(has(page.chip(), "\xC3\x97 2"));
+    });
+    CHECK(has(w->deck().text(), "box = 0.4um 0.8um 0.3um 0.6um\n"));
+    CHECK(page.geometry().regions.size() == 5);
+    step(shown);
+
+    // Fill / Replace on A, and back by the inspector's switch.
+    page.set_mode(modeller::Mode::none);
+    click(at(5000, 2500));
+    REQUIRE(page.selection() == std::vector<geo::ShapeRef>{{2, 0}});
+    REQUIRE(page.toggle_overlap());
+    CHECK(has(w->deck().text(), "material = sio2\noverlap = fill\nbox = 0.4um 0.8um 0.2um 0.5um\n"));
+    CHECK(SendMessageW(page.control(GeometryPage::c_overlap), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    step("");
+    SendMessageW(page.control(GeometryPage::c_overlap), BM_SETCHECK, BST_UNCHECKED, 0);
+    REQUIRE(page.commit(GeometryPage::c_overlap));
+    CHECK(w->deck().text() == texts[texts.size() - 2]);
+    step("");
+
+    for (std::size_t k = texts.size() - 1; k-- > 0;) {
+        REQUIRE(page.undo());
+        CHECK(w->deck().text() == texts[k]);
+    }
+    for (std::size_t k = 1; k < texts.size(); ++k) REQUIRE(page.redo());
+    CHECK(w->deck().text() == texts.back());
+}

@@ -60,11 +60,17 @@ bool inside(const LayeredSolid& s, const Point& p) {
     return detail::strictly_inside_2d(s.polygon, Point{p[ua], p[va], 0});
 }
 
+// The layers applied one by one (Unit 26m MC5): a replacing solid takes the point, a filling one only while no earlier
+// solid holds it.
 std::int32_t expected_region(const LayeredGeometry3D& g, const Point& p) {
-    for (std::size_t s = g.solids.size(); s-- > 0;) {
-        if (inside(g.solids[s], p)) return g.solids[s].region;
+    std::int32_t r = g.background;
+    bool held = false;
+    for (const LayeredSolid& s : g.solids) {
+        if (!inside(s, p)) continue;
+        if (!s.fill || !held) r = s.region;
+        held = true;
     }
-    return g.background;
+    return r;
 }
 
 // A volume of the slanted path is a polygon swept along `axis` between two planes: its cross-section (a facet lying in
@@ -385,4 +391,105 @@ TEST_CASE("mesh layered3d slanted: one coordinate written two ways is one, on u,
     (void)check_slanted(g, *c, 2, random_points(rng, g, 300));
     for (const Point& p : c->vertices) CHECK(p[0] != b);  // every such vertex at 0.3 itself
     CHECK(std::abs(patch_areas(*c).at("strip") - 0.3) <= 1e-12);
+}
+
+namespace {
+
+bool same_complex(const PolyhedralGeometry& a, const PolyhedralGeometry& b) {
+    if (a.vertices != b.vertices || a.facets.size() != b.facets.size() || a.volumes.size() != b.volumes.size()) return false;
+    for (std::size_t k = 0; k < a.facets.size(); ++k) {
+        if (a.facets[k].vertices != b.facets[k].vertices || a.facets[k].patch != b.facets[k].patch) return false;
+    }
+    for (std::size_t k = 0; k < a.volumes.size(); ++k) {
+        if (a.volumes[k].facets != b.volumes[k].facets || a.volumes[k].region != b.volumes[k].region) return false;
+    }
+    return true;
+}
+
+// A solid's bounds as x0 x1 y0 y1 z0 z1.
+std::array<double, 6> bounds_of(const LayeredSolid& s) {
+    if (s.kind == LayeredSolid::Kind::box) return {s.lo[0], s.hi[0], s.lo[1], s.hi[1], s.lo[2], s.hi[2]};
+    const auto a = static_cast<std::size_t>(s.axis), ua = (a + 1) % 3, va = (a + 2) % 3;
+    std::array<double, 6> b{};
+    b[2 * a] = s.from;
+    b[2 * a + 1] = s.to;
+    b[2 * ua] = b[2 * ua + 1] = s.polygon[0][0];
+    b[2 * va] = b[2 * va + 1] = s.polygon[0][1];
+    for (const Point& p : s.polygon) {
+        b[2 * ua] = std::min(b[2 * ua], p[0]);
+        b[2 * ua + 1] = std::max(b[2 * ua + 1], p[0]);
+        b[2 * va] = std::min(b[2 * va], p[1]);
+        b[2 * va + 1] = std::max(b[2 * va + 1], p[1]);
+    }
+    return b;
+}
+
+// Each solid that no earlier solid's bounds reach into (so it covers only the background) gets its rule flipped;
+// returns how many.
+int flip_lonely(LayeredGeometry3D& g) {
+    int n = 0;
+    for (std::size_t s = 0; s < g.solids.size(); ++s) {
+        const auto e = bounds_of(g.solids[s]);
+        bool alone = true;
+        for (std::size_t k = 0; k < s && alone; ++k) {
+            const auto f = bounds_of(g.solids[k]);
+            bool apart = false;
+            for (std::size_t a = 0; a < 3; ++a) apart = apart || f[2 * a + 1] <= e[2 * a] || e[2 * a + 1] <= f[2 * a];
+            alone = apart;
+        }
+        if (!alone) continue;
+        g.solids[s].fill = !g.solids[s].fill;
+        ++n;
+    }
+    return n;
+}
+
+}  // namespace
+
+TEST_CASE("mesh layered3d slanted: 1000 seeded random slanted layouts with fill solids resolve exactly (Unit 26m MT4, MC5)",
+          "[mesh][layered3d][overlap]") {
+    std::mt19937 rng(26133);
+    int flipped = 0;
+    for (int trial = 0; trial < 1000; trial += trial_stride) {
+        CAPTURE(trial);
+        const int n = 8;
+        LayeredGeometry3D g{.lo = {0, 0, 0}, .hi = {n, n, n}, .background = 0, .solids = {}, .patches = {}};
+        const int slant = trial % 3;
+        const int count = std::uniform_int_distribution<int>(1, 12)(rng);
+        std::uniform_int_distribution<int> at(-2, n + 2), kind(0, 3), axis(0, 2), region(0, 4), fill(0, 2);
+        bool any_slanted = false;
+        while (static_cast<int>(g.solids.size()) < count || !any_slanted) {
+            std::array<int, 6> c{};
+            for (int& x : c) x = at(rng);
+            if (c[0] == c[1] || c[2] == c[3] || c[4] == c[5]) continue;
+            for (int k = 0; k < 6; k += 2) {
+                if (c[static_cast<std::size_t>(k)] > c[static_cast<std::size_t>(k + 1)]) std::swap(c[static_cast<std::size_t>(k)], c[static_cast<std::size_t>(k + 1)]);
+            }
+            const auto s = [&](int i) { return static_cast<double>(c[static_cast<std::size_t>(i)]); };
+            const int k = kind(rng);
+            if (k == 0) {
+                g.solids.push_back(box3(s(0), s(1), s(2), s(3), s(4), s(5), region(rng)));
+            } else if (k == 1) {
+                if (c[1] - c[0] < 2 || c[3] - c[2] < 2) continue;
+                const double um = s(0) + 1, vm = s(2) + 1;
+                g.solids.push_back(prism(axis(rng), s(4), s(5), {{s(0), s(2), 0}, {s(1), s(2), 0}, {s(1), vm, 0}, {um, vm, 0}, {um, s(3), 0}, {s(0), s(3), 0}}, region(rng)));
+            } else {
+                std::vector<Point> p;
+                if (c[1] - c[0] >= 3 && k == 2) p = {{s(0), s(2), 0}, {s(1), s(2), 0}, {s(1) - 1, s(3), 0}, {s(0) + 1, s(3), 0}};
+                else p = {{s(0), s(2), 0}, {s(1), s(2), 0}, {s(0), s(3), 0}};
+                g.solids.push_back(prism(slant, s(4), s(5), std::move(p), region(rng)));
+                any_slanted = true;
+            }
+            g.solids.back().fill = fill(rng) == 0;
+        }
+        const auto c = layered_partition3d(g);
+        if (!c) FAIL(c.error().message);
+        (void)check_slanted(g, *c, slant, random_points(rng, g, 200));
+        LayeredGeometry3D h = g;
+        flipped += flip_lonely(h);
+        const auto d = layered_partition3d(h);
+        REQUIRE(d.has_value());
+        CHECK(same_complex(*c, *d));
+    }
+    CHECK(flipped >= 1000 / trial_stride);
 }

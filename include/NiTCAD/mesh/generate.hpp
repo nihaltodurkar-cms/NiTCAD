@@ -69,7 +69,9 @@ struct Geometry2D {
 };
 
 // Layered 2D geometry (Unit 26k, GD1-GD2): the domain [lo, hi] (z ignored); the background region fills it; each
-// shape, in order, replaces what it covers (a shape past the domain is cut to it). `layered_partition2d` resolves
+// shape, in order, replaces what it covers (a shape past the domain is cut to it), or with `fill` takes only what no
+// earlier shape covers (Unit 26m MT4: a point's region is the last replacing shape over it, else the first filling one,
+// else the background). `layered_partition2d` resolves
 // the layers into the tiling generate_mesh takes, exactly: every vertex is one of the inputs' coordinates, never
 // computed, so polygons that meet share bit-identical vertices. Per region, each connected part (cells sharing an
 // edge) becomes one simple polygon, counter-clockwise from its lowest-then-leftmost vertex; a part with a hole or
@@ -82,6 +84,7 @@ struct Geometry2D {
 struct LayeredShape {
     std::vector<Point> vertices;
     std::int32_t region = 0;
+    bool fill = false;  // Unit 26m MT4: takes only what no earlier shape holds (the background's)
 };
 
 struct LayeredGeometry2D {

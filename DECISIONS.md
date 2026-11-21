@@ -1981,6 +1981,46 @@ height drags and the 2D move and rectangle; on a two-axis drag they set the axis
   reloads and tab changes, not written to the view settings file). Whether the floating bar draws cleanly over the
   D3D12 flip-model canvas needs the owner's eyes (no screen automation).
 
+**Slice 1 as built (MT4, MT5, 2026-11-21; owner "start slice 1"; Release, MSVC 14.51, 6 cores).** MT4: `[region]
+overlap = replace|fill` (layered meshes only; elsewhere a build error), `LayeredShape::fill` / `LayeredSolid::fill`.
+Both kernels paint in one order, replacing shapes top-first and then filling shapes bottom-first, the first to hold a
+cell taking it (the 3D slanted labeller: the top replacing solid of a slab, else its lowest filling one). The views
+draw and hit-test in the same order (`paint_order` in `app::geo` and `app::solid`). The 2D and 3D models read the
+key, and write it by minimal edits: after the material of a new region; replaced, removed or inserted after the
+material of a kept one. Set from the Solid group's Fill / Replace (fill unless every picked region already fills) or
+the inspector's switch. MT5: the Transform group is Move, then the modes Copy, Mirror, Array, Align (`Mode`; the
+armed one is `armed_key`). Copy (or Alt+drag in any mode) moves copies, the originals kept; a copy not moved, or
+cancelled by Esc, is none. Mirror is a click: 3D about the centre across the clicked face's axis (Ctrl: across that
+face's own plane; Shift: a quarter turn about the view's axis); 2D left-right (Ctrl: up-down; a side handle: across
+that side; Shift: a quarter turn). Array is a drag from the solid: the pitch, the wheel setting the count (2-100,
+whatever the camera), one region per copy keeping the material and `overlap`. Align is a click: the picked solids'
+(or shapes') matching face goes to the clicked face's plane (a domain face too; 2D: the side of the clicked bounds
+nearest the click). Model calls: `set_overlap`, `mirror_*_at`, `rotate_*`, `array_*`, `align_*` in both models. Each
+is one deck edit and one undo step.
+- MC5: `[overlap]` in the mesh tests: 1000 seeded layouts with fill shapes in 2D (seed 26131), in 3D rectilinear
+  (26132) and slanted (26133), each against a sequential oracle, exact; with a fill shape over background only, the
+  tiling is bit-identical to `replace`. Deck build: a fill box takes only what no earlier shape holds; the errors
+  (second key, bad value, non-layered mesh). The mesh `[layered]` tests: 30/30.
+- MC6: app tests `[overlap]` and `[transform]` (4 cases: read/write round trip, `only_geometry`, exact volumes, builds
+  of arrayed, mirrored, turned and aligned layouts; four quarter turns give the model back; an L prism turned keeps
+  its volume). Window tests (2 cases, by messages): Copy, Mirror, Align, Array with the wheel, Fill / Replace and the
+  inspector switch in 3D and 2D, every step undone to the byte and redone.
+- MC4: the deck line shown during the copy and array drags equals the line written (both window tests).
+- MC1: the 26k, 26l and slice 0 window tests pass unchanged (910 assertions in 24 cases with slice 1's); app unit
+  tests 114/114; deck tests pass. One test changed: `modeller_test`'s tool table, which names the group sizes (Solid
+  4, Transform 5) and the Duplicate button (removed; Copy replaces it).
+- MC9: deck line + bar with 100 solids median 0.159 ms (≤ 1 ms); SE5 orbit 4.81 ms, drag 4.85 ms.
+- MC11: 16/16 mutants caught (kernel orders 2D and 3D, deck build, readers and writers, the resolver, Array's count
+  and fill, Align's dedupe, Copy's cancel and unmoved press, the wheel during Array, Copy mode). Runs 4-16 sharded
+  6 ways after a first sharded run was void (its runner never started the tests; recorded).
+- Not done or limits (recorded): `overlap` is per region, not per solid; Alt+drag is not tested by messages (it
+  reads `GetKeyState`); Align translates, it does not resize; the quarter turn rounds its centre down when it falls
+  off the 0.1 nm quantum; the 3D view draws fill solids depth-tested, not in paint order; a mirror or turn leaving
+  the domain is refused by the writer (the deck kept); the 2D model builds of the transform cases use a plain
+  silicon deck, since small boxes near the layered deck's well corner trip the generator's P4 corner rule (U12).
+  In the 3D view only top faces of solids under the oxide are pickable, so a buried solid is reached by the
+  inspector or the selection.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

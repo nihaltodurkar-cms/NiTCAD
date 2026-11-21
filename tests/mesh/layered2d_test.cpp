@@ -243,12 +243,14 @@ void check_general(const LayeredGeometry2D& g, const Geometry2D& t, const std::v
         }
     }
     for (const Point& c : samples) {
+        // The layers applied one by one (Unit 26m MC5): a replacing shape takes the point, a filling one only while
+        // no earlier shape holds it.
         std::int32_t expect = g.background;
-        for (std::size_t s = g.shapes.size(); s-- > 0;) {
-            if (detail::strictly_inside_2d(g.shapes[s].vertices, c)) {
-                expect = g.shapes[s].region;
-                break;
-            }
+        bool held = false;
+        for (const LayeredShape& s : g.shapes) {
+            if (!detail::strictly_inside_2d(s.vertices, c)) continue;
+            if (!s.fill || !held) expect = s.region;
+            held = true;
         }
         int hits = 0;
         std::int32_t region = -1;
@@ -433,4 +435,79 @@ TEST_CASE("mesh layered: a vertex meant to lie on a slanted edge, rounded off it
     }
     CHECK(above > 0);
     CHECK(below > 0);
+}
+
+namespace {
+
+bool same_tiling(const Geometry2D& a, const Geometry2D& b) {
+    if (a.polygons.size() != b.polygons.size()) return false;
+    for (std::size_t k = 0; k < a.polygons.size(); ++k) {
+        if (a.polygons[k].region != b.polygons[k].region || a.polygons[k].vertices != b.polygons[k].vertices) return false;
+    }
+    return true;
+}
+
+struct Extent {
+    double x0, x1, y0, y1;
+};
+Extent extent_of(const LayeredShape& s) {
+    Extent e{s.vertices[0][0], s.vertices[0][0], s.vertices[0][1], s.vertices[0][1]};
+    for (const Point& p : s.vertices) {
+        e = {std::min(e.x0, p[0]), std::max(e.x1, p[0]), std::min(e.y0, p[1]), std::max(e.y1, p[1])};
+    }
+    return e;
+}
+
+}  // namespace
+
+TEST_CASE("mesh layered: 1000 seeded random layouts with fill shapes tile exactly (Unit 26m MT4, MC5)", "[mesh][layered][overlap]") {
+    std::mt19937 rng(26131);
+    int flipped = 0;
+    for (int trial = 0; trial < 1000; ++trial) {
+        CAPTURE(trial);
+        const int n = 12;
+        const bool slanted = trial % 2 == 1;  // the even trials rectilinear (the grid path), the odd ones the arrangement
+        LayeredGeometry2D g{.lo = {0, 0, 0}, .hi = {n, n, 0}, .background = 0, .shapes = {}, .patches = {}};
+        const int count = std::uniform_int_distribution<int>(1, 20)(rng);
+        std::uniform_int_distribution<int> at(-2, n + 2), kind(0, slanted ? 2 : 0), fill(0, 2);
+        while (static_cast<int>(g.shapes.size()) < count) {
+            const std::int32_t region = std::uniform_int_distribution<std::int32_t>(0, 4)(rng);
+            int x0 = at(rng), x1 = at(rng), y0 = at(rng), y1 = at(rng);
+            if (x0 == x1 || y0 == y1) continue;
+            if (x0 > x1) std::swap(x0, x1);
+            if (y0 > y1) std::swap(y0, y1);
+            LayeredShape s = box(x0, x1, y0, y1, region);
+            const int k = kind(rng);
+            if (k == 1) {
+                s.vertices = {{double(x0), double(y0), 0}, {double(x1), double(y0), 0}, {double(x0), double(y1), 0}};
+            } else if (k == 2) {
+                const Point p{double(at(rng)), double(at(rng)), 0}, q{double(at(rng)), double(at(rng)), 0}, r{double(at(rng)), double(at(rng)), 0};
+                if (detail::polygon_turn(std::vector<Point>{p, q, r}) == 0) continue;
+                s.vertices = {p, q, r};
+            }
+            s.fill = fill(rng) == 0;
+            g.shapes.push_back(std::move(s));
+        }
+        const auto t = layered_partition2d(g);
+        if (!t) FAIL(t.error().message);
+        check_general(g, *t, samples_for(g, rng, 200));
+        // A fill shape covering only the background gives the same bits as a replacing one: each shape whose bounds
+        // no earlier shape's reach into, flipped.
+        LayeredGeometry2D h = g;
+        for (std::size_t s = 0; s < h.shapes.size(); ++s) {
+            const Extent e = extent_of(h.shapes[s]);
+            bool alone = true;
+            for (std::size_t k = 0; k < s && alone; ++k) {
+                const Extent f = extent_of(h.shapes[k]);
+                alone = f.x1 <= e.x0 || e.x1 <= f.x0 || f.y1 <= e.y0 || e.y1 <= f.y0;
+            }
+            if (!alone) continue;
+            h.shapes[s].fill = !h.shapes[s].fill;
+            ++flipped;
+        }
+        const auto u = layered_partition2d(h);
+        REQUIRE(u.has_value());
+        CHECK(same_tiling(*t, *u));
+    }
+    CHECK(flipped >= 1000);  // every layout's first shape at least
 }

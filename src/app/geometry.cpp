@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <format>
+#include <ranges>
 #include <map>
 #include <set>
 #include <utility>
@@ -198,6 +199,7 @@ std::expected<Geometry, std::string> read_geometry(std::string_view text, std::o
             Region r{s.name, {}, {}, region_index++};
             for (const auto& e : s.entries) {
                 if (e.key == "material") r.material = std::string(trim(e.value));
+                if (e.key == "overlap") r.fill = trim(e.value) == "fill";
                 if (!is_shape_key(e.key)) continue;
                 auto shape = parse_shape(e);
                 if (!shape) return refuse("line " + std::to_string(e.line) + ": a shape the editor cannot read");
@@ -286,6 +288,7 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
         if (r.origin < 0 || r.origin >= static_cast<int>(regions.size())) {
             std::vector<std::string> out{"", "[region " + r.name + "]"};
             if (!r.material.empty()) out.push_back("material = " + r.material);
+            if (r.fill) out.emplace_back("overlap = fill");
             for (const Shape& s : r.shapes) out.push_back(shape_line(s));
             return out;
         }
@@ -294,14 +297,20 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
         if (r.name != s.name) e.header = "[region " + r.name + "]";
         std::size_t shape = 0;
         int last_shape = -1, last_entry = s.entries.empty() ? -1 : static_cast<int>(s.entries.size()) - 1;
-        bool material = false;
+        bool material = false, overlap = false;
+        int material_at = -1;
         for (std::size_t k = 0; k < s.entries.size(); ++k) {
             const auto& en = s.entries[k];
             if (en.key == "material") {
                 material = true;
+                material_at = static_cast<int>(k);
                 if (std::string(trim(en.value)) != r.material) {
                     e.replace[k] = r.material.empty() ? std::nullopt : std::optional<std::string>("material = " + r.material);
                 }
+            } else if (en.key == "overlap") {
+                overlap = true;
+                const bool says_fill = trim(en.value) == "fill";
+                if (says_fill != r.fill) e.replace[k] = r.fill ? std::optional<std::string>("overlap = fill") : std::nullopt;
             } else if (is_shape_key(en.key)) {
                 last_shape = static_cast<int>(k);
                 if (shape >= r.shapes.size()) {
@@ -313,6 +322,7 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
             }
         }
         if (!material && !r.material.empty()) e.after.emplace(-1, "material = " + r.material);
+        if (!overlap && r.fill) e.after.emplace(material ? material_at : -1, "overlap = fill");
         for (; shape < r.shapes.size(); ++shape) e.after.emplace(last_shape >= 0 ? last_shape : last_entry, shape_line(r.shapes[shape]));
         return rewrite(s, e);
     };
@@ -325,7 +335,7 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
             drop(*regions[k]);
         } else {
             const int at = regions.empty() ? section_last(l, *mesh) + 1 : section_last(l, *regions.back()) + 1;
-            w.insert(at, region_block(Region{g.regions[k].name, g.regions[k].material, g.regions[k].shapes, -1}));
+            w.insert(at, region_block(Region{g.regions[k].name, g.regions[k].material, g.regions[k].shapes, -1, g.regions[k].fill}));
         }
     }
 
@@ -678,6 +688,98 @@ bool mirror_shape(Geometry& g, ShapeRef s, bool horizontal) {
     return true;
 }
 
+
+bool set_overlap(Geometry& g, int region, bool fill) {
+    if (!editing(g) || g.mesh != MeshKind::layered || region < 0 || region >= static_cast<int>(g.regions.size())) return false;
+    Region& r = g.regions[static_cast<std::size_t>(region)];
+    if (r.shapes.empty() || r.fill == fill) return false;
+    r.fill = fill;
+    return true;
+}
+
+bool mirror_shape_at(Geometry& g, ShapeRef s, bool horizontal, Coord twice) {
+    if (!valid(g, s)) return false;
+    Shape sh = at(g, s);
+    for (Pt& p : sh.points) {
+        if (horizontal) p.x = twice - p.x;
+        else p.y = twice - p.y;
+        if (std::abs(p.x) > coord_limit || std::abs(p.y) > coord_limit) return false;
+    }
+    if (sh.kind == ShapeKind::box) {
+        const Rect r = normalized(sh.points[0], sh.points[1]);
+        sh.points = {r.lo, r.hi};
+    } else {
+        std::ranges::reverse(sh.points);  // keep the orientation
+    }
+    at(g, s) = std::move(sh);
+    return true;
+}
+
+namespace {
+Coord floor_half(Coord v) noexcept { return v >= 0 ? v / 2 : -((-v + 1) / 2); }
+}  // namespace
+
+bool rotate_shape(Geometry& g, ShapeRef s) {
+    if (!valid(g, s)) return false;
+    Shape sh = at(g, s);
+    const Rect b = sh.bounds();
+    const Coord cx2 = b.lo.x + b.hi.x, cy2 = b.lo.y + b.hi.y;
+    const Coord sx = floor_half(cx2 + cy2), sy = floor_half(cy2 - cx2);  // x' = cx + cy - y, y' = cy - cx + x
+    for (Pt& p : sh.points) p = {sx - p.y, sy + p.x};
+    if (sh.kind == ShapeKind::box) {
+        const Rect r = normalized(sh.points[0], sh.points[1]);
+        sh.points = {r.lo, r.hi};
+    }
+    at(g, s) = std::move(sh);
+    return true;
+}
+
+int array_shape(Geometry& g, ShapeRef s, Coord dx, Coord dy, int count) {
+    if (!valid(g, s) || count < 2 || count > 100 || (dx == 0 && dy == 0)) return -1;
+    const Shape base = at(g, s);
+    const std::string material = g.regions[static_cast<std::size_t>(s.region)].material;
+    const bool fill = g.regions[static_cast<std::size_t>(s.region)].fill;
+    int first = -1;
+    for (int k = 1; k < count; ++k) {
+        Shape copy = base;
+        for (Pt& p : copy.points) p = {p.x + k * dx, p.y + k * dy};
+        const int r = add_region(g, std::move(copy), material);
+        g.regions[static_cast<std::size_t>(r)].fill = fill;
+        if (first < 0) first = r;
+    }
+    return first;
+}
+
+bool align_shapes(Geometry& g, const std::vector<ShapeRef>& picked, int side, Coord to) {
+    std::vector<ShapeRef> shapes;  // each once
+    for (const ShapeRef s : picked) {
+        if (std::ranges::find(shapes, s) == shapes.end()) shapes.push_back(s);
+    }
+    if (side < 0 || side > 3 || shapes.empty()) return false;
+    std::vector<std::pair<Coord, Coord>> moves;
+    for (const ShapeRef s : shapes) {
+        if (!valid(g, s)) return false;
+        const Rect b = at(g, s).bounds();
+        const Coord now = side == 0 ? b.lo.x : side == 1 ? b.hi.x : side == 2 ? b.lo.y : b.hi.y;
+        moves.emplace_back(side < 2 ? to - now : 0, side < 2 ? 0 : to - now);
+    }
+    if (std::ranges::all_of(moves, [](const auto& m) { return m.first == 0 && m.second == 0; })) return false;
+    for (std::size_t k = 0; k < shapes.size(); ++k) {
+        for (Pt& p : at(g, shapes[k]).points) p = {p.x + moves[k].first, p.y + moves[k].second};
+    }
+    return true;
+}
+
+std::vector<int> paint_order(const Geometry& g) {
+    std::vector<int> order;
+    for (std::size_t r = g.regions.size(); r-- > 0;) {
+        if (g.regions[r].fill && !g.regions[r].shapes.empty()) order.push_back(static_cast<int>(r));
+    }
+    for (std::size_t r = 0; r < g.regions.size(); ++r) {
+        if (!g.regions[r].fill && !g.regions[r].shapes.empty()) order.push_back(static_cast<int>(r));
+    }
+    return order;
+}
 bool on_one_side(const Rect& d, Pt a, Pt b) noexcept {
     if (a == b) return false;
     if (a.x == b.x && (a.x == d.lo.x || a.x == d.hi.x)) return std::min(a.y, b.y) >= d.lo.y && std::max(a.y, b.y) <= d.hi.y;
@@ -898,12 +1000,15 @@ Hit hit_test(const Geometry& g, const View& v, double x, double y, std::optional
             }
         }
     }
-    // The topmost shape whose outline holds the point (model coordinates, unrounded).
+    // The topmost shape whose outline holds the point (model coordinates, unrounded), in paint order (MT4: a `fill`
+    // region's first shape is its top one).
     const double mx = (x - v.origin_x) / v.px_per_um * per_um, my = (v.origin_y - y) / v.px_per_um * per_um;
-    for (std::size_t r = g.regions.size(); r-- > 0;) {
-        const auto& shapes = g.regions[r].shapes;
-        for (std::size_t s = shapes.size(); s-- > 0;) {
-            if (inside(shapes[s].outline(), mx, my)) return {HitKind::shape, {static_cast<int>(r), static_cast<int>(s)}, -1, -1};
+    for (const int r : std::views::reverse(paint_order(g))) {
+        const Region& reg = g.regions[static_cast<std::size_t>(r)];
+        const std::size_t n = reg.shapes.size();
+        for (std::size_t k = 0; k < n; ++k) {
+            const std::size_t s = reg.fill ? k : n - 1 - k;
+            if (inside(reg.shapes[s].outline(), mx, my)) return {HitKind::shape, {r, static_cast<int>(s)}, -1, -1};
         }
     }
     const Rect& d = g.domain;

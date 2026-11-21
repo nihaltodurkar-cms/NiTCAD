@@ -115,6 +115,8 @@ struct RegionSpec {
     std::vector<const Entry*> boxes, polygons, seeds;
     std::vector<const Entry*> prisms;    // Unit 26l (SD1): layered generate3d meshes
     std::vector<const Entry*> extrudes;  // Unit 53 (FD13): extrude3d meshes
+    const Entry* overlap = nullptr;      // Unit 26m (MT4): overlap = replace | fill, layered meshes only
+    bool fill = false;
 };
 
 class Builder {
@@ -241,6 +243,7 @@ private:
     std::vector<RegionSpec> regions_;
     MeshType type_ = MeshType::tensor;
     std::string type_name_;  // the [mesh] type as written (extrude3d for a file mesh from a complex)
+    bool layered_mesh_ = false;  // a layered generate2d or generate3d mesh (the only ones taking a region's overlap)
     std::optional<mesh::GeneratedMesh> generated_;
     // Unit 17: the loop's refinement (null: the deck's mesh) and what [adapt] needs of the mesh.
     const solve::MeshRefinement* refine_ = nullptr;
@@ -325,6 +328,13 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         if (e.key == "seed") { spec.seeds.push_back(&e); continue; }
         if (e.key == "extrude") { spec.extrudes.push_back(&e); continue; }
         if (e.key == "prism") { spec.prisms.push_back(&e); continue; }
+        if (e.key == "overlap") {
+            if (spec.overlap) return std::unexpected(at(e.line, "a second 'overlap'"));
+            if (e.value != "replace" && e.value != "fill") return std::unexpected(at(e.line, "overlap is 'replace' or 'fill'"));
+            spec.overlap = &e;
+            spec.fill = e.value == "fill";
+            continue;
+        }
         if (auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
             if (e.key == "band_to_band.direct_gap") {
                 NITCAD_DECK_TRY(v, flag(e));
@@ -530,7 +540,9 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
     if (domain != nullptr && !layered) return std::unexpected(at(domain->line, "domain is for a layered generate2d mesh (layered = on)"));
     if (layered) {
         // GD1: one region without shapes is the background; every box and polygon, in deck order, replaces what it
-        // covers; the kernel resolves the layers into the tiling (GD2).
+        // covers (or, in a region with overlap = fill, takes only what no earlier shape covers: Unit 26m MT4); the
+        // kernel resolves the layers into the tiling (GD2).
+        layered_mesh_ = true;
         mesh::LayeredGeometry2D l;
         std::vector<std::pair<const Entry*, std::int32_t>> shapes;
         for (std::size_t r = 0; r < regions_.size(); ++r) {
@@ -549,7 +561,7 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
         double lo[2] = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
         double hi[2] = {-lo[0], -lo[1]};
         for (const auto& [e, r] : shapes) {
-            mesh::LayeredShape shape{{}, r};
+            mesh::LayeredShape shape{{}, r, regions_[static_cast<std::size_t>(r)].fill};
             if (e->key == "box") {
                 NITCAD_DECK_TRY(b, box(*e, 2));
                 shape.vertices = {{b.bounds[0], b.bounds[2], 0.0}, {b.bounds[1], b.bounds[2], 0.0},
@@ -707,6 +719,7 @@ std::expected<void, base::Error> Builder::generated_3d(const Section& s) {
 // background, and every region `box` (x0 x1 y0 y1 z0 z1) and `prism` (<axis> <from> <to>, u v, ...) is painted in
 // deck order over what it covers; the kernel resolves the layers into the polyhedral complex (SD2).
 std::expected<void, base::Error> Builder::layered_3d(const Section& s) {
+    layered_mesh_ = true;
     mesh::LayeredGeometry3D l;
     mesh::MeshOptions3D o;
     const Entry* domain = nullptr;
@@ -751,6 +764,7 @@ std::expected<void, base::Error> Builder::layered_3d(const Section& s) {
     for (const auto& [e, r] : solids) {
         mesh::LayeredSolid v;
         v.region = r;
+        v.fill = regions_[static_cast<std::size_t>(r)].fill;
         if (e->key == "box") {
             NITCAD_DECK_TRY(b, box(*e, 3));
             v.kind = mesh::LayeredSolid::Kind::box;
@@ -1123,6 +1137,11 @@ std::expected<void, base::Error> Builder::build_mesh(device::DeviceDescription& 
     case MeshType::file: made = file_mesh(s, d); break;
     }
     if (!made) return made;
+    if (!layered_mesh_) {
+        for (const RegionSpec& g : regions_) {
+            if (g.overlap) return std::unexpected(at(g.overlap->line, "overlap is for a layered mesh (generate2d or generate3d, layered = on)"));
+        }
+    }
     if (generated_) {
         d.mesh = generated_->mesh;
         d.node_region.assign(generated_->node_region.begin(), generated_->node_region.end());

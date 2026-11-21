@@ -107,7 +107,9 @@ struct ExtrudedGeometry {
 // Layered 3D solids resolved into a complex (Unit 26l, SD1-SD2): a box domain, a background region filling it, and
 // solids applied in order, each replacing what it covers: a box, or a prism (a simple polygon in the plane across
 // `axis`, in (u, v) = the coordinates along axes (axis + 1) % 3 and (axis + 2) % 3, as the extrusion's cells,
-// extruded from `from` to `to` along the axis). Solids past the domain are clipped to it.
+// extruded from `from` to `to` along the axis). Solids past the domain are clipped to it. A `fill` solid (Unit 26m MT4)
+// takes only what no earlier solid covers: a point's region is the last replacing solid over it, else the first
+// filling one, else the background.
 //
 // Rules (invalid_input; the index names the solid, or the patch box with "patch box"): the domain lo < hi on each
 // axis; a box lo < hi on each axis; a prism's axis 0, 1 or 2, from < to, its polygon at least three vertices, none
@@ -137,6 +139,7 @@ struct LayeredSolid {
     double from = 0.0, to = 0.0;
     std::vector<Point> polygon;  // (u, v, ignored)
     std::int32_t region = 0;
+    bool fill = false;  // Unit 26m MT4: takes only the cells no earlier solid holds (the background's)
 };
 struct LayeredGeometry3D {
     Point lo, hi;

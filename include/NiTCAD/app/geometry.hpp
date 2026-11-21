@@ -59,6 +59,7 @@ struct Region {
     std::string name, material;
     std::vector<Shape> shapes;  // empty: the background
     int origin = -1;            // the deck's region section it came from (its index among them), -1 new
+    bool fill = false;          // Unit 26m (MT4): `overlap = fill`, its shapes taking only what no earlier shape covers
     friend bool operator==(const Region&, const Region&) = default;
 };
 
@@ -125,6 +126,22 @@ bool raise_region(Geometry& g, int region);  // one layer up (later in the deck)
 bool lower_region(Geometry& g, int region);
 int duplicate_shape(Geometry& g, ShapeRef s, Coord dx, Coord dy);  // a new region on top, its index
 bool mirror_shape(Geometry& g, ShapeRef s, bool horizontal);       // about its bounds' centre
+// --- Unit 26m slice 1 (MT4, MT5) ---
+// The region's overlap rule (refused for the background, a tensor deck, or no change).
+bool set_overlap(Geometry& g, int region, bool fill);
+// Mirrored across the vertical (horizontal = true: x' = twice - x) or horizontal line at twice / 2 quanta.
+bool mirror_shape_at(Geometry& g, ShapeRef s, bool horizontal, Coord twice);
+// A quarter turn counter-clockwise about its bounds' centre (rounded down to the quantum when the centre is off it).
+bool rotate_shape(Geometry& g, ShapeRef s);
+// `count` - 1 copies, the k-th moved k × (dx, dy), each a new region on top; the first one's index (-1 refused:
+// count 2..100, a non-zero pitch).
+int array_shape(Geometry& g, ShapeRef s, Coord dx, Coord dy, int count);
+// Each shape moved so its bounds' side (0 x_min, 1 x_max, 2 y_min, 3 y_max) lies at `at` (refused if any is invalid
+// or none would move).
+bool align_shapes(Geometry& g, const std::vector<ShapeRef>& shapes, int side, Coord at);
+// The regions with shapes in the order that paints them so the last painted holds each point (MT4): the `fill`
+// regions last first, then the others in deck order. The canvas draws and hit_test picks in this order.
+[[nodiscard]] std::vector<int> paint_order(const Geometry& g);
 // Contacts: a segment along one side of the domain (refused otherwise).
 int add_contact(Geometry& g, std::string name, std::string kind, Pt a, Pt b);
 bool set_contact(Geometry& g, int contact, Pt a, Pt b);

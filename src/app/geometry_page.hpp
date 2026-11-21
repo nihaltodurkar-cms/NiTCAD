@@ -20,6 +20,9 @@
 // - Unit 26m slice 0 (MT1-MT3, MQ6): the group switcher and the floating bar, Camera free / fixed (L: free, a left
 //   drag on empty background pans, Shift+drag keeps the rubber band; fixed, no drag or wheel moves the view), the
 //   deck line a drag will write in the status bar, its value in the chip at the cursor, typed digits setting it.
+// - Unit 26m slice 1 (MT4, MT5): Fill / Replace and the inspector's overlap switch; Copy (or Alt+drag), Mirror
+//   (left-right about the centre; Ctrl: up-down; a side handle: across that side; Shift: a quarter turn), Array
+//   (drag: pitch; wheel: count) and Align (the side nearest the click). Each is one deck edit and one undo step.
 //
 // The tests drive the canvas by its messages (GE8; no screen automation).
 #pragma once
@@ -102,6 +105,11 @@ public:
     [[nodiscard]] const std::string& live_line() const noexcept { return live_line_; }  // "" when no drag
     [[nodiscard]] std::string chip() const { return bar_->chip_text(); }
     [[nodiscard]] const modeller::Entry& typed() const noexcept { return entry_; }
+    // --- Unit 26m slice 1 (MT4, MT5) ---
+    void set_mode(modeller::Mode m);  // a Transform mode of the Select tool (modeller.hpp)
+    [[nodiscard]] modeller::Mode mode() const noexcept { return mode_; }
+    bool toggle_overlap();  // the picked shapes' regions: fill <-> replace
+    [[nodiscard]] int array_count() const noexcept { return array_count_; }
 
     // State, for the tests.
     [[nodiscard]] const geo::Geometry& geometry() const noexcept { return g_; }
@@ -148,7 +156,7 @@ public:
     enum Control : int {
         c_heading = 0, c_name_label, c_name, c_material_label, c_material, c_raise, c_lower,
         c_x_label, c_x, c_y_label, c_y, c_w_label, c_w, c_h_label, c_h, c_vertices_label, c_vertices, c_apply,
-        c_kind_label, c_kind, c_draw_label, c_draw, c_hint, c_count
+        c_kind_label, c_kind, c_draw_label, c_draw, c_hint, c_overlap, c_count
     };
     [[nodiscard]] HWND control(int c) const;
 
@@ -201,7 +209,7 @@ private:
     std::string clipboard_material_;
 
     // A drag in progress.
-    enum class Drag { none, move, handle, vertex, domain, contact_end, rubber, rectangle, contact, pan, measure };
+    enum class Drag { none, move, handle, vertex, domain, contact_end, rubber, rectangle, contact, pan, measure, array };
     Drag drag_ = Drag::none;
     geo::Geometry g_start_;  // the model when the drag began
     geo::Pt anchor_{}, at_{};
@@ -249,6 +257,13 @@ private:
     bool on_char(wchar_t c);
     void place_bar();
     void end_drag_ui();
+
+    // Unit 26m slice 1.
+    modeller::Mode mode_ = modeller::Mode::none;
+    int array_count_ = 3;
+    std::optional<geo::Geometry> copy_from_;  // a copy drag: the geometry before the copies were made
+    std::vector<geo::ShapeRef> copy_sel_;
+    bool transform_click(const geo::Hit& hit, geo::Pt at, bool shift, bool ctrl);  // Mirror and Align
 };
 
 }  // namespace NiTCAD::app

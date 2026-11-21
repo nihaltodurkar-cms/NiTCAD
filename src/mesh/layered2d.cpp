@@ -2,7 +2,8 @@
 //
 // The overlay: every shape's x and y breakpoints (cut to the domain) make a grid of cells; each cell takes the
 // region of the last shape covering it (an even-odd scan of the shape's vertical edges per row, exact: only
-// comparisons of input coordinates), else the background. Same-region cells sharing an edge form parts; each part's
+// comparisons of input coordinates), else the background; with `fill` shapes (Unit 26m MT4), the first in
+// paint_order's order. Same-region cells sharing an edge form parts; each part's
 // boundary is traced with the part on its left (counter-clockwise). A part whose boundary touches itself at a grid
 // vertex (two outgoing edges there) or has more than one loop (a hole) is cut along the vertical breakpoint line
 // through that vertex or the hole's leftmost line, and its pieces are traced again: each cut strictly divides the
@@ -30,6 +31,20 @@ namespace {
 
 std::unexpected<base::Error> invalid(std::string message, std::optional<std::size_t> index = std::nullopt) {
     return std::unexpected(base::Error{base::ErrorCode::invalid_input, std::move(message), base::ErrorContext{.index = index, .value = std::nullopt}});
+}
+
+// The order a point asks the shapes in, the first holding it taking it (Unit 26m MT4): the replacing shapes top
+// first, then the filling ones bottom first. With no `fill` shape, top first as before.
+std::vector<std::size_t> paint_order(const LayeredGeometry2D& g) {
+    std::vector<std::size_t> order;
+    order.reserve(g.shapes.size());
+    for (std::size_t s = g.shapes.size(); s-- > 0;) {
+        if (!g.shapes[s].fill) order.push_back(s);
+    }
+    for (std::size_t s = 0; s < g.shapes.size(); ++s) {
+        if (g.shapes[s].fill) order.push_back(s);
+    }
+    return order;
 }
 
 // The breakpoints along one axis: the domain's ends and every vertex coordinate inside them.
@@ -280,6 +295,7 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
 
     // The region on each half-edge's left: -2 outside the domain.
     constexpr std::int32_t outside = -2;
+    const std::vector<std::size_t> order = paint_order(g);
     std::vector<std::int32_t> left(2 * edges.size(), outside);
     for (std::size_t e = 0; e < edges.size(); ++e) {
         const Point& u = pts[edges[e].u];
@@ -326,7 +342,8 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
             }
             done = {true, true};
         }
-        for (std::size_t s = g.shapes.size(); s-- > 0 && !(done[0] && done[1]);) {
+        for (std::size_t o = 0; o < order.size() && !(done[0] && done[1]); ++o) {
+            const std::size_t s = order[o];
             std::optional<std::size_t> own;
             for (const std::size_t i : edges[e].src) {
                 if (orig[i].shape == static_cast<std::int32_t>(s)) own = i;
@@ -648,6 +665,7 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
         }
         yrange[s] = {lo, hi};
     }
+    const std::vector<std::size_t> order = paint_order(g);
     std::vector<std::size_t> cross, free_from(nx + 1);
     const auto find = [&](std::size_t i) {
         while (free_from[i] != i) {
@@ -658,7 +676,7 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
     };
     for (std::size_t j = 0; j < ny; ++j) {
         for (std::size_t i = 0; i <= nx; ++i) free_from[i] = i;
-        for (std::size_t s = g.shapes.size(); s-- > 0;) {
+        for (const std::size_t s : order) {
             if (yrange[s][0] > ys[j] || yrange[s][1] < ys[j + 1]) continue;
             const auto& v = g.shapes[s].vertices;
             cross.clear();

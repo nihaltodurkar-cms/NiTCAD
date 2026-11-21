@@ -177,7 +177,7 @@ std::vector<std::string> lines_of(const std::string& t) {
 bool geometry_line(std::string_view l) {
     while (!l.empty() && (l.back() == '\r' || l.back() == ' ')) l.remove_suffix(1);
     if (l.empty()) return true;
-    for (const char* k : {"box =", "prism =", "material =", "[region ", "[contact ", "patch", "layered =", "domain =", "kind =", "type =",
+    for (const char* k : {"box =", "prism =", "material =", "overlap =", "[region ", "[contact ", "patch", "layered =", "domain =", "kind =", "type =",
                           "axis =", "stations =", "cell ", "extrude =", "sweep =", "lines =", "straddle", "layer =", "min_angle", "        "}) {
         if (l.starts_with(k)) return true;
     }
@@ -239,7 +239,9 @@ std::map<int, double> exact_volumes(const Model& m) {
             for (std::size_t k = 0; k + 1 < g[2].size(); ++k) {
                 const double c[3] = {(g[0][i] + g[0][i + 1]) / 2.0, (g[1][j] + g[1][j + 1]) / 2.0, (g[2][k] + g[2][k + 1]) / 2.0};
                 int region = m.background();
+                bool held = false;  // Unit 26m MT4: a fill region takes only what no earlier solid holds
                 for (std::size_t r = 0; r < m.regions.size(); ++r) {
+                    bool in_region = false;
                     for (const Solid& s : m.regions[r].solids) {
                         bool in = false;
                         if (s.kind == SolidKind::box) {
@@ -247,8 +249,10 @@ std::map<int, double> exact_volumes(const Model& m) {
                         } else {
                             in = c[s.axis] > s.from && c[s.axis] < s.to && inside(s.polygon, c[(s.axis + 1) % 3], c[(s.axis + 2) % 3]);
                         }
-                        if (in) region = static_cast<int>(r);
+                        in_region = in_region || in;
                     }
+                    if (in_region && (!m.regions[r].fill || !held)) region = static_cast<int>(r);
+                    held = held || in_region;
                 }
                 out[region] += static_cast<double>(g[0][i + 1] - g[0][i]) * static_cast<double>(g[1][j + 1] - g[1][j]) *
                                static_cast<double>(g[2][k + 1] - g[2][k]);
@@ -779,4 +783,162 @@ TEST_CASE("app solid: the build's errors placed on the model; the region at a po
     CHECK(region_at(over, {5000, 3000, 4500}) == 3);  // in the oxide too
     CHECK(region_at(over, {5000, 3000, 3500}) == 3);
     CHECK(region_at(over, {7000, 3000, 4500}) == 1);
+}
+
+// --- Unit 26m slice 1 (MT4, MT5; MC5's model side, MC6) ----------------------------------------------------------
+
+namespace {
+
+// A silicon block under an oxide cap, one sio2 fin buried in the silicon (features >= 6 s, gaps >= 4 s at s = 0.02um).
+const std::string fin_deck = R"([mesh]
+type = generate3d
+layered = on
+domain = 0 1.2um 0 0.6um 0 0.6um
+patch gate = 0.3um 0 0.6um  0.9um 0.6um 0.6um
+patch body = 0 0 0  1.2um 0.6um 0
+max_size = 0.15um
+interface_resolution = 0.02um
+
+[region si]
+material = silicon
+
+[region ox]
+material = sio2
+box = 0 1.2um 0 0.6um 0.45um 0.6um
+
+[region fin]
+material = sio2
+box = 0.15um 0.3um 0 0.6um 0.1um 0.3um
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[contact gate]
+kind = electrode
+patch = gate
+electrode = metal
+work_function = 4.4
+
+[equilibrium]
+)";
+
+}  // namespace
+
+TEST_CASE("app solid: overlap = fill read, written by a minimal edit, resolved and built (Unit 26m MT4)", "[app][solid][overlap]") {
+    // On a new region: its line after the material; the solid takes only the background (the oxide keeps its part).
+    Model m = must_read(mos_deck);
+    const int r = add_box(m, {{2000, 0, 2500}, {8000, 6000, 6000}}, "silicon");
+    REQUIRE(r == 2);
+    CHECK_FALSE(set_overlap(m, r, false));  // no change
+    REQUIRE(set_overlap(m, r, true));
+    std::string out = must_write(mos_deck, m);
+    CHECK(out.find("\n[region silicon_1]\nmaterial = silicon\noverlap = fill\nbox = 0.2um 0.8um 0 0.6um 0.25um 0.6um\n") != std::string::npos);
+    CHECK(only_geometry(mos_deck, out) == "");
+    const Model back = must_read(out);
+    CHECK(back.regions[2].fill);
+    CHECK(strip(back) == strip(m));
+    check_partition(m);
+    const auto v = exact_volumes(m);
+    CHECK(v.at(2) == 6000.0 * 6000.0 * 1500.0);  // x 0.2-0.8, all y, z 0.25-0.4: under the oxide only
+    CHECK(region_at(m, {5000, 3000, 3500}) == 2);
+    CHECK(region_at(m, {5000, 3000, 5000}) == 1);  // the oxide keeps what it held
+    CHECK(paint_order(m) == std::vector<int>{2, 1});
+    CHECK(build_error(out) == "");
+
+    // On a kept region: the line inserted after its material, then removed again, giving the deck back byte for byte.
+    Model k = must_read(mos_deck);
+    CHECK_FALSE(set_overlap(k, 0, true));  // the background has no solid
+    REQUIRE(set_overlap(k, 1, true));
+    out = must_write(mos_deck, k);
+    CHECK(out.find("[region ox]\nmaterial = sio2\noverlap = fill\nbox = 0 1um 0 0.6um 0.4um 0.6um\n") != std::string::npos);
+    REQUIRE(set_overlap(k, 1, false));
+    CHECK(must_write(mos_deck, k) == mos_deck);
+    // A deck's `overlap = replace` kept as it is; switched to fill, that line is the one rewritten.
+    std::string said = mos_deck;
+    said.replace(said.find("material = sio2\n"), 16, "material = sio2\noverlap = replace\n");
+    Model s = must_read(said);
+    CHECK_FALSE(s.regions[1].fill);
+    CHECK(must_write(said, s) == said);
+    REQUIRE(set_overlap(s, 1, true));
+    out = must_write(said, s);
+    CHECK(out.find("material = sio2\noverlap = fill\nbox") != std::string::npos);
+    CHECK(out.find("overlap = replace") == std::string::npos);
+}
+
+TEST_CASE("app solid: Array, Mirror, Align and the quarter turn, each one edit that builds (Unit 26m MT5, MC6)", "[app][solid][transform]") {
+    const Model m0 = must_read(fin_deck);
+    REQUIRE(build_error(fin_deck) == "");
+    const SolidRef fin{2, 0};
+    // Array of 3 fins, 0.35um apart: two new regions on top, as sio2 fins.
+    {
+        Model m = m0;
+        CHECK(array_solid(m, fin, {0, 0, 0}, 3) == -1);
+        CHECK(array_solid(m, fin, {3500, 0, 0}, 1) == -1);
+        REQUIRE(array_solid(m, fin, {3500, 0, 0}, 3) == 3);
+        REQUIRE(m.regions.size() == 5);
+        CHECK(m.regions[4].solids[0].box == Box3{{8500, 0, 1000}, {10000, 6000, 3000}});
+        CHECK(m.regions[4].material == "sio2");
+        const std::string out = must_write(fin_deck, m);
+        CHECK(only_geometry(fin_deck, out) == "");
+        CHECK(strip(must_read(out)) == strip(m));
+        check_partition(m);
+        CHECK(build_error(out) == "");
+        // A fill region's copies fill too.
+        Model f = m0;
+        REQUIRE(set_overlap(f, 2, true));
+        REQUIRE(array_solid(f, fin, {3500, 0, 0}, 2) == 3);
+        CHECK(f.regions[3].fill);
+    }
+    // Mirror across the domain's centre plane x = 0.6um, and about its own centre (no change for a box).
+    {
+        Model m = m0;
+        REQUIRE(mirror_solid_at(m, fin, 0, 12000));
+        CHECK(m.regions[2].solids[0].box == Box3{{9000, 0, 1000}, {10500, 6000, 3000}});
+        const std::string out = must_write(fin_deck, m);
+        check_partition(m);
+        CHECK(build_error(out) == "");
+        Model c = m0;
+        REQUIRE(mirror_solid_at(c, fin, 2, 1000 + 3000));
+        CHECK(c == m0);
+    }
+    // Align: a second fin, lower, its top brought to the first's.
+    {
+        Model m = m0;
+        const int r = add_box(m, {{6000, 0, 1000}, {7500, 6000, 2500}}, "sio2");
+        REQUIRE(r == 3);
+        CHECK_FALSE(align_solids(m, {{r, 0}}, 5, 2500));  // there already
+        REQUIRE(align_solids(m, {{r, 0}, {r, 0}}, 5, 3000));
+        CHECK(m.regions[3].solids[0].box == Box3{{6000, 0, 1500}, {7500, 6000, 3000}});
+        check_partition(m);
+        CHECK(build_error(must_write(fin_deck, m)) == "");
+        CHECK_FALSE(align_solids(m, {{9, 0}}, 5, 0));
+        CHECK_FALSE(align_solids(m, {{r, 0}}, 6, 0));
+    }
+    // The quarter turn: a box about its centre; four turns give it back; an L prism along x turned about z runs along y.
+    {
+        Model m = m0;
+        REQUIRE(rotate_solid(m, fin, 2));  // 0.15 x 0.6 in (x, y) about (0.225, 0.3): 0.6 x 0.15
+        CHECK(m.regions[2].solids[0].box == Box3{{-750, 2250, 1000}, {5250, 3750, 3000}});
+        for (int k = 0; k < 3; ++k) REQUIRE(rotate_solid(m, fin, 2));
+        CHECK(m == m0);
+        Model w = must_read(well_deck);
+        const SolidRef well{2, 0};
+        const double before = exact_volumes(w).at(2);
+        REQUIRE(rotate_solid(w, well, 2));
+        const Solid& t = w.regions[2].solids[0];
+        CHECK(t.kind == SolidKind::prism);
+        CHECK(t.axis == 1);
+        CHECK(t.from == 0);
+        CHECK(t.to == 6000);
+        CHECK(prism_ok(t.polygon));
+        check_partition(w);
+        CHECK(exact_volumes(w).at(2) == before);
+        for (int k = 0; k < 3; ++k) REQUIRE(rotate_solid(w, well, 2));
+        CHECK(w.regions[2].solids[0].axis == 0);
+        CHECK(w.regions[2].solids[0].bounds() == must_read(well_deck).regions[2].solids[0].bounds());
+    }
 }
