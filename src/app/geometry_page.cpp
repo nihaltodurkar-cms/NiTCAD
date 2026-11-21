@@ -118,6 +118,30 @@ profile = acceptor constant 1e16
 [equilibrium]
 )";
 
+// The same for a 3D device (the New 3D layout button): the Geometry tab then shows the 3D modeller (Unit 26l).
+constexpr std::string_view layout3d_template = R"(# A 3D device drawn on the Geometry tab: the regions are layers, each solid replacing what it covers, in
+# deck order (Unit 26l).
+[mesh]
+type = generate3d
+layered = on
+domain = 0 1um 0 1um 0 1um
+patch body = 0 0 0  1um 1um 0
+max_size = 0.15um
+interface_resolution = 10nm
+
+[region substrate]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[equilibrium]
+)";
+
 }  // namespace
 
 GeometryPage::GeometryPage(HWND parent, Host& host, int id, int inspector_id, bool software)
@@ -178,6 +202,7 @@ GeometryPage::GeometryPage(HWND parent, Host& host, int id, int inspector_id, bo
     add(c_draw_label, L"STATIC", L"Draw with", SS_LEFT);
     add(c_draw, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST);
     add(c_new_layout, L"BUTTON", L"New 2D layout", WS_TABSTOP | BS_PUSHBUTTON);
+    add(c_new_layout3d, L"BUTTON", L"New 3D layout", WS_TABSTOP | BS_PUSHBUTTON);
     for (const int c : {c_material, c_draw}) {
         for (const std::string& m : choices_of("region", "material")) {
             SendMessageW(control(c), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(wide(m).c_str()));
@@ -287,6 +312,7 @@ void GeometryPage::layout_inspector() {
     y += pad;
     pair(c_draw_label, c_draw, MulDiv(200, dpi_, 96));
     line(c_new_layout);
+    line(c_new_layout3d);
 }
 
 // --- the deck -------------------------------------------------------------------------------------------------
@@ -548,7 +574,7 @@ void GeometryPage::update_inspector() {
     show({c_name_label, c_name, c_material_label, c_material, c_raise, c_lower, c_x_label, c_x, c_y_label, c_y, c_w_label,
           c_w, c_h_label, c_h, c_vertices_label, c_vertices, c_apply, c_kind_label, c_kind},
          false);
-    show({c_new_layout}, !g_.editable() && message_.starts_with("the deck has no [mesh]"));
+    show({c_new_layout, c_new_layout3d}, !g_.editable() && message_.starts_with("the deck has no [mesh]"));
     show({c_draw_label, c_draw}, g_.editable());
     const auto xywh = [&](Rect r, bool contact) {
         show({c_x_label, c_x, c_y_label, c_y, c_w_label, c_w, c_h_label, c_h}, true);
@@ -620,6 +646,10 @@ bool GeometryPage::commit(int c) {
     if (c == c_new_layout) {
         apply_text(std::string(layout_template));
         fit();
+        return true;
+    }
+    if (c == c_new_layout3d) {
+        apply_text(std::string(layout3d_template));  // the host shows the 3D modeller for it
         return true;
     }
     Geometry next = g_;
@@ -1309,7 +1339,7 @@ LRESULT CALLBACK GeometryPage::inspector_proc(HWND hwnd, UINT message, WPARAM w,
         if (message == WM_COMMAND) {
             const int c = LOWORD(w) - self->inspector_id_;
             const int code = HIWORD(w);
-            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_new_layout)) ||
+            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_new_layout || c == c_new_layout3d)) ||
                 (code == CBN_SELCHANGE && (c == c_material || c == c_kind || c == c_draw))) {
                 self->commit(c);
                 return 0;

@@ -124,7 +124,7 @@ public:
     enum Control : int {
         c_heading = 0, c_name_label, c_name, c_material_label, c_material, c_raise, c_lower,
         c_x_label, c_x, c_y_label, c_y, c_w_label, c_w, c_h_label, c_h, c_vertices_label, c_vertices, c_apply,
-        c_kind_label, c_kind, c_draw_label, c_draw, c_hint, c_new_layout, c_count
+        c_kind_label, c_kind, c_draw_label, c_draw, c_hint, c_new_layout, c_new_layout3d, c_count
     };
     [[nodiscard]] HWND control(int c) const;
 

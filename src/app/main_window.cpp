@@ -2663,6 +2663,13 @@ std::string MainWindow::geometry_deck() { return deck_->text(); }
 void MainWindow::geometry_edited(const std::string& text) {
     deck_->set_text(text);
     deck_changed();  // the title, and the live check a pause later (XD1): the build's own messages
+    // The New 3D layout button (Unit 26l): a 3D deck now, so the tab shows the 3D modeller.
+    const bool was = solid_shown_;
+    update_geometry_page();
+    if (solid_shown_ && !was) {
+        solid_->reload(true);
+        if (tab_ == tab_geometry) SetFocus(solid_->canvas());
+    }
 }
 
 std::optional<geo::Rect> MainWindow::geometry_bounds() {

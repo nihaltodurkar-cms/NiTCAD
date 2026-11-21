@@ -333,6 +333,36 @@ TEST_CASE("app window solid: a slanted prism clicked as it is, Shift keeping an 
     CHECK(b->device.regions().size() == 3);
 }
 
+TEST_CASE("app window solid: New 3D layout on a deck with no mesh opens the modeller; a box drawn on it builds", "[app][window][solid]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("empty3d", "[device]\ntemperature = 300\n")));
+    w->execute(Command::tab_geometry);
+    CHECK_FALSE(w->solid_shown());
+    GeometryPage& geometry = w->geometry_page();
+    CHECK((GetWindowLongPtrW(geometry.control(GeometryPage::c_new_layout3d), GWL_STYLE) & WS_VISIBLE) != 0);
+    geometry.commit(GeometryPage::c_new_layout3d);
+    CHECK(has(w->deck().text(), "type = generate3d\nlayered = on\ndomain = 0 1um 0 1um 0 1um\n"));
+    REQUIRE(w->solid_shown());
+    CHECK(IsWindowVisible(w->solid_page().hwnd()) == IsWindowVisible(w->hwnd()));
+    SolidPage& page = w->solid_page();
+    REQUIRE(page.model().editable());
+    REQUIRE(page.render() >= 0.0);
+    // A layer over the whole top: its base on the work plane z = 0.8 µm, then its height to the top.
+    const Mouse mouse{page};
+    page.set_work_plane({2, 8 * um / 10});
+    page.set_tool(SolidPage::Tool::box);
+    mouse.drag(mouse.px({0.0, 0.0, 0.8}), mouse.px({1.0, 1.0, 0.8}));
+    mouse.move(mouse.px({1.0, 1.0, 1.0}), 0);
+    mouse.click({1.0, 1.0, 1.0});
+    CHECK(has(w->deck().text(), "box = 0 1um 0 1um 0.8um 1um\n"));
+    const auto d = deck::parse(w->deck().text(), "n.deck");
+    REQUIRE(d);
+    const auto b = deck::build(*d);
+    if (!b) FAIL(b.error().message);
+    CHECK(b->device.mesh().dimension() == 3);
+    CHECK(b->device.regions().size() == 2);
+}
+
 TEST_CASE("app window solid: the inspector's numbers, the material, the work plane, Delete (SE8)", "[app][window][solid]") {
     auto w = window();
     REQUIRE(w->open_deck(write("inspector", mos)));

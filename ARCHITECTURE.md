@@ -3171,7 +3171,8 @@ CG1–CG9; accepted by the owner 2026-10-22):**
 - **`extrude3d` converted (SQ5):** such a deck reads as one prism per cell and section run, exactly; Convert writes
   it as a layered deck. Convert notes each contact whose box cuts across a cell's end: a layered deck names the part
   of a face inside the box, the extrusion only whole cells.
-- **The page (SD4):** the Geometry tab shows the modeller for 3D decks (the 2D editor for 2D). A D3D12 view through
+- **The page (SD4):** the Geometry tab shows the modeller for 3D decks (the 2D editor for 2D); on a deck with no mesh,
+  New 3D layout writes a starter deck (a 1 µm silicon cube, a body contact on its bottom) and opens it. A D3D12 view through
   the render layer (`solid_view`, no Win32): solids shaded by material in layer order, edges outlined, selection,
   translucency and a section plane; a work plane (XY, YZ, ZX or a picked face) with its grid; orbit, pan, zoom, the
   triad and presets (26h). Picking by exact ray tests in model coordinates (SE6: 3 dpi × 4 zooms × 8 views). Tools:
