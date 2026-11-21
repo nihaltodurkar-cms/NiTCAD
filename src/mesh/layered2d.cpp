@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -31,28 +32,6 @@ std::unexpected<base::Error> invalid(std::string message, std::optional<std::siz
     return std::unexpected(base::Error{base::ErrorCode::invalid_input, std::move(message), base::ErrorContext{.index = index, .value = std::nullopt}});
 }
 
-// The breakpoints along one axis: the domain's ends and every vertex coordinate inside them.
-std::vector<double> breakpoints(const LayeredGeometry2D& g, int axis) {
-    std::vector<double> v{g.lo[static_cast<std::size_t>(axis)], g.hi[static_cast<std::size_t>(axis)]};
-    for (const LayeredShape& s : g.shapes) {
-        for (const Point& p : s.vertices) {
-            const double c = p[static_cast<std::size_t>(axis)];
-            if (c > v[0] && c < v[1]) v.push_back(c);
-        }
-    }
-    std::ranges::sort(v);
-    v.erase(std::unique(v.begin(), v.end()), v.end());
-    return v;
-}
-
-// The index of the breakpoint at or nearest inside the domain for a coordinate (cut to the domain).
-std::size_t index_of(const std::vector<double>& b, double c) {
-    if (c <= b.front()) return 0;
-    if (c >= b.back()) return b.size() - 1;
-    return static_cast<std::size_t>(std::ranges::lower_bound(b, c) - b.begin());  // c is a breakpoint
-}
-
-
 // --- slanted edges (Unit 26k slice 4, GD10): the layers as a planar arrangement -------------------------------------
 //
 // Every shape's edges and the domain's sides, split where they meet: a touch or a collinear overlap at the input's own
@@ -66,6 +45,18 @@ std::size_t index_of(const std::vector<double>& b, double c) {
 // boundary off every patch's inside first, then the shorter), and the region traced again. A polygon keeps the
 // vertices where three or more boundary edges meet or where its two edges come from lines that differ: the points
 // along a straight edge that only split it are dropped, the rounded ones too.
+
+// Four vertices, no two in a row equal, joined by horizontal and vertical edges in turn: an axis-parallel rectangle.
+bool rectangle(const std::vector<Point>& v) {
+    if (v.size() != 4) return false;
+    for (std::size_t k = 0; k < 4; ++k) {
+        const Point& p = v[k];
+        const Point& q = v[(k + 1) % 4];
+        const bool h = p[1] == q[1], vt = p[0] == q[0];
+        if (h == vt || h != (k % 2 == (v[0][1] == v[1][1] ? 0u : 1u))) return false;
+    }
+    return true;
+}
 
 int orient(const Point& a, const Point& b, const Point& c) { return predicates::orient2d(a, b, c); }
 bool same_pt(const Point& a, const Point& b) { return a[0] == b[0] && a[1] == b[1]; }
@@ -581,72 +572,216 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
             if (horizontal && vertical) return invalid("a layered shape repeats a vertex", s);
             slanted = slanted || (!horizontal && !vertical);
         }
+        // Four axis-parallel edges, turning at every vertex, close only as a rectangle: simple, of non-zero area.
+        if (rectangle(v)) continue;
         if (!detail::simple_2d(v) || detail::polygon_turn(v) == 0) return invalid("a layered shape must be simple, of non-zero area", s);
     }
     // Slice 4 (GD10): a slanted edge anywhere, the general arrangement; rectilinear layouts keep the grid below.
     if (slanted) return general_partition(g);
 
-    std::vector<double> xs = breakpoints(g, 0), ys = breakpoints(g, 1);
-    std::size_t nx = xs.size() - 1, ny = ys.size() - 1;
-    // Each row painted from the top shape down, every cell once: `free_from` skips the cells already taken
-    // (path-halving union-find over the row's columns).
-    std::vector<std::int32_t> owner(nx * ny, g.background);
-    std::vector<std::array<double, 2>> yrange(g.shapes.size());
-    for (std::size_t s = 0; s < g.shapes.size(); ++s) {
-        double lo = g.shapes[s].vertices[0][1], hi = lo;
-        for (const Point& p : g.shapes[s].vertices) {
-            lo = std::min(lo, p[1]);
-            hi = std::max(hi, p[1]);
-        }
-        yrange[s] = {lo, hi};
-    }
-    std::vector<std::size_t> cross, free_from(nx + 1);
-    const auto find = [&](std::size_t i) {
-        while (free_from[i] != i) {
-            free_from[i] = free_from[free_from[i]];
-            i = free_from[i];
-        }
-        return i;
-    };
-    for (std::size_t j = 0; j < ny; ++j) {
-        for (std::size_t i = 0; i <= nx; ++i) free_from[i] = i;
-        for (std::size_t s = g.shapes.size(); s-- > 0;) {
-            if (yrange[s][0] > ys[j] || yrange[s][1] < ys[j + 1]) continue;
+    // Every vertex's column and row, from one sort per axis: the breakpoints are the distinct coordinates, cut to
+    // the domain (a search per vertex costs as much again).
+    std::vector<std::size_t> vbase(g.shapes.size() + 1, 0);
+    for (std::size_t s = 0; s < g.shapes.size(); ++s) vbase[s + 1] = vbase[s] + g.shapes[s].vertices.size();
+    std::vector<std::uint32_t> rank_x(vbase.back()), rank_y(vbase.back());
+    std::vector<std::pair<double, std::uint32_t>> keyed;
+    const auto ranked = [&](std::size_t a, std::vector<std::uint32_t>& rank) {
+        keyed.clear();
+        keyed.emplace_back(g.lo[a], UINT32_MAX);
+        keyed.emplace_back(g.hi[a], UINT32_MAX);
+        for (std::size_t s = 0; s < g.shapes.size(); ++s) {
             const auto& v = g.shapes[s].vertices;
-            cross.clear();
             for (std::size_t k = 0; k < v.size(); ++k) {
-                const Point& p = v[k];
-                const Point& q = v[(k + 1) % v.size()];
-                if (p[0] != q[0]) continue;  // horizontal
-                const double lo = std::min(p[1], q[1]), hi = std::max(p[1], q[1]);
-                if (lo <= ys[j] && hi >= ys[j + 1]) cross.push_back(index_of(xs, p[0]));
+                keyed.emplace_back(std::clamp(v[k][a], g.lo[a], g.hi[a]), static_cast<std::uint32_t>(vbase[s] + k));
             }
-            std::ranges::sort(cross);
+        }
+        std::ranges::sort(keyed);
+        std::vector<double> b;
+        for (const auto& [c, id] : keyed) {
+            if (b.empty() || c != b.back()) b.push_back(c);
+            if (id != UINT32_MAX) rank[id] = static_cast<std::uint32_t>(b.size() - 1);
+        }
+        return b;
+    };
+    std::vector<double> xs = ranked(0, rank_x), ys = ranked(1, rank_y);
+    std::size_t nx = xs.size() - 1, ny = ys.size() - 1;
+    // Each shape's rows and vertical edges as grid indices. An edge crosses row j when lo <= j < hi.
+    struct VEdge {
+        std::size_t i, lo, hi;
+    };
+    struct Rows {
+        std::size_t lo, hi, first, last;  // the shape's rows [lo, hi); its edges [first, last) of `vedges`
+        std::size_t ha, hb;               // the columns [ha, hb) it spans
+        bool rect = false;                // a rectangle: its columns [first, last) instead of edges
+    };
+    std::vector<VEdge> vedges;
+    std::vector<Rows> rows(g.shapes.size());
+    // Where a shape's crossings change, between row j - 1 and row j: its columns, there, are painted again. Kept
+    // by row (a count, then a place each).
+    struct Change {
+        std::size_t j, a, b;
+    };
+    std::vector<Change> changes;
+    for (std::size_t s = 0; s < g.shapes.size(); ++s) {
+        const auto& v = g.shapes[s].vertices;
+        const std::size_t base = vbase[s];
+        Rows& r = rows[s];
+        r.first = vedges.size();
+        r.lo = ny;
+        r.hi = 0;
+        for (std::size_t k = 0; k < v.size(); ++k) {
+            const std::size_t kq = (k + 1) % v.size();
+            const std::size_t yp = rank_y[base + k], yq = rank_y[base + kq];
+            r.lo = std::min(r.lo, yp);
+            r.hi = std::max(r.hi, yp);
+            if (v[k][0] != v[kq][0]) continue;  // horizontal
+            vedges.push_back({rank_x[base + k], std::min(yp, yq), std::max(yp, yq)});
+        }
+        r.last = vedges.size();
+        r.ha = nx;
+        r.hb = 0;
+        for (std::size_t e = r.first; e < r.last; ++e) {
+            r.ha = std::min(r.ha, vedges[e].i);
+            r.hb = std::max(r.hb, vedges[e].i);
+        }
+        const auto change = [&](std::size_t j) {
+            if (j > 0 && j < ny && r.ha < r.hb) changes.push_back({j, r.ha, r.hb});
+        };
+        // A rectangle crosses each of its rows at its two sides: they stand for its edges.
+        if (rectangle(v)) {
+            vedges.resize(r.first);
+            r.first = r.ha;
+            r.last = r.hb;
+            r.rect = true;
+            change(r.lo);
+            change(r.hi);
+            continue;
+        }
+        for (std::size_t e = r.first; e < r.last; ++e) {
+            change(vedges[e].lo);
+            change(vedges[e].hi);
+        }
+    }
+    std::vector<std::size_t> change_at(ny + 2, 0);  // row j's changes: [change_at[j], change_at[j + 1]) of `by_row`
+    for (const Change& c : changes) ++change_at[c.j + 2];
+    for (std::size_t j = 2; j < change_at.size(); ++j) change_at[j] += change_at[j - 1];
+    std::vector<Change> by_row(changes.size());
+    for (const Change& c : changes) by_row[change_at[c.j + 1]++] = c;
+    // Each row painted from the top shape down as runs of one owner: a shape takes the row's still-free gaps it
+    // covers, the background the rest; a row with no gap left is done. Runs, not cells (GE5): the breakpoint grid
+    // is far finer than the polygons, merged below without ever being stored cell by cell. A row past the first
+    // is the one below it outside the columns of the shapes whose crossings change between them: only those are
+    // painted again.
+    struct Run {
+        std::size_t a, b;  // columns [a, b)
+        std::int32_t region;
+    };
+    std::vector<Run> runs;                       // every row's runs, in order along it, neighbours of other owners
+    std::vector<std::size_t> row_at(ny + 1, 0);  // row j's runs: [row_at[j], row_at[j + 1])
+    std::vector<std::pair<std::size_t, std::size_t>> gaps, rest, changed;
+    std::vector<std::size_t> cross, active, by_lo(g.shapes.size());  // `active`: the row's shapes, top first
+    for (std::size_t s = 0; s < by_lo.size(); ++s) by_lo[s] = s;
+    std::ranges::sort(by_lo, [&](std::size_t x, std::size_t y) { return rows[x].lo < rows[y].lo; });
+    std::size_t entering = 0;
+    for (std::size_t j = 0; j < ny; ++j) {
+        const std::size_t first = runs.size();
+        std::erase_if(active, [&](std::size_t s) { return rows[s].hi <= j; });
+        for (; entering < by_lo.size() && rows[by_lo[entering]].lo <= j; ++entering) {
+            const std::size_t s = by_lo[entering];
+            if (rows[s].hi > j) active.insert(std::ranges::upper_bound(active, s, std::greater<>{}), s);
+        }
+        changed.clear();
+        if (j == 0) changed.emplace_back(0, nx);
+        const auto here = by_row.begin() + static_cast<std::ptrdiff_t>(change_at[j]);
+        std::sort(here, by_row.begin() + static_cast<std::ptrdiff_t>(change_at[j + 1]), [](const Change& x, const Change& y) { return x.a < y.a; });
+        for (auto c = here; c != by_row.begin() + static_cast<std::ptrdiff_t>(change_at[j + 1]); ++c) {
+            if (!changed.empty() && c->a <= changed.back().second) {
+                changed.back().second = std::max(changed.back().second, c->b);
+            } else {
+                changed.emplace_back(c->a, c->b);
+            }
+        }
+        gaps = changed;
+        for (const std::size_t s : active) {
+            if (gaps.empty()) break;
+            if (rows[s].hb <= gaps.front().first || rows[s].ha >= gaps.back().second) continue;
+            cross.clear();
+            if (rows[s].rect) {
+                cross.push_back(rows[s].first);
+                cross.push_back(rows[s].last);
+            } else {
+                for (std::size_t e = rows[s].first; e < rows[s].last; ++e) {
+                    if (vedges[e].lo <= j && j < vedges[e].hi) cross.push_back(vedges[e].i);
+                }
+                std::ranges::sort(cross);
+            }
             for (std::size_t c = 0; c + 1 < cross.size(); c += 2) {
-                for (std::size_t i = find(cross[c]); i < cross[c + 1]; i = find(i + 1)) {
-                    owner[j * nx + i] = g.shapes[s].region;
-                    free_from[i] = i + 1;
+                const std::size_t a = cross[c], b = cross[c + 1];
+                if (a >= b) continue;
+                rest.clear();
+                for (const auto& [ga, gb] : gaps) {
+                    if (gb <= a || ga >= b) {
+                        rest.emplace_back(ga, gb);
+                        continue;
+                    }
+                    if (ga < a) rest.emplace_back(ga, a);
+                    runs.push_back({std::max(ga, a), std::min(gb, b), g.shapes[s].region});
+                    if (gb > b) rest.emplace_back(b, gb);
+                }
+                gaps.swap(rest);
+            }
+        }
+        // Cells left uncovered outside the repainted columns were so in the row below: the first is in `gaps`.
+        if (!gaps.empty() && g.background < 0) {
+            return invalid("the layers leave part of the domain uncovered (near (" + std::to_string(xs[gaps.front().first]) +
+                           ", " + std::to_string(ys[j]) + ")) and no region is the background");
+        }
+        for (const auto& [ga, gb] : gaps) runs.push_back({ga, gb, g.background});
+        if (j > 0) {  // the row below, outside `changed`
+            std::size_t c = 0;
+            for (std::size_t k = row_at[j - 1]; k < row_at[j]; ++k) {
+                const Run r = runs[k];
+                std::size_t a = r.a;
+                while (c < changed.size() && changed[c].second <= a) ++c;
+                for (std::size_t d = c; a < r.b; ++d) {
+                    const std::size_t end = d < changed.size() ? std::min(r.b, changed[d].first) : r.b;
+                    if (a < end) runs.push_back({a, end, r.region});
+                    if (d >= changed.size()) break;
+                    a = std::max(a, changed[d].second);
                 }
             }
         }
-    }
-    if (const auto it = std::ranges::find(owner, -1); it != owner.end()) {
-        const auto c = static_cast<std::size_t>(it - owner.begin());
-        return invalid("the layers leave part of the domain uncovered (near (" + std::to_string(xs[c % nx]) + ", " +
-                       std::to_string(ys[c / nx]) + ")) and no region is the background");
+        std::sort(runs.begin() + static_cast<std::ptrdiff_t>(first), runs.end(), [](const Run& x, const Run& y) { return x.a < y.a; });
+        std::size_t w = first;
+        for (std::size_t k = first; k < runs.size(); ++k) {
+            if (w > first && runs[w - 1].region == runs[k].region) {
+                runs[w - 1].b = runs[k].b;
+            } else {
+                runs[w++] = runs[k];
+            }
+        }
+        runs.resize(w);
+        row_at[j + 1] = runs.size();
     }
     // Breakpoint lines with the same owners on both sides along their whole length (hidden under later shapes)
     // carry no edge of any polygon: merged away, exactly, so the later passes see a smaller grid.
+    std::vector<std::int32_t> owner;
     {
         std::vector<char> keep_x(nx + 1, 0), keep_y(ny + 1, 0);
         keep_x[0] = keep_x[nx] = keep_y[0] = keep_y[ny] = 1;
-        for (std::size_t j = 0; j < ny; ++j) {
-            const std::int32_t* r = owner.data() + j * nx;
-            for (std::size_t i = 1; i < nx; ++i) keep_x[i] |= static_cast<char>(r[i - 1] != r[i]);
-            if (j > 0) {
-                const std::int32_t* below = r - nx;
-                for (std::size_t i = 0; i < nx && keep_y[j] == 0; ++i) keep_y[j] = static_cast<char>(below[i] != r[i]);
+        const auto same_row = [&](std::size_t j1, std::size_t j2) {
+            const std::size_t n = row_at[j1 + 1] - row_at[j1];
+            if (n != row_at[j2 + 1] - row_at[j2]) return false;
+            for (std::size_t k = 0; k < n; ++k) {
+                const Run& x = runs[row_at[j1] + k];
+                const Run& y = runs[row_at[j2] + k];
+                if (x.a != y.a || x.region != y.region) return false;
             }
+            return true;
+        };
+        for (std::size_t j = 0; j < ny; ++j) {
+            for (std::size_t k = row_at[j] + 1; k < row_at[j + 1]; ++k) keep_x[runs[k].a] = 1;
+            if (j > 0) keep_y[j] = static_cast<char>(!same_row(j - 1, j));
         }
         std::vector<std::size_t> cx, cy;  // the first old column (row) of each new one
         std::vector<double> x2, y2;
@@ -660,17 +795,18 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
             y2.push_back(ys[j]);
             if (j < ny) cy.push_back(j);
         }
-        if (cx.size() < nx || cy.size() < ny) {
-            std::vector<std::int32_t> o2(cx.size() * cy.size());
-            for (std::size_t j = 0; j < cy.size(); ++j) {
-                for (std::size_t i = 0; i < cx.size(); ++i) o2[j * cx.size() + i] = owner[cy[j] * nx + cx[i]];
+        owner.resize(cx.size() * cy.size());
+        for (std::size_t j = 0; j < cy.size(); ++j) {
+            std::size_t k = row_at[cy[j]];
+            for (std::size_t i = 0; i < cx.size(); ++i) {
+                while (runs[k].b <= cx[i]) ++k;
+                owner[j * cx.size() + i] = runs[k].region;
             }
-            owner = std::move(o2);
-            xs = std::move(x2);
-            ys = std::move(y2);
-            nx = cx.size();
-            ny = cy.size();
         }
+        xs = std::move(x2);
+        ys = std::move(y2);
+        nx = cx.size();
+        ny = cy.size();
     }
     // Each cell's column and row, looked up (a division per cell per pass costs more than the pass).
     std::vector<std::uint32_t> col(nx * ny), row(nx * ny);
