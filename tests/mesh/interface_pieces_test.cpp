@@ -402,44 +402,139 @@ TEST_CASE("mesh interface pieces: a slanted wall ending on a domain edge is refu
     CHECK(std::atan2(0.2, 0.6) * 180.0 / std::numbers::pi < 60.0);
 }
 
-TEST_CASE("mesh interface pieces: a sidewall crossed by a plane folds into pieces touching, parallel, not coplanar (IP1)",
-          "[mesh][interface_pieces]") {
-    CHECK(outcome(slanted_fin(), 0.02) == within_4s);
-    const auto c = layered_partition3d(slanted_fin());
-    REQUIRE(c.has_value());
-    std::vector<std::vector<std::int32_t>> regions(c->facets.size());
-    for (const ComplexVolume& v : c->volumes) {
+
+namespace {
+
+struct Folds {
+    int same_pair = 0, other_pair = 0;  // touching wall facets not exactly coplanar, of one region pair or two
+    double worst = 0.0;                 // the largest |n1 x n2| among them
+};
+
+// The touching, not exactly coplanar pairs of slanted interface facets (off the axes) of a complex.
+Folds folds_of(const PolyhedralGeometry& c) {
+    std::vector<std::vector<std::int32_t>> regions(c.facets.size());
+    for (const ComplexVolume& v : c.volumes) {
         for (const std::size_t f : v.facets) regions[f].push_back(v.region);
     }
-    std::vector<std::size_t> walls;  // the interface facets off the axes
-    for (std::size_t f = 0; f < c->facets.size(); ++f) {
+    std::vector<std::size_t> walls;
+    for (std::size_t f = 0; f < c.facets.size(); ++f) {
         if (regions[f].size() != 2 || regions[f][0] == regions[f][1]) continue;
         std::ranges::sort(regions[f]);
-        const Point n = newell_unit(*c, f);
+        const Point n = newell_unit(c, f);
         if (std::abs(n[0]) != 1 && std::abs(n[1]) != 1 && std::abs(n[2]) != 1) walls.push_back(f);
     }
-    // Every touching pair of wall facets not exactly coplanar: parallel to 1e-15 (the generator's rule takes 1e-12).
-    int same_pair = 0, other_pair = 0;
-    double worst = 0;
+    Folds r;
     for (std::size_t i = 0; i < walls.size(); ++i) {
         for (std::size_t j = i + 1; j < walls.size(); ++j) {
-            const auto& A = c->facets[walls[i]].vertices;
-            const auto& B = c->facets[walls[j]].vertices;
+            const auto& A = c.facets[walls[i]].vertices;
+            const auto& B = c.facets[walls[j]].vertices;
             const std::set<std::size_t> sa(A.begin(), A.end());
             if (std::ranges::none_of(B, [&](std::size_t v) { return sa.contains(v); })) continue;
             const bool coplanar = std::ranges::all_of(B, [&](std::size_t v) {
-                return predicates::orient3d(c->vertices[A[0]], c->vertices[A[1]], c->vertices[A[2]], c->vertices[v]) == 0;
+                return predicates::orient3d(c.vertices[A[0]], c.vertices[A[1]], c.vertices[A[2]], c.vertices[v]) == 0;
             });
             if (coplanar) continue;
-            const Point a = newell_unit(*c, walls[i]), b = newell_unit(*c, walls[j]);
+            const Point a = newell_unit(c, walls[i]), b = newell_unit(c, walls[j]);
             const Point x{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-            worst = std::max(worst, std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]));
-            ++(regions[walls[i]] == regions[walls[j]] ? same_pair : other_pair);
+            r.worst = std::max(r.worst, std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]));
+            ++(regions[walls[i]] == regions[walls[j]] ? r.same_pair : r.other_pair);
         }
     }
+    return r;
+}
+
+// SD6's FinFET drawn on a dyadic grid: lengths in units of 2^-14 cm (0.61 µm) times k, the walls' crossings with the
+// gate's bottom exact at k = 1 (so the wall is cut exactly coplanar), rounded at k = 1 + 1e-9 (so it folds).
+LayeredGeometry3D dyadic_fin(double k) {
+    const double u = std::ldexp(1.0, -14) * k;
+    const auto B = [&](double x0, double x1, double y0, double y1, double z0, double z1, std::int32_t r) {
+        LayeredSolid s;
+        s.kind = LayeredSolid::Kind::box;
+        s.lo = {x0 * u, y0 * u, z0 * u};
+        s.hi = {x1 * u, y1 * u, z1 * u};
+        s.region = r;
+        return s;
+    };
+    LayeredGeometry3D g{.lo = {0, 0, 0}, .hi = {1 * u, 2 * u, 1 * u}, .background = 0, .solids = {}, .patches = {}};
+    g.solids.push_back(B(0, 1, 0, 2, 0, 0.3125, 1));
+    g.solids.push_back(B(0, 1, 0.5, 1.5, 0.5, 1, 2));
+    LayeredSolid fin;
+    fin.kind = LayeredSolid::Kind::prism;
+    fin.axis = 1;
+    fin.from = 0;
+    fin.to = 2 * u;
+    for (const auto& [z, x] : std::vector<std::pair<double, double>>{{0.3125, 0.3125}, {0.3125, 0.6875}, {0.8125, 0.5625}, {0.8125, 0.4375}}) {
+        fin.polygon.push_back({z * u, x * u, 0.0});
+    }
+    fin.region = 1;
+    g.solids.push_back(fin);
+    return g;
+}
+
+MeshOptions3D dyadic_options(double k) {
+    const double u = std::ldexp(1.0, -14) * k;
+    MeshOptions3D o;
+    o.max_size = 0.15 * u;
+    o.interface_resolution = u / 64;
+    return o;
+}
+
+}  // namespace
+
+TEST_CASE("mesh interface pieces: a sidewall crossed by a plane folds into pieces touching, parallel, not coplanar (IP1)",
+          "[mesh][interface_pieces]") {
+    const auto c = layered_partition3d(slanted_fin());
+    REQUIRE(c.has_value());
     // Both kinds: one sidewall interface split into pieces of its own pair, and the fin | oxide and fin | gate
     // pieces meeting where the gate's bottom crosses (the proposal's "same two regions" was too narrow).
-    CHECK(same_pair == 8);
-    CHECK(other_pair == 6);
-    CHECK(worst <= 1e-15);
+    const Folds f = folds_of(*c);
+    CHECK(f.same_pair == 8);
+    CHECK(f.other_pair == 6);
+    CHECK(f.worst <= 1e-15);
 }
+
+TEST_CASE("mesh interface pieces: SD6's folded FinFET meshes and certifies (IP4; IC2)", "[mesh][interface_pieces]") {
+    const auto m = mesh_of(slanted_fin(), 0.02);
+    if (!m) FAIL(m.error().message);
+    check_certified(*m, 0.02 * um, 2.0 * um * um * um);
+    const std::uint64_t got = digest(*m);
+    UNSCOPED_INFO(std::format("nodes {}, digest 0x{:016x}", m->simplices.points.size(), got));
+    CHECK(got == 0x74b8709a9e74c600ULL);
+}
+
+TEST_CASE("mesh interface pieces: a folded wall meshes and certifies, as the same wall cut exactly coplanar (IP4; IC2)",
+          "[mesh][interface_pieces]") {
+    // k = 1 - 1e-9 folds both kinds; k = 1 has no fold. The two meshes differ (the generator's node placement is not
+    // continuous in the geometry: an unfolded layout scaled by 1e-12 moves too, DECISIONS.md Unit 64 slice 3), so
+    // each is pinned on its own and IC3 compares their solutions.
+    const double k = 1.0 - 1e-9;
+    const auto exact = layered_partition3d(dyadic_fin(1.0));
+    const auto bent = layered_partition3d(dyadic_fin(k));
+    REQUIRE(exact.has_value());
+    REQUIRE(bent.has_value());
+    const Folds fe = folds_of(*exact), fb = folds_of(*bent);
+    CHECK(fe.same_pair + fe.other_pair == 0);
+    CHECK(fb.same_pair == 8);
+    CHECK(fb.other_pair == 6);
+    const double u = std::ldexp(1.0, -14);
+    const std::vector<std::tuple<const PolyhedralGeometry*, double, std::uint64_t>> cases{{&*exact, 1.0, 0x0f5a260b2e50fa87ULL}, {&*bent, k, 0xa8450c9f8f6fa148ULL}};
+    for (const auto& [c, kk, want] : cases) {
+        CAPTURE(kk);
+        const auto m = generate_mesh(*c, dyadic_options(kk));
+        if (!m) FAIL(m.error().message);
+        check_certified(*m, kk * u / 64, 2.0 * kk * kk * kk * u * u * u);
+        const std::uint64_t got = digest(*m);
+        UNSCOPED_INFO(std::format("nodes {}, digest 0x{:016x}", m->simplices.points.size(), got));
+        CHECK(got == want);
+    }
+}
+
+TEST_CASE("mesh interface pieces: parallel pieces that do not fold are still refused (IP4; IC4)", "[mesh][interface_pieces]") {
+    // A gate block (2) 0.03 µm (1.5 s) above a silicon slab (1): its bottom and the slab's top are parallel, overlap,
+    // and do not touch.
+    LayeredGeometry3D thin = domain();
+    thin.solids.push_back(box3(0.1, 0.9, 0.1, 1.9, 0.3, 0.5, 1));
+    thin.solids.push_back(box3(0.3, 0.7, 0.5, 1.5, 0.53, 0.7, 2));
+    CHECK(outcome(thin, 0.02) == within_4s);
+}
+

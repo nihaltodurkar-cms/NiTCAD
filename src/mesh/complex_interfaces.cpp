@@ -371,11 +371,53 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
         const auto& pl = F[f].plane;
         return std::ranges::all_of(g.facets[h].vertices, [&](std::size_t i) { return predicates::orient3d(P[pl[0]], P[pl[1]], P[pl[2]], P[i]) == 0; });
     };
+    // Folds (Unit 64, IP4): two interface facets on one edge, not exactly coplanar, with normals parallel to 1e-12
+    // and lying on opposite sides of the edge (a 180-degree bend by an ulp: a slanted wall cut by a plane, 26l SQ4).
+    const auto facet_normal = [&](std::size_t f) {
+        const auto& pl = F[f].plane;
+        return unit(cross(sub(P[pl[1]], P[pl[0]]), sub(P[pl[2]], P[pl[0]])));
+    };
+    const auto parallel = [](const Point& n1, const Point& n2) { return norm3(cross(n1, n2)) <= 1e-12; };
+    const auto folded = [&](std::size_t f, std::size_t h, std::size_t a, std::size_t b) {
+        if (F[f].kind != FacetKind::interface || F[h].kind != FacetKind::interface) return false;
+        if (coplanar(f, h) || !parallel(facet_normal(f), facet_normal(h))) return false;
+        const Point d = unit(sub(P[b], P[a]));
+        const auto off_edge = [&](std::size_t q) {  // the facet's farthest vertex from the edge's line, across it
+            Point best{0.0, 0.0, 0.0};
+            for (const std::size_t v : g.facets[q].vertices) {
+                const Point r = sub(P[v], P[a]);
+                const Point u = sub(r, scale(dot3(r, d), d));
+                if (norm3(u) > norm3(best)) best = u;
+            }
+            return best;
+        };
+        return dot3(off_edge(f), off_edge(h)) < 0.0;
+    };
+    std::set<EdgeKey> fold_edges;
+    std::set<std::size_t> fold_vertex;
+    for (const auto& [e, fs] : edge_facets) {
+        for (std::size_t i = 0; i < fs.size(); ++i) {
+            for (std::size_t j = i + 1; j < fs.size(); ++j) {
+                if (!folded(fs[i], fs[j], e.first, e.second)) continue;
+                fold_edges.insert(e);
+                fold_vertex.insert(e.first);
+                fold_vertex.insert(e.second);
+            }
+        }
+    }
+    // A loop vertex is a corner unless its edges are collinear, or (at a fold vertex only) straight to 1e-12.
+    const auto straight = [&](std::size_t a, std::size_t b, std::size_t c) {
+        if (collinear(P[a], P[b], P[c])) return true;
+        if (!fold_vertex.contains(b)) return false;
+        const Point u = sub(P[b], P[a]);
+        const Point w = sub(P[c], P[b]);
+        return dot3(u, w) > 0.0 && norm3(cross(u, w)) <= 1e-12 * norm3(u) * norm3(w);
+    };
     const auto h_of = [&](std::int32_t r) {
         return static_cast<std::size_t>(r) < in.region_size.size() ? in.region_size[static_cast<std::size_t>(r)] : in.region_size.back();
     };
 
-    // Pieces: interface facets of one pair joined across shared edges when coplanar.
+    // Pieces: interface facets of one pair joined across shared edges when coplanar or folded.
     std::vector<std::size_t> parent(F.size());
     std::iota(parent.begin(), parent.end(), std::size_t{0});
     const auto find = [&](std::size_t x) {
@@ -388,7 +430,7 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
                 const std::size_t f = fs[i];
                 const std::size_t h = fs[j];
                 if (F[f].kind != FacetKind::interface || F[h].kind != FacetKind::interface) continue;
-                if (regions_of(f) != regions_of(h) || !coplanar(f, h)) continue;
+                if (regions_of(f) != regions_of(h) || !(coplanar(f, h) || folded(f, h, e.first, e.second))) continue;
                 parent[find(f)] = find(h);
             }
         }
@@ -451,7 +493,7 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
             const std::size_t m = lp.size();
             std::vector<Point> c;
             for (std::size_t i = 0; i < m; ++i) {
-                if (!collinear(P[lp[(i + m - 1) % m]], P[lp[i]], P[lp[(i + 1) % m]])) c.push_back(P[lp[i]]);
+                if (!straight(lp[(i + m - 1) % m], lp[i], lp[(i + 1) % m])) c.push_back(P[lp[i]]);
             }
             return c;
         };
@@ -587,7 +629,7 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
         const std::size_t m = pc.loop.size();
         const auto& tf = loop_trace_face[k];
         const auto is_corner = [&](std::size_t i) {
-            return !collinear(P[pc.loop[(i + m - 1) % m]], P[pc.loop[i]], P[pc.loop[(i + 1) % m]]);
+            return !straight(pc.loop[(i + m - 1) % m], pc.loop[i], pc.loop[(i + 1) % m]);
         };
         // A break before loop edge i: a corner at its start, or a change of trace face.
         const auto breaks = [&](std::size_t i) { return is_corner(i) || tf[i] != tf[(i + m - 1) % m]; };
@@ -725,12 +767,12 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
             const auto& loop = L == 0 ? out.pieces[k].loop : out.pieces[k].hole_loops[L - 1];
             const std::size_t m = loop.size();
             std::size_t i0 = 0;
-            while (collinear(P[loop[(i0 + m - 1) % m]], P[loop[i0]], P[loop[(i0 + 1) % m]]) == true) ++i0;
+            while (straight(loop[(i0 + m - 1) % m], loop[i0], loop[(i0 + 1) % m])) ++i0;
             Side cur{k, P[loop[i0]], {}, {loop[i0]}};
             for (std::size_t n = 1; n <= m; ++n) {
                 const std::size_t i = (i0 + n) % m;
                 cur.vertices.push_back(loop[i]);
-                if (n == m || !collinear(P[loop[(i + m - 1) % m]], P[loop[i]], P[loop[(i + 1) % m]])) {
+                if (n == m || !straight(loop[(i + m - 1) % m], loop[i], loop[(i + 1) % m])) {
                     cur.b = P[loop[i]];
                     if (!(dist(cur.a, cur.b) >= 6.0 * s)) return std::unexpected(invalid("an interface feature line is shorter than 6 s", out.pieces[k].facets[0]));
                     sides.push_back(cur);
@@ -764,7 +806,18 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
     for (std::size_t k = 0; k < out.pieces.size(); ++k) {
         for (const std::size_t f : out.pieces[k].facets) piece_vertices[k].insert(g.facets[f].vertices.begin(), g.facets[f].vertices.end());
     }
-    const auto parallel = [](const Point& n1, const Point& n2) { return norm3(cross(n1, n2)) <= 1e-12; };
+    // Pieces of different pairs folded along an edge (IP4): a junction at 180 degrees, as exactly coplanar ones.
+    std::set<std::pair<int, int>> folded_pieces;
+    for (const EdgeKey& e : fold_edges) {
+        const auto& fs = edge_facets.at(e);
+        for (std::size_t i = 0; i < fs.size(); ++i) {
+            for (std::size_t j = i + 1; j < fs.size(); ++j) {
+                const int pa = piece_of[fs[i]];
+                const int pb = piece_of[fs[j]];
+                if (pa >= 0 && pb >= 0 && pa != pb && folded(fs[i], fs[j], e.first, e.second)) folded_pieces.insert({std::min(pa, pb), std::max(pa, pb)});
+            }
+        }
+    }
     // Each piece's corner rings: its polygon, then its holes.
     std::vector<std::vector<const std::vector<Point>*>> rings(out.pieces.size());
     for (std::size_t k = 0; k < out.pieces.size(); ++k) {
@@ -783,6 +836,7 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
                 return predicates::orient3d(A.polygon[0], A.polygon[1], A.polygon[2], x) == 0;
             });
             if (coplanar_pieces) continue;  // neighbours in one plane (a junction at 180 degrees)
+            if (folded_pieces.contains({static_cast<int>(i), static_cast<int>(j)})) continue;  // folded neighbours (IP4)
             if (touching && !par) continue;
             double d = std::numeric_limits<double>::infinity();
             for (const auto* qa : rings[i]) {

@@ -56,6 +56,10 @@ struct Piece {
     std::vector<Piece> parts;  // the ear-clipped triangles, each a convex piece
     int axis = -1;             // the coordinate constant on every vertex, or -1 (oblique)
     std::vector<Point> flat;   // axis >= 0: the vertices with that coordinate dropped (exact)
+    // Oblique (Unit 64, slice 3): the coordinate dropped by the ear clipping's projection (the normal's largest
+    // component), the vertices so projected (exact) in `oblique_flat`, and their grown offsets in `grown`.
+    int drop = -1;
+    std::vector<Point> oblique_flat;
     // axis >= 0: `flat` grown outward by mitred offsets of increasing size (rounded coordinates),
     // each with its reach, the largest distance from one of its vertices to the polygon's vertex
     // it came from; an offset whose polygon is not simple is left out.
@@ -79,10 +83,34 @@ struct Piece {
     // it meets a coplanar piece at an oblique corner (Unit 53 slice 5: the tapered ring). Both lie
     // in corner zones, judged against s. Otherwise, and as a second bound, the decomposition's
     // min over parts of max over V (an upper bound, as for several pieces of one pair: too large
-    // when V straddles a diagonal of the decomposition). Oblique non-convex polygons always take
-    // the decomposition: their orthogonal projection is not exact.
+    // when V straddles a diagonal of the decomposition). Oblique non-convex polygons cannot take
+    // the exact test: their orthogonal projection is not exact. Unit 64 slice 3 (owner, 2026-11-21) adds a
+    // second bound for them, the smaller kept: each point x maps to its orthogonal foot on the plane through
+    // v[0] (h = (x - v[0]) . n), taken in the exact projection dropping `drop`: q(x) = project(x) - h project(n).
+    // q is affine, so the hull of q(V) is q of V's hull; if it lies in the polygon grown by an offset, the foot of
+    // every point of the hull is within that offset's reach of the polygon in the projection, and so within
+    // reach / |n_drop| in the plane (the projection shortens in-plane lengths by at most |n_drop|): the distance
+    // is at most max over V of |h| plus that. The exact polygon is not tried (q is rounded): the 1e-6 s offset
+    // takes the rounding.
     [[nodiscard]] double nonconvex_deviation(const std::vector<Point>& V) const {
         double grown_bound = std::numeric_limits<double>::infinity();
+        if (axis < 0 && drop >= 0 && !grown.empty()) {
+            const Point pn = detail::project(Point{normal[0], normal[1], normal[2]}, drop);
+            const double shrink = std::abs(normal[static_cast<std::size_t>(drop)]);
+            double worst = 0.0;
+            std::vector<Point> q;
+            for (const Point& x : V) {
+                const double h = dot(minus(x, v[0]), normal);
+                worst = std::max(worst, std::abs(h));
+                const Point px = detail::project(x, drop);
+                q.push_back({px[0] - h * pn[0], px[1] - h * pn[1], 0.0});
+            }
+            for (const Grown& g : grown) {
+                if (!hull_inside_2d(q, g.poly)) continue;
+                grown_bound = worst + g.reach / shrink;
+                break;
+            }
+        }
         if (axis >= 0) {
             const auto ax = static_cast<std::size_t>(axis);
             double worst = 0.0;
@@ -110,6 +138,10 @@ struct Piece {
     [[nodiscard]] bool hull_inside(const std::vector<Point>& V, const std::vector<Point>& poly) const {
         std::vector<Point> q;
         for (const Point& x : V) q.push_back(detail::project(x, axis));
+        return hull_inside_2d(std::move(q), poly);
+    }
+    // The same for points already projected.
+    [[nodiscard]] static bool hull_inside_2d(std::vector<Point> q, const std::vector<Point>& poly) {
         std::ranges::sort(q, [](const Point& x, const Point& y) { return x[0] < y[0] || (x[0] == y[0] && x[1] < y[1]); });
         q.erase(std::unique(q.begin(), q.end()), q.end());
         if (q.size() < 3) return false;
@@ -307,14 +339,27 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
                             for (const Point& a : p.v) p.flat.push_back(detail::project(a, c));
                         }
                     }
-                    for (const double fraction : {1e-6, 1e-3, 1e-2, 0.1, 0.25}) {
-                        if (p.axis < 0) break;
-                        // Grown outward by a fraction of s: each edge's line moved out, consecutive
+                    if (ok && p.axis < 0) {  // oblique: grown in the ear clipping's exact projection (slice 3)
+                        p.drop = drop;
+                        p.oblique_flat = q;
+                    }
+                    const std::vector<Point>& base = p.axis >= 0 ? p.flat : p.oblique_flat;
+                    // Offsets, smallest first. Oblique ones start at 1e-14 X (X the largest coordinate
+                    // magnitude): the rounding of the feet q(x), a few ulps of X, well inside P4a's 1e-13 X.
+                    std::vector<std::pair<double, bool>> grows;  // (offset, the 1e-6 s one)
+                    if (p.axis < 0) {
+                        double X = 0.0;
+                        for (const Point& a : p.v) X = std::max({X, std::abs(a[0]), std::abs(a[1]), std::abs(a[2])});
+                        grows.emplace_back(1e-14 * X, false);
+                    }
+                    for (const double fraction : {1e-6, 1e-3, 1e-2, 0.1, 0.25}) grows.emplace_back(fraction * res, fraction == 1e-6);
+                    for (const auto& [grow, ulp_offset] : grows) {
+                        if (base.empty()) break;
+                        // Grown outward by `grow`: each edge's line moved out, consecutive
                         // lines met (a collinear vertex moved along its edge's normal).
-                        const double grow = fraction * res;
-                        Piece::Grown grown{.ulp = fraction == 1e-6};
-                        const int turn = detail::polygon_turn(p.flat);
-                        const std::size_t m = p.flat.size();
+                        Piece::Grown grown{.ulp = ulp_offset};
+                        const int turn = detail::polygon_turn(base);
+                        const std::size_t m = base.size();
                         const auto outward = [&](const Point& a, const Point& b) {
                             const double dx = b[0] - a[0];
                             const double dy = b[1] - a[1];
@@ -322,9 +367,9 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
                             return turn > 0 ? Point{dy / len, -dx / len, 0.0} : Point{-dy / len, dx / len, 0.0};
                         };
                         for (std::size_t i = 0; i < m; ++i) {
-                            const Point& pa = p.flat[(i + m - 1) % m];
-                            const Point& pb = p.flat[i];
-                            const Point& pc = p.flat[(i + 1) % m];
+                            const Point& pa = base[(i + m - 1) % m];
+                            const Point& pb = base[i];
+                            const Point& pc = base[(i + 1) % m];
                             const Point n1 = outward(pa, pb);
                             const Point n2 = outward(pb, pc);
                             const Point d1{pb[0] - pa[0], pb[1] - pa[1], 0.0};
@@ -344,8 +389,8 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
                         // larger than an edge's mitre setbacks would reverse it: then not taken).
                         bool kept = detail::simple_2d(grown.poly);
                         for (std::size_t i = 0; i < m && kept; ++i) {
-                            const Point& a0 = p.flat[i];
-                            const Point& a1 = p.flat[(i + 1) % m];
+                            const Point& a0 = base[i];
+                            const Point& a1 = base[(i + 1) % m];
                             const Point& g0 = grown.poly[i];
                             const Point& g1 = grown.poly[(i + 1) % m];
                             kept = (a1[0] - a0[0]) * (g1[0] - g0[0]) + (a1[1] - a0[1]) * (g1[1] - g0[1]) > 0.0;

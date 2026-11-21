@@ -2007,6 +2007,77 @@ layouts (`layered_partition3d`) in a 1 x 2 x 1 µm oxide domain, s = 0.02 µm un
   of the piercing solid's pieces, whose loops carry it), and hole rings left out of the clearances (`distance()`
   already measures to the holes).
 
+**Slice 3 results (2026-11-21; IP4, both kinds as slice 0 found):** folded slanted walls, in
+`src/mesh/complex_interfaces.cpp`, and (owner's ruling, below) the P4 bound for oblique non-convex pieces in
+`src/mesh/interfaces.cpp`.
+- **Code, the generator:**
+  - **Fold:** two interface facets on one edge, not exactly coplanar, with normals parallel to 1e-12 (the clearance
+    rule's own tolerance), and lying on opposite sides of the edge (a 180° bend, not a 0° one).
+  - **Same pair:** folded facets join one piece, as coplanar ones do.
+  - **Different pairs:** pieces sharing a fold edge are skipped by the 4 s clearance check, as exactly coplanar
+    pieces are (a 180° junction). Touching parallel pieces without a fold edge are still checked.
+  - **Corners:** a loop vertex on a fold edge whose two edges are straight to 1e-12 (sine) is not a corner (corners,
+    traces, sides). Elsewhere collinearity stays exact.
+  - Every layout with a fold was refused before ("within 4 s" at distance 0), so the new paths run only there.
+- **Finding: a second refusal behind the fold.** With folds taken, SD6's FinFET was refused by P4b ("a corner
+  zone deviates beyond the resolution"). The exactly coplanar version on a dyadic grid, which has no fold, was
+  refused the same way. So it is not the fold.
+  - Probes: the refusal needs a fin | oxide wall piece wrapped around the gate (L or U shaped, so non-convex) on the
+    slanted wall. A gate along the whole fin, no gate, an uncrossed gate, or an upright fin under the same gate all
+    certify.
+  - The bound was 1.08 to 1.35 s, against s. The mirrored pairs put the faces in the plane to rounding, so the
+    excess is the certificate's own: for oblique non-convex pieces it used only the decomposition's min over
+    triangles of max over V, too large when V straddles a diagonal (its comment says so).
+- **Owner's ruling (2026-11-21), asked because the standing conditions say the P4 certificate stays unchanged:**
+  tighten the bound, acceptance limits unchanged.
+  - **New bound:** each face vertex x maps to its orthogonal foot on the plane through v[0], taken in the exact
+    projection the ear clipping uses (dropping the normal's largest component n_drop):
+    q(x) = project(x) - h project(n), with h = (x - v[0]) . n.
+  - **Soundness:** q is affine, so the hull of q(V) is q of V's hull. If it lies in the projected polygon grown by
+    an offset, every point of the face lies within max |h| plus the offset's reach / |n_drop| of the polygon (the
+    projection shortens in-plane lengths by at most |n_drop|).
+  - **Offsets:** 1e-14 X first (X the largest coordinate magnitude: the feet are rounded by a few ulps of X, well
+    inside P4a's 1e-13 X), then 1e-6 s up to s / 4 as for axis-aligned pieces. The exact polygon is not tried
+    (q is rounded).
+  - **Kept bound:** the smaller of this and the decomposition's. A first try at 1e-6 s alone passed P4b and failed
+    P4a: the offset, about 1e-12 cm, was above P4a's tolerance.
+  - **Effect:** a smaller upper bound, never a larger one. Reported deviations of existing oblique non-convex
+    pieces can only fall, and no test pins one (upper bounds only). Mesh bits do not move.
+- **IC1 met:** the five pinned digests (slice 1's) unchanged. 26l's SQ4 case
+  (`layered3d_slanted_test.cpp`) moved as intended: it pinned SD6's "within 4 s" refusal and now requires the mesh
+  and certificate. The whole `nitcad_mesh_test` passes in Release (180 cases, without the 200-layout IC5 case,
+  20 min). Full suites and Debug not run (owner's word needed).
+- **IC2 met:** SD6's FinFET meshes and certifies (7,136 nodes, pinned). The dyadic FinFET certifies both exactly
+  coplanar (k = 1, 9,007 nodes) and folded (k = 1 - 1e-9: 8 same-pair and 6 different-pair folds, 8,927 nodes),
+  each pinned. The exact one had been refused by P4b before the bound changed.
+- **IC3 missed (recorded, thresholds unchanged; the hidden case is `[!shouldfail]`):**
+  - **Set-up:** p-type silicon (1e17), region 2 as HfO2, ohmic body on z = 0, metal gate (4.4 eV, 0.5 V) on z = 1;
+    equilibrium Poisson; 200 seeded points scaled by k.
+  - **Measured:** folded against exact cut, potential max 26 mV, rms 6.0 mV (of 0.71 V).
+  - **The floor:** the meshes cannot be the same. The generator's node placement is not continuous in the
+    geometry: the uncrossed FinFET, with no fold at any k, moves from 8,371 to 8,200 nodes under the same 1 - 1e-9
+    scaling, and by 3 nodes under 1e-12. Its solutions differ by 23 mV max and 4.9 mV rms, close to the folded case.
+  - **Reading:** the fold adds little over any ulp-level change of the layout, and 1e-6 against an exactly coplanar
+    cut is not reachable by a generator that places nodes discontinuously. IP4's "no corner nodes" holds at the
+    layout level (mutants 5, 13 and 14 below), not as equal meshes.
+- **IC4 met:** a gate block 1.5 s above a slab (parallel, overlapping, not touching) is still refused "within 4 s";
+  the slice 1 refusals are unchanged.
+- **IC7 met:** 16 mutants, 12 caught.
+  - Caught: the fold tolerance at 0; the opposite-side test inverted; the fold skip removed; the fold skip for same
+    pairs only; the same-pair union off; fold vertices kept as corners (all of them, one end of each fold edge, or
+    by a 1e-17 straightness tolerance: the last three abort on the contract `std::isfinite(x)` in
+    `exact_integer.cpp`, recorded below); the oblique bound off; its first offset at 1e-6 s; the largest offset
+    tried first; the lift by the normal's smallest component.
+  - Equivalent:
+    - The fold skip widened to every parallel pair: overlapping parallel pieces under 4 s always leave a non-parallel,
+      non-touching pair or a domain-edge crossing under 4 s too, refused by the kept rules.
+    - Tolerant straightness at every vertex: no fixture has a near-straight vertex off a fold.
+    - The reach not lifted by 1 / |n_drop|, and the feet without the h correction: at 1e-14 X and h at rounding
+      neither changes an outcome, though both are needed for the bound to be rigorous.
+- **Recorded, outside the unit:** a corner at an ulp angle (the mutants above) aborts the generator on a contract
+  instead of being refused with a message. Slice 3 never forms one; any rule that does would need a guard.
+- **Runs:** targeted Release only, `-j 6`, test shards at most 6 at once.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

@@ -22,6 +22,7 @@
 #include <random>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/device/device.hpp"
@@ -279,6 +280,96 @@ TEST_CASE("interface pieces accuracy: a holed gate face's wire against its swept
     WARN(line("mid: swept vs swept at h/2", compare(ref, fine, 200, 0.3, 1.7)));
     WARN(line("mid: holed vs holed at h/2", compare(holed, holed2, 200, 0.3, 1.7)));
     WARN(line("mid: holed at h/2 vs swept at h/2", compare(holed2, fine, 200, 0.3, 1.7)));
+    CHECK(d.psi <= 1e-6);
+    CHECK(d.n <= 1e-6);
+    CHECK(d.p <= 1e-6);
+}
+
+namespace {
+
+// Unit 64 slice 3 (IP4): SD6's FinFET on a dyadic grid (units of 2^-14 cm times k; tests/mesh/interface_pieces_test.cpp
+// dyadic_fin): at k = 1 the gate's bottom cuts the slanted walls exactly coplanar, at k = 1 - 1e-9 it folds them.
+// Body contact on z = 0, gate contact on z = 1. IC3 is missed (DECISIONS.md Unit 64, slice 3): the generator places nodes
+// differently under any ulp-level change of the layout, folded or not (the uncrossed FinFET under the same scaling
+// moves as much), so the two meshes differ and their solutions agree only to discretization. [!shouldfail], 1e-6 kept.
+mesh::GeneratedMesh dyadic_finfet(double k, bool crossed) {
+    const double u = std::ldexp(1.0, -14) * k;
+    const auto B = [&](double x0, double x1, double y0, double y1, double z0, double z1, std::int32_t r) {
+        mesh::LayeredSolid s;
+        s.kind = mesh::LayeredSolid::Kind::box;
+        s.lo = {x0 * u, y0 * u, z0 * u};
+        s.hi = {x1 * u, y1 * u, z1 * u};
+        s.region = r;
+        return s;
+    };
+    mesh::LayeredGeometry3D g{.lo = {0, 0, 0}, .hi = {1 * u, 2 * u, 1 * u}, .background = 0, .solids = {}, .patches = {}};
+    g.solids.push_back(B(0, 1, 0, 2, 0, 0.3125, 1));
+    g.solids.push_back(B(0, 1, 0.5, 1.5, crossed ? 0.5 : 0.3125, 1, 2));
+    mesh::LayeredSolid fin;
+    fin.kind = mesh::LayeredSolid::Kind::prism;
+    fin.axis = 1;
+    fin.from = 0;
+    fin.to = 2 * u;
+    for (const auto& [z, x] : std::vector<std::pair<double, double>>{{0.3125, 0.3125}, {0.3125, 0.6875}, {0.8125, 0.5625}, {0.8125, 0.4375}}) {
+        fin.polygon.push_back({z * u, x * u, 0.0});
+    }
+    fin.region = 1;
+    g.solids.push_back(fin);
+    g.patches = {{"body", {0, 0, 0}, {1 * u, 2 * u, 0}}, {"gate", {0, 0, 1 * u}, {1 * u, 2 * u, 1 * u}}};
+    const auto c = mesh::layered_partition3d(g);
+    REQUIRE(c.has_value());
+    mesh::MeshOptions3D o;
+    o.max_size = 0.15 * u;
+    o.interface_resolution = u / 64;
+    auto m = mesh::generate_mesh(*c, o);
+    INFO((m.has_value() ? std::string() : m.error().message));
+    REQUIRE(m.has_value());
+    return std::move(*m);
+}
+
+// As compare(), on the dyadic FinFET: a point x of the reference is k x on `a`.
+Differences compare_scaled(const Solved& a, double k, const Solved& ref, int count) {
+    const double u = std::ldexp(1.0, -14);
+    std::mt19937 rng(64);
+    std::uniform_real_distribution<double> U(0.0, 1.0);
+    Differences d;
+    for (int i = 0; i < count; ++i) {
+        // Half the points in the fin's box, half anywhere.
+        const mesh::Point x = i % 2 == 0 ? mesh::Point{(0.3125 + 0.375 * U(rng)) * u, 2 * U(rng) * u, (0.3125 + 0.5 * U(rng)) * u}
+                                         : mesh::Point{U(rng) * u, 2 * U(rng) * u, U(rng) * u};
+        const Hit ha = locate(a.mesh.simplices, {k * x[0], k * x[1], k * x[2]}), hr = locate(ref.mesh.simplices, x);
+        const double pa = at(ha, a.psi), pr = at(hr, ref.psi);
+        d.psi = std::max(d.psi, std::abs(pa - pr) / (std::abs(pr) + 1e-3));
+        if (std::abs(pa - pr) > d.psi_abs) d.worst_at = {x[0] / u * um, x[1] / u * um, x[2] / u * um};
+        d.psi_abs = std::max(d.psi_abs, std::abs(pa - pr));
+        d.psi_rms += (pa - pr) * (pa - pr) / count;
+        d.psi_range = std::max(d.psi_range, std::abs(pr));
+        d.worst_min_weight = std::min({d.worst_min_weight, *std::ranges::min_element(ha.w), *std::ranges::min_element(hr.w)});
+        if (all_silicon(ha, a.mesh) && all_silicon(hr, ref.mesh)) {
+            ++d.density_points;
+            d.n = std::max(d.n, std::abs(at(ha, a.n) - at(hr, ref.n)) / std::abs(at(hr, ref.n)));
+            d.p = std::max(d.p, std::abs(at(ha, a.p) - at(hr, ref.p)) / std::abs(at(hr, ref.p)));
+        }
+    }
+    d.psi_rms = std::sqrt(d.psi_rms);
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("interface pieces accuracy: the folded FinFET against the same FinFET cut exactly coplanar (Unit 64 IC3, recorded)",
+          "[.interface_pieces_accuracy][solve][!shouldfail]") {
+    const double k = 1.0 - 1e-9;
+    const Solved exact = solve_device(dyadic_finfet(1.0, true));
+    const Solved bent = solve_device(dyadic_finfet(k, true));
+    // The floor: the uncrossed FinFET (no fold at either k) under the same scaling.
+    const Solved plain = solve_device(dyadic_finfet(1.0, false));
+    const Solved plain_k = solve_device(dyadic_finfet(k, false));
+    const Differences d = compare_scaled(bent, k, exact, 200);
+    WARN(std::format("IC3 fold: nodes exact {}, folded {}; uncrossed {}, scaled {}; psi up to {:.3e} V (coordinates in units of 0.61 um)", exact.mesh.mesh.node_count(),
+                     bent.mesh.mesh.node_count(), plain.mesh.mesh.node_count(), plain_k.mesh.mesh.node_count(), d.psi_range));
+    WARN(line("folded vs exact", d));
+    WARN(line("uncrossed scaled vs uncrossed (the floor)", compare_scaled(plain_k, k, plain, 200)));
     CHECK(d.psi <= 1e-6);
     CHECK(d.n <= 1e-6);
     CHECK(d.p <= 1e-6);

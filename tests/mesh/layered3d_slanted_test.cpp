@@ -358,16 +358,17 @@ TEST_CASE("mesh layered3d slanted: a fin whose sidewalls no plane crosses meshes
     WARN(std::format("SD6: the uncrossed trapezoidal fin meshed: {} nodes", m->simplices.points.size()));
 }
 
-TEST_CASE("mesh layered3d slanted: a sidewall crossed by a plane folds at a rounded point, and the generator refuses it (SQ4, recorded)",
+TEST_CASE("mesh layered3d slanted: a sidewall crossed by a plane folds at a rounded point, and meshes (SQ4; Unit 64 IP4)",
           "[mesh][layered3d]") {
     // The gate's bottom (z = 0.5) crosses the sidewalls at a computed point: the sidewall's pieces above and below it
-    // meet at a fold of about an ulp, parallel to rounding but not exactly coplanar, so the generator's separation rule
-    // (SQ6: kept) measures them as two interfaces at distance zero.
+    // meet at a fold of about an ulp, parallel to rounding but not exactly coplanar. Refused as two interfaces at
+    // distance zero until Unit 64 slice 3, which takes such folds as one piece or a 180-degree junction.
     const auto c = layered_partition3d(in_um(finfet()));
     if (!c) FAIL(c.error().message);
     const auto m = generate_mesh(*c, fin_options());
-    REQUIRE_FALSE(m.has_value());
-    CHECK(m.error().message == "two interfaces within 4 s (a layer thinner than 4 s, or unrelated interfaces)");
+    if (!m) FAIL(m.error().message);
+    REQUIRE(m->certificate.has_value());
+    CHECK(m->simplices.points.size() > 100);
 }
 
 TEST_CASE("mesh layered3d slanted: one coordinate written two ways is one, on u, v and the patch boxes (SD6)", "[mesh][layered3d]") {
