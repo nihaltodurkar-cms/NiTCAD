@@ -552,6 +552,30 @@ std::expected<std::string, std::string> convert_to_layered(Model& m) {
                        "; each region's extrude lines become prisms; the extrusion's axis, stations and cells are dropped";
     if (m.swept) note += "; the swept mesh (sweep = on) and its keys are dropped: the polyhedral generator meshes it";
     m.swept = false;
+    // A contact on an end plane whose box cuts across a cell's end (slanted cells mostly): the extrusion named only the
+    // cells inside the box, a layered deck names the part of every face inside it (slice 4).
+    for (const Contact& c : m.contacts) {
+        for (const Region& r : m.regions) {
+            const bool cut = std::ranges::any_of(r.solids, [&](const Solid& s) {
+                if (s.kind != SolidKind::prism || c.box.lo[s.axis] != c.box.hi[s.axis]) return false;
+                const Coord plane = c.box.lo[s.axis];
+                if (plane != s.from && plane != s.to) return false;
+                const Pt lo = uv_of(s.axis, c.box.lo), hi = uv_of(s.axis, c.box.hi);
+                Pt plo = s.polygon[0], phi = s.polygon[0];
+                for (const Pt& p : s.polygon) {
+                    plo = {std::min(plo.x, p.x), std::min(plo.y, p.y)};
+                    phi = {std::max(phi.x, p.x), std::max(phi.y, p.y)};
+                }
+                const bool meets = plo.x < hi.x && phi.x > lo.x && plo.y < hi.y && phi.y > lo.y;
+                const bool within = plo.x >= lo.x && phi.x <= hi.x && plo.y >= lo.y && phi.y <= hi.y;
+                return meets && !within;
+            });
+            if (cut) {
+                note += "; contact '" + c.name + "' cuts across the end of region '" + r.name +
+                        "': a layered deck names the part of a face inside a contact's box, the extrusion only the cells inside it";
+            }
+        }
+    }
     return note;
 }
 
@@ -627,14 +651,7 @@ bool replace(Solid& s, Solid t) {
 
 }  // namespace
 
-bool prism_ok(const std::vector<Pt>& p) noexcept {
-    if (!geo::polygon_ok(p)) return false;
-    for (std::size_t i = 0; i < p.size(); ++i) {
-        const Pt a = p[i], b = p[(i + 1) % p.size()];
-        if (a.x != b.x && a.y != b.y) return false;  // slanted: slice 4 (SD6)
-    }
-    return true;
-}
+bool prism_ok(const std::vector<Pt>& p) noexcept { return geo::polygon_ok(p); }  // slanted edges too (slice 4, SD6)
 
 int add_box(Model& m, Box3 b, std::string material) {
     if (!m.editable() || !box_ok(b)) return -1;
@@ -660,12 +677,6 @@ bool move_solid(Model& m, SolidRef s, P3 delta) {
         t.to += delta[t.axis];
         const Pt d = uv_of(t.axis, delta);
         for (Pt& p : t.polygon) p = {p.x + d.x, p.y + d.y};
-    }
-    // A solid read with slanted edges (an extrusion's) keeps them when moved.
-    if (t.kind == SolidKind::prism && !prism_ok(t.polygon)) {
-        if (!geo::polygon_ok(t.polygon) || !within(t.from) || !within(t.to)) return false;
-        at(m, s) = std::move(t);
-        return true;
     }
     return replace(at(m, s), std::move(t));
 }
@@ -737,8 +748,10 @@ bool insert_vertex(Model& m, SolidRef s, int after, Pt p) {
     auto& v = t.polygon;
     if (after < 0 || after >= static_cast<int>(v.size())) return false;
     const Pt a = v[static_cast<std::size_t>(after)], b = v[(static_cast<std::size_t>(after) + 1) % v.size()];
-    const bool on = (a.x == b.x && p.x == a.x && p.y > std::min(a.y, b.y) && p.y < std::max(a.y, b.y)) ||
-                    (a.y == b.y && p.y == a.y && p.x > std::min(a.x, b.x) && p.x < std::max(a.x, b.x));
+    // Exactly on the open edge, slanted edges too (64-bit cross product of quanta within the coordinate limit).
+    const std::int64_t cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    const bool on = cross == 0 && p != a && p != b && p.x >= std::min(a.x, b.x) && p.x <= std::max(a.x, b.x) &&
+                    p.y >= std::min(a.y, b.y) && p.y <= std::max(a.y, b.y);
     if (!on) return false;
     v.insert(v.begin() + after + 1, p);
     return replace(at(m, s), std::move(t));

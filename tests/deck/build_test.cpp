@@ -1251,8 +1251,9 @@ box = 0 1um 0 0.6um 0.4um 0.6um
           "t.deck:4: 'cuboid' is for generate3d without layers: a layered one takes domain");
     t = boxed;
     fails(t.replace(t.find("domain = 0 1um 0 0.6um 0 0.6um\n"), 31, ""), "a layered generate3d mesh needs a domain");
-    t = prism;
-    fails(t.replace(t.find("1um 0.6um, 0 0.6um"), 18, "0.5um 0.6um, 0 0.6um"), "t.deck:15: [mesh] layered: a prism's polygon has a slanted edge");
+    t = boxed;  // a slanted oxide builds since slice 4 (SD6): a trapezoid along y, its polygon in (z, x)
+    t.replace(t.find("box = 0 1um 0 0.6um 0.4um 0.6um"), 31, "prism = y 0 0.6um, 0.4um 0.1um, 0.4um 0.9um, 0.6um 0.8um, 0.6um 0.2um");
+    CHECK(must(t).device.regions().size() == 2);
     t = prism;
     fails(t.replace(t.find("prism = z"), 9, "prism = w"), "t.deck:15: a prism is '<axis x|y|z> <from> <to>, <u v>, <u v>, ...'");
     t = boxed;

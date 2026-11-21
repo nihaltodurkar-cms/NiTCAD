@@ -129,8 +129,9 @@ struct SolidRef {
     friend bool operator==(const SolidRef&, const SolidRef&) = default;
 };
 
-// Coordinates within ±10 cm. A prism's polygon is simple, of non-zero area, its edges parallel to u or v (slanted
-// faces are slice 4, SD6); a box non-empty on each axis; a prism's from < to.
+// Coordinates within ±10 cm. A prism's polygon is simple, of non-zero area, three vertices or more, its edges in any
+// direction (slanted faces since slice 4, SD6: the deck build refuses slanted prisms along two axes); a box non-empty
+// on each axis; a prism's from < to.
 inline constexpr Coord coord_limit = 1'000'000'000;
 [[nodiscard]] bool prism_ok(const std::vector<Pt>& polygon) noexcept;
 
@@ -142,11 +143,12 @@ bool set_box(Model& m, SolidRef s, Box3 b);
 bool set_extent(Model& m, SolidRef s, Coord from, Coord to);  // a prism's
 // A face moved along its normal by `offset` (positive: along the axis): a box's faces 0..5 are x_min, x_max, y_min,
 // y_max, z_min, z_max; a prism's 0 and 1 its caps at `from` and `to`, 2 + k the side over the polygon's edge k (from
-// vertex k to k + 1), moved with its two vertices. Refused when the solid would be empty or invalid.
+// vertex k to k + 1), moved with its two vertices. Refused when the solid would be empty or invalid, and for a slanted
+// side (its normal off the quanta's lattice: its vertices are moved instead).
 bool move_face(Model& m, SolidRef s, int face, Coord offset);
 // A prism's vertex; `follow`: its neighbours follow along the u- and v-parallel edges they share with it.
 bool set_vertex(Model& m, SolidRef s, int k, Pt uv, bool follow = true);
-bool insert_vertex(Model& m, SolidRef s, int after, Pt uv);  // a point on the edge after vertex `after`
+bool insert_vertex(Model& m, SolidRef s, int after, Pt uv);  // a point exactly on the edge after vertex `after`
 bool remove_vertex(Model& m, SolidRef s, int k);              // the polygon left valid
 bool delete_solid(Model& m, SolidRef s);                     // a region left without solids goes too
 bool rename_region(Model& m, int region, std::string name);  // unique, a deck identifier

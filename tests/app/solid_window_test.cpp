@@ -294,6 +294,45 @@ TEST_CASE("app window solid: draw a box and its height, move it by the gizmo, re
     CHECK(b->device.contacts().size() == 3);
 }
 
+TEST_CASE("app window solid: a slanted prism clicked as it is, Shift keeping an edge along u or v; the deck builds (slice 4, SD6)",
+          "[app][window][solid]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("slanted", mos)));
+    pump();
+    w->execute(Command::tab_geometry);
+    REQUIRE(w->solid_shown());
+    SolidPage& page = w->solid_page();
+    REQUIRE(page.render() >= 0.0);
+    const Mouse mouse{page};
+    // A trapezoid in the silicon on the work plane y = 0, along y: (u, v) = (z, x). The third click is slanted from
+    // the second; the fourth, with Shift, lands level with the third.
+    page.set_work_plane({1, 0});
+    page.set_tool(SolidPage::Tool::prism);
+    mouse.click({0.2, 0.0, 0.1});
+    mouse.click({0.8, 0.0, 0.1});
+    mouse.click({0.7, 0.0, 0.3});
+    const auto p4 = mouse.px({0.3, 0.0, 0.35});
+    mouse.down(p4, MK_SHIFT);
+    mouse.up(p4);
+    mouse.key(VK_RETURN);
+    mouse.move(mouse.px({0.3, 0.6, 0.3}), 0);
+    mouse.click({0.3, 0.6, 0.3});
+    solid::Model keep;
+    const solid::Solid& p = deck_solid(w->deck().text(), "silicon_1", keep);
+    CHECK(p.kind == solid::SolidKind::prism);
+    CHECK(p.axis == 1);
+    CHECK(p.from == 0);
+    CHECK(p.to == 6 * um / 10);
+    CHECK(p.polygon == std::vector<solid::Pt>{{um / 10, 2 * um / 10}, {um / 10, 8 * um / 10}, {3 * um / 10, 7 * um / 10}, {3 * um / 10, 3 * um / 10}});
+    // The slanted side is not a face handle; the deck builds through the slanted kernel and the generator.
+    const auto d = deck::parse(w->deck().text(), "s.deck");
+    REQUIRE(d);
+    const auto b = deck::build(*d);
+    if (!b) FAIL(b.error().message);
+    CHECK(b->device.mesh().dimension() == 3);
+    CHECK(b->device.regions().size() == 3);
+}
+
 TEST_CASE("app window solid: the inspector's numbers, the material, the work plane, Delete (SE8)", "[app][window][solid]") {
     auto w = window();
     REQUIRE(w->open_deck(write("inspector", mos)));

@@ -881,8 +881,8 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
         if (!p) return;
         const int n = v_.plane.normal;
         if (!polygon_.empty()) {
-            const Pt last = uv_of(n, polygon_.back());
-            *p = from_uv(n, geo::constrain(last, uv_of(n, *p)), v_.plane.offset);
+            // Clicks as they are (slanted edges since slice 4); Shift keeps the edge along u or v from the last point.
+            if (shift) *p = from_uv(n, geo::constrain(uv_of(n, polygon_.back()), uv_of(n, *p)), v_.plane.offset);
             if (polygon_.size() >= 3 && *p == polygon_.front()) {
                 close_polygon();
                 return;
@@ -934,7 +934,7 @@ void SolidPage::close_polygon() {
     std::vector<Pt> uv;
     for (const P3& p : polygon_) uv.push_back(uv_of(v_.plane.normal, p));
     if (!prism_ok(uv)) {
-        host_.solid_status("A prism's polygon is simple, its edges along u or v (slanted faces come later).");
+        host_.solid_status("A prism's polygon is simple, of non-zero area, with three vertices or more.");
         polygon_.clear();
         preview_ = {};
         drag_ = Drag::none;
@@ -1061,7 +1061,7 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         if (const auto p = plane_point(x, y)) {
             const int n = v_.plane.normal;
             preview_.polyline = polygon_;
-            preview_.polyline.push_back(from_uv(n, geo::constrain(uv_of(n, polygon_.back()), uv_of(n, *p)), v_.plane.offset));
+            preview_.polyline.push_back(shift ? from_uv(n, geo::constrain(uv_of(n, polygon_.back()), uv_of(n, *p)), v_.plane.offset) : *p);
             invalidate();
         }
         return;

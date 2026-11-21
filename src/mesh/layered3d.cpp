@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "NiTCAD/mesh/complex.hpp"
+#include "arrangement2d.hpp"
 #include "polygon2d.hpp"
 
 namespace NiTCAD::mesh {
@@ -71,6 +72,213 @@ struct Facet {
     int patch;             // a boundary facet's patch box (-1: its face's name; -2: internal)
 };
 
+// --- slanted prisms (slice 4, SD6) ----------------------------------------------------------------------------------
+//
+// Every slanted face is parallel to one axis A (SQ4). Cut across A at its breakpoints the layout is a stack of slabs,
+// each a 2D layout in (u, v), the axes after A. One planar arrangement (arrangement2d.hpp) serves every slab: each
+// point is labelled by its signature (its region in every slab, and the patch box holding it on each end plane), so
+// the arrangement's polygons are the pieces across which nothing changes along A, and the sectioned extrusion of those
+// polygons through the breakpoints (`extrude`) is the complex. Crossings are computed once and shared by every slab.
+// The lateral facets are polygon edges swept through one slab: vertical quads, exactly planar even through a rounded
+// crossing (two such quads meet at a fold of about an ulp where a slanted face is split there). Coordinates within
+// the tolerance of one another on u or v are first made one (20nm and 0.02um), as the rectilinear grid does.
+std::expected<PolyhedralGeometry, base::Error> slanted_partition(const LayeredGeometry3D& g, int axis, const std::vector<double>& t, double tol) {
+    const auto A = static_cast<std::size_t>(axis), ua = (A + 1) % 3, va = (A + 2) % 3;
+    const std::size_t ns = t.size() - 1;
+    struct Entry {
+        std::vector<Point> polygon;  // (u, v, 0)
+        int solid = -1;              // a solid's cross-section, or (solid -1) a patch box on an end plane:
+        int patch = -1, end = 0;     // its index, and 0 for the low end plane, 1 for the high one
+        std::vector<char> slabs;     // a cross-section: the slabs it holds in
+    };
+    std::vector<Entry> entries;
+    const auto rect = [](double u0, double u1, double v0, double v1) {
+        return std::vector<Point>{{u0, v0, 0.0}, {u1, v0, 0.0}, {u1, v1, 0.0}, {u0, v1, 0.0}};
+    };
+    std::map<std::pair<int, std::vector<std::pair<double, double>>>, std::size_t> entry_of;
+    const auto add = [&](int solid, std::vector<Point> polygon, int k0, int k1) {
+        std::vector<std::pair<double, double>> key;
+        for (const Point& p : polygon) key.emplace_back(p[0], p[1]);
+        const auto [it, fresh] = entry_of.try_emplace({solid, std::move(key)}, entries.size());
+        if (fresh) entries.push_back({std::move(polygon), solid, -1, 0, std::vector<char>(ns, 0)});
+        for (int k = k0; k < k1; ++k) entries[it->second].slabs[static_cast<std::size_t>(k)] = 1;
+    };
+    for (std::size_t s = 0; s < g.solids.size(); ++s) {
+        const LayeredSolid& v = g.solids[s];
+        const int si = static_cast<int>(s);
+        if (v.kind == LayeredSolid::Kind::box) {
+            const int k0 = index_of(t, v.lo[A]), k1 = index_of(t, v.hi[A]);
+            if (k0 < k1) add(si, rect(v.lo[ua], v.hi[ua], v.lo[va], v.hi[va]), k0, k1);
+            continue;
+        }
+        if (v.axis == axis) {
+            const int k0 = index_of(t, v.from), k1 = index_of(t, v.to);
+            std::vector<Point> polygon;
+            for (const Point& p : v.polygon) polygon.push_back({p[0], p[1], 0.0});
+            if (k0 < k1) add(si, std::move(polygon), k0, k1);
+            continue;
+        }
+        // A rectilinear prism across A: in each slab, a scanline at the slab's centre across its polygon gives
+        // intervals along the polygon's other coordinate w, each swept along the prism's axis b: rectangles.
+        const auto b = static_cast<std::size_t>(v.axis);
+        const std::size_t pa = (b + 1) % 3 == A ? 0 : 1, pw = 1 - pa;
+        const std::size_t n = v.polygon.size();
+        std::vector<int> at(n);
+        for (std::size_t i = 0; i < n; ++i) at[i] = index_of(t, v.polygon[i][pa]);
+        const auto [kmin, kmax] = std::ranges::minmax(at);
+        std::vector<double> cuts;
+        for (int k = kmin; k < kmax; ++k) {
+            cuts.clear();
+            for (std::size_t e = 0; e < n; ++e) {
+                const std::size_t f = (e + 1) % n;
+                if (v.polygon[e][pw] != v.polygon[f][pw]) continue;  // along w: not a crossing
+                if ((at[e] <= k) != (at[f] <= k)) cuts.push_back(v.polygon[e][pw]);
+            }
+            std::ranges::sort(cuts);
+            for (std::size_t c = 0; c + 1 < cuts.size(); c += 2) {
+                if (!(cuts[c] < cuts[c + 1])) continue;
+                add(si, ua == b ? rect(v.from, v.to, cuts[c], cuts[c + 1]) : rect(cuts[c], cuts[c + 1], v.from, v.to), k, k + 1);
+            }
+        }
+    }
+    // Patch boxes: on an end plane, a rectangle the arrangement splits along; on a side of the domain, pins where the
+    // box's edges cross that side (its extent along A is among the breakpoints already).
+    std::vector<Point> pins;
+    for (std::size_t p = 0; p < g.patches.size(); ++p) {
+        const PatchBox& b = g.patches[p];
+        for (const int end : {0, 1}) {
+            const double plane = end == 1 ? t[ns] : t[0];
+            if (b.lo[A] - tol <= plane && plane <= b.hi[A] + tol && b.lo[ua] < b.hi[ua] && b.lo[va] < b.hi[va]) {
+                entries.push_back({rect(b.lo[ua], b.hi[ua], b.lo[va], b.hi[va]), -1, static_cast<int>(p), end, {}});
+            }
+        }
+        for (const std::size_t c : {ua, va}) {
+            const std::size_t d = c == ua ? va : ua;
+            for (const double side : {g.lo[c], g.hi[c]}) {
+                if (!(b.lo[c] - tol <= side && side <= b.hi[c] + tol)) continue;
+                for (const double w : {b.lo[d], b.hi[d]}) {
+                    if (!(w > g.lo[d] + tol && w < g.hi[d] - tol)) continue;
+                    Point q{0.0, 0.0, 0.0};
+                    q[c == ua ? 0 : 1] = side;
+                    q[c == ua ? 1 : 0] = w;
+                    pins.push_back(q);
+                }
+            }
+        }
+    }
+    // Coordinates within the tolerance of one another made one, per axis (the domain's ends kept exactly).
+    for (const std::size_t c : {std::size_t{0}, std::size_t{1}}) {
+        const std::size_t ax = c == 0 ? ua : va;
+        std::vector<double> all{g.lo[ax], g.hi[ax]};
+        for (const Entry& e : entries) {
+            for (const Point& p : e.polygon) all.push_back(p[c]);
+        }
+        for (const Point& p : pins) all.push_back(p[c]);
+        std::ranges::sort(all);
+        std::vector<double> reps;
+        for (const double x : all) {
+            if (reps.empty() || x - reps.back() > tol) reps.push_back(x);
+        }
+        for (double& r : reps) {
+            if (std::abs(r - g.lo[ax]) <= tol) r = g.lo[ax];
+            else if (std::abs(r - g.hi[ax]) <= tol) r = g.hi[ax];
+        }
+        const auto snap = [&](double x) {
+            const auto it = std::ranges::lower_bound(reps, x - tol);
+            return it != reps.end() && std::abs(*it - x) <= tol ? *it : x;
+        };
+        for (Entry& e : entries) {
+            for (Point& p : e.polygon) p[c] = snap(p[c]);
+        }
+        for (Point& p : pins) p[c] = snap(p[c]);
+    }
+
+    // The arrangement, labelled by signature.
+    std::map<std::vector<std::int32_t>, std::int32_t> ids;
+    std::vector<std::vector<std::int32_t>> sigs;
+    std::optional<std::pair<Point, std::size_t>> uncovered;
+    detail::ArrangementLabels how;
+    how.pins = pins;
+    how.label = [&](const std::vector<std::size_t>& hold, const Point& at) -> std::int32_t {
+        std::vector<int> top(ns, -1);
+        std::array<int, 2> cap{-1, -1};
+        for (const std::size_t i : hold) {
+            const Entry& e = entries[i];
+            if (e.solid < 0) {
+                if (cap[static_cast<std::size_t>(e.end)] < 0 || e.patch < cap[static_cast<std::size_t>(e.end)]) cap[static_cast<std::size_t>(e.end)] = e.patch;
+                continue;
+            }
+            for (std::size_t k = 0; k < ns; ++k) {
+                if (e.slabs[k] != 0 && e.solid > top[k]) top[k] = e.solid;
+            }
+        }
+        std::vector<std::int32_t> sig(ns + 2);
+        for (std::size_t k = 0; k < ns; ++k) {
+            const std::int32_t r = top[k] >= 0 ? g.solids[static_cast<std::size_t>(top[k])].region : g.background;
+            if (r < 0) {
+                if (!uncovered) uncovered = std::pair{at, k};
+                return -1;
+            }
+            sig[k] = r;
+        }
+        sig[ns] = cap[0];
+        sig[ns + 1] = cap[1];
+        const auto [it, fresh] = ids.try_emplace(sig, static_cast<std::int32_t>(sigs.size()));
+        if (fresh) sigs.push_back(std::move(sig));
+        return it->second;
+    };
+    LayeredGeometry2D flat;
+    flat.lo = {g.lo[ua], g.lo[va], 0.0};
+    flat.hi = {g.hi[ua], g.hi[va], 0.0};
+    for (const Entry& e : entries) flat.shapes.push_back({e.polygon, 0});
+    auto tiling = detail::labelled_partition2d(flat, how);
+    if (!tiling) {
+        if (uncovered) {
+            Point p{};
+            p[A] = 0.5 * (t[uncovered->second] + t[uncovered->second + 1]);
+            p[ua] = uncovered->first[0];
+            p[va] = uncovered->first[1];
+            return invalid(std::format("the layers leave part of the domain uncovered (near ({:.6f}, {:.6f}, {:.6f})) and no region "
+                                       "is the background",
+                                       p[0], p[1], p[2]));
+        }
+        return std::unexpected(std::move(tiling.error()));
+    }
+
+    // The sectioned extrusion of the pieces through the breakpoints.
+    static constexpr const char* unnamed = " face";  // never a deck name (those are identifiers)
+    ExtrudedGeometry x;
+    x.axis = axis;
+    x.stations = t;
+    x.default_patch = unnamed;
+    x.patches = g.patches;
+    for (std::size_t i = 0; i < tiling->polygons.size(); ++i) {
+        const RegionPolygon& p = tiling->polygons[i];
+        x.cells.push_back({"piece_" + std::to_string(i), p.vertices});
+        const auto& sig = sigs[static_cast<std::size_t>(p.region)];
+        x.regions.emplace_back(sig.begin(), sig.begin() + static_cast<std::ptrdiff_t>(ns));
+    }
+    auto built = extrude(x);
+    if (!built) return std::unexpected(std::move(built.error()));
+    static constexpr std::array<std::array<const char*, 2>, 3> face_names{{{"x_min", "x_max"}, {"y_min", "y_max"}, {"z_min", "z_max"}}};
+    for (std::size_t f = 0; f < built->facets.size(); ++f) {
+        ComplexFacet& c = built->facets[f];
+        if (c.patch != unnamed) continue;
+        c.patch.clear();
+        for (std::size_t k = 0; k < 3 && c.patch.empty(); ++k) {
+            for (const int side : {0, 1}) {
+                const double w = side == 0 ? g.lo[k] : g.hi[k];
+                if (std::ranges::all_of(c.vertices, [&](std::size_t i) { return built->vertices[i][k] == w; })) {
+                    c.patch = face_names[k][static_cast<std::size_t>(side)];
+                    break;
+                }
+            }
+        }
+        if (c.patch.empty()) return invalid("internal: a slanted layout's boundary facet lies on no face of the domain", f);
+    }
+    return built;
+}
+
 }  // namespace
 
 std::expected<PolyhedralGeometry, base::Error> layered_partition3d(const LayeredGeometry3D& g) {
@@ -86,6 +294,7 @@ std::expected<PolyhedralGeometry, base::Error> layered_partition3d(const Layered
 
     // Validation, and every coordinate per axis.
     std::array<std::vector<double>, 3> coords;
+    int slant_axis = -1;  // the axis of the prisms with a slanted edge (slice 4, SD6): one at most
     for (std::size_t s = 0; s < g.solids.size(); ++s) {
         const LayeredSolid& v = g.solids[s];
         if (v.region < 0) return invalid("a layered solid's region is >= 0", s);
@@ -112,7 +321,14 @@ std::expected<PolyhedralGeometry, base::Error> layered_partition3d(const Layered
             for (std::size_t j = 0; j < i; ++j) {
                 if (v.polygon[j][0] == p[0] && v.polygon[j][1] == p[1]) return invalid("a prism's polygon repeats a vertex", s);
             }
-            if (p[0] != q[0] && p[1] != q[1]) return invalid("a prism's polygon has a slanted edge (slanted faces come in a later slice)", s);
+            if (p[0] != q[0] && p[1] != q[1]) {
+                if (slant_axis >= 0 && slant_axis != v.axis) {
+                    return invalid("slanted prisms along two axes (every slanted face must be parallel to one axis, the one all "
+                                   "slanted prisms share)",
+                                   s);
+                }
+                slant_axis = v.axis;
+            }
             flat.push_back({p[0], p[1], 0.0});
             coords[ua].push_back(p[0]);
             coords[va].push_back(p[1]);
@@ -132,6 +348,7 @@ std::expected<PolyhedralGeometry, base::Error> layered_partition3d(const Layered
     }
     std::array<std::vector<double>, 3> bp;
     for (std::size_t k = 0; k < 3; ++k) bp[k] = merged(std::move(coords[k]), g.lo[k], g.hi[k], tol);
+    if (slant_axis >= 0) return slanted_partition(g, slant_axis, bp[static_cast<std::size_t>(slant_axis)], tol);
     const int nx = static_cast<int>(bp[0].size()) - 1, ny = static_cast<int>(bp[1].size()) - 1, nz = static_cast<int>(bp[2].size()) - 1;
     // Rows: along x, at each (j, k), the runs of one region, resolved top solid first. A row asks each solid for the
     // x-intervals it covers there (exact: grid indices, and for a prism the 2D cell centre's side of its polygon).

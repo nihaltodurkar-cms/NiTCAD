@@ -1757,6 +1757,74 @@ lifted it to 6 cores during the slice, and the mutants and final runs used 6.
   `region_at`'s order, interface faces left out, and the wrong mesh tag. One first failed to build and was rerun as
   a compiling equivalent: the facet point dropped.
 
+**Slice 4 results (2026-11-21; SD6):** slanted prism faces, on `app/solid-modeller` after slice 3 (same worktree). Run
+under the owner's 6-core cap: builds `-j 6`.
+- **Kernel (mesh layer):** a layered layout with a slanted prism goes to a new path in `layered3d.cpp`; layouts without
+  one keep the rectilinear kernel unchanged (SE5's 100 boxes 26.7 ms, SE2's 1000 random layouts as before).
+  - **One axis:** every slanted prism must share one axis A (SQ4). Slanted prisms along two axes are refused on the
+    second one's line: "slanted prisms along two axes (every slanted face must be parallel to one axis, the one all
+    slanted prisms share)". Boxes and rectilinear prisms on any axis stay allowed.
+  - **Slabs:** the breakpoints along A cut the layout into slabs. In each slab every solid is a 2D shape in (u, v): a
+    box's rectangle, a prism along A's polygon, and a rectilinear prism across A as the rectangles a scanline at the
+    slab's centre gives (exact, on breakpoint indices).
+  - **One arrangement for all slabs:** 26k's slanted 2D arrangement (`general_partition`) now takes a caller's label
+    and pinned points (`detail::labelled_partition2d`, `src/mesh/arrangement2d.hpp`); the 2D path is unchanged. A
+    point's label is its signature: its region in every slab, and the patch box holding it on each end plane. So the
+    arrangement's polygons are the pieces across which nothing changes along A, simple, conforming, and each
+    crossing is computed once for every slab.
+  - **The complex:** Unit 53's sectioned extrusion (`extrude`) of those polygons through the breakpoints. Lateral
+    facets are polygon edges swept through one slab: vertical quads, exactly planar even through a rounded crossing.
+    Boundary facets take the first patch box holding them, else their face's name (x_min ... z_max), as the
+    rectilinear kernel. A patch box on an end plane splits the arrangement along its edges; on a side face, its edges
+    are pins on the domain's sides. `extrude` runs `check_complex`, so this path costs more (below).
+  - **Coordinates:** on u and v, values within 1e-12 of the extent are first made one (20nm and 0.02um), the domain's
+    ends kept exactly.
+- **What SQ4 left open, answered:** a sidewall crossed by a plane (the gate's bottom across a trapezoidal fin's
+  sidewall) is split at a rounded crossing. The two pieces are parallel to rounding but not exactly coplanar, and
+  the generator's separation rule (kept, SQ6) measures them as two interfaces at distance zero: "two interfaces
+  within 4 s". Recorded, not loosened. A sidewall no plane crosses meshes: the same fin with the gate down to its
+  base gives 6517 nodes. Live validation marks the refusal at its facet as any other generator error.
+- **Model and editor:**
+  - `prism_ok` takes any simple polygon of non-zero area (three vertices or more).
+  - `insert_vertex` takes a point exactly on any edge (64-bit cross product).
+  - `move_face` still refuses a slanted side (its normal is off the quanta's lattice); its vertices move instead.
+  - The Prism tool takes clicks as they are; Shift keeps the edge along u or v from the last point. Ctrl still drags
+    a vertex alone. Snapping onto a slanted side face is not added (recorded).
+  - **Convert:** an `extrude3d` deck with slanted cells now builds after Convert. The extrusion named only the cells
+    inside a contact's box; a layered deck names the part of every face inside it. So Convert's note now names each
+    contact whose box cuts across a cell's end on an end plane. The shaped FinFET's source and drain cut across the
+    spacer's slanted cells, so those contacts now also take spacer slivers.
+- **Tests:**
+  - **Hand cases:** a trapezoidal fin under a wrapping gate (region volumes exact to 1e-12 against the hand values,
+    patch areas, slanted facets present); an end-plane patch box across the fin's sidewalls and a side strip, their
+    areas exact; a trapezoid, a triangle, a box corner rounded onto a slanted edge and rectilinear prisms across the
+    axis (1000 sample points); one coordinate written two ways; refusals (two axes, uncovered, unused patch box).
+  - **1000 seeded random layouts** (1–12 solids: boxes, rectilinear L prisms on all axes, trapezoids and triangles
+    along one axis per layout; the last 300 in tenths; end and side patch boxes in a third): each passes
+    `check_complex`, its volumes fill the domain, and 200 sample points each lie in exactly one volume, of the
+    topmost solid's region.
+  - **Generator:** the uncrossed fin meshes; the crossed one's refusal is pinned by a test.
+  - **Model:** the slanted edits; the shaped FinFET converted, its note, and its region volumes through the slanted
+    kernel equal to its prisms' (the extrusion's) to 1e-12.
+  - **Deck:** a trapezoidal oxide (prism along y) builds. The deck test that expected "a prism's polygon has a slanted
+    edge" now expects the build.
+  - **Window:** a trapezoid drawn on the work plane y = 0 with a slanted click and a Shift-kept one; the polygon is
+    as clicked, and the deck builds a 3D device with 3 regions.
+- **Speed (recorded, no target):** the slowest of the 1000 random slanted layouts took 869 ms, most of it in
+  `check_complex` inside `extrude`. The rectilinear path keeps SE5.
+- **SE1:** nothing else moves. The rectilinear kernel and the 2D path are unchanged, and the layered deck tests pass.
+  The hidden `[.benchmark]` FinFET case still fails before building on the CRLF worktree deck, as in slice 3.
+- **Suites:** the mesh cases tagged `[layered2d]`, `[layered3d]` and `[complex]` (21) pass, the app test executable
+  (105 cases) passes, and the window cases tagged `[solid]` and `[geometry]` (15) pass. Full ctest suites were not
+  run, and a run of whole test executables was declined by the session's permission check.
+- **SE9:** 17 mutants, all caught: the top solid first-wins; end-plane patch rects dropped; pins not made; pins not
+  kept; the coordinate snap off; the scanline crossing inverted; the cross-axis rect's (u, v) swapped; a box one slab
+  too many; the own-edge-by-direction rule off on the labelled path; face names swapped; the two-axes refusal off; the
+  background taken for an uncovered point; `insert_vertex` off the edge; `prism_ok` rectilinear again; Convert's note
+  on every meeting cell; Shift ignored; always constrained. Two first failed to build (an unused variable) and two
+  ran no test (Catch2 refused the window case's full name as a filter); all four were rerun as compiling
+  equivalents, the window case by a name prefix.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

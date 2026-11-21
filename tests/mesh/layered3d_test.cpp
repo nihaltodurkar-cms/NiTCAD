@@ -203,7 +203,7 @@ TEST_CASE("mesh layered3d: refusals name the solid (SD2)", "[mesh][layered3d]") 
     LayeredGeometry3D g{.lo = {0, 0, 0}, .hi = {4, 4, 4}, .background = 0, .solids = {}, .patches = {}};
     const auto refused = [&](LayeredSolid s, const std::string& message) {
         LayeredGeometry3D h = g;
-        h.solids = {box3(0, 1, 0, 1, 0, 1, 1), std::move(s)};
+        h.solids = {prism(2, 0, 1, {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, 1), std::move(s)};
         const auto c = layered_partition3d(h);
         REQUIRE_FALSE(c.has_value());
         CHECK(c.error().message == message);
@@ -211,7 +211,7 @@ TEST_CASE("mesh layered3d: refusals name the solid (SD2)", "[mesh][layered3d]") 
     };
     refused(box3(1, 1, 0, 1, 0, 1, 1), "a layered box needs lo < hi on each axis");
     refused(box3(0, 1, 0, 1, 0, 1, -1), "a layered solid's region is >= 0");
-    refused(prism(2, 0, 1, {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, 1), "a prism's polygon has a slanted edge (slanted faces come in a later slice)");
+    refused(prism(0, 0, 1, {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, 1), "slanted prisms along two axes (every slanted face must be parallel to one axis, the one all slanted prisms share)");
     refused(prism(2, 0, 1, {{0, 0, 0}, {1, 0, 0}}, 1), "a prism's polygon needs at least three vertices");
     refused(prism(2, 1, 1, {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}}, 1), "a prism needs from < to along its axis");
     refused(prism(3, 0, 1, {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}}, 1), "a prism's axis is x, y or z");

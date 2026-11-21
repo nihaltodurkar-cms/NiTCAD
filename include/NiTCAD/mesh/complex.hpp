@@ -111,7 +111,7 @@ struct ExtrudedGeometry {
 //
 // Rules (invalid_input; the index names the solid, or the patch box with "patch box"): the domain lo < hi on each
 // axis; a box lo < hi on each axis; a prism's axis 0, 1 or 2, from < to, its polygon at least three vertices, none
-// repeated, simple, of non-zero area, every edge parallel to u or v (slanted faces come in slice 4, SD6); the
+// repeated, simple, of non-zero area; a prism with a slanted edge along the one axis every slanted prism shares; the
 // background (when >= 0) and each region >= 0; every point of the domain covered by a solid or the background. Patch
 // boxes as the extrusion's: a boundary facet inside a box (to 1e-12 of the extent) takes its name, the first box
 // first, and a box selecting none is an error; the others are named by the domain's face: x_min, x_max, y_min,
@@ -124,6 +124,11 @@ struct ExtrudedGeometry {
 // every vertex lying on a facet's edge inserted in it, so facets meet edge to edge. Coordinates are the inputs' own
 // doubles; shared vertices are bit-identical. The result passes check_complex by construction (not run here: it costs
 // seconds on thousands of facets, and the generator runs its rules again).
+//
+// With a slanted prism (Unit 26l SD6): the breakpoints along its axis A cut the layout into slabs; one 2D
+// arrangement in (u, v), each point labelled by its region in every slab and its patch box on each end plane, is
+// extruded through the slabs (Unit 53's extrude, which runs check_complex). Lateral facets are vertical quads,
+// exactly planar; crossings are rounded, so a sidewall crossed by a plane is two near-coplanar facets.
 struct LayeredSolid {
     enum class Kind { box, prism };
     Kind kind = Kind::box;

@@ -431,6 +431,40 @@ TEST_CASE("app solid: an extrude3d deck reads as prisms, exact, and converts to 
         for (const char* key : {"\nsweep =", "\nlines =", "\nstraddle", "\nmin_angle", "\naxis =", "\nlayer ="}) CHECK(mesh_part.find(key) == std::string::npos);
         CHECK(strip(must_read(out)) == strip(m));
     }
+    SECTION("the shaped FinFET (slanted fin cells) converts and resolves through the slanted kernel (slice 4, SD6)") {
+        const std::string text = deck_file("finfet_3d_shaped.deck");
+        Model m = must_read(text);
+        const auto note = convert_to_layered(m);
+        REQUIRE(note);
+        // The source and drain boxes cut across the spacer's slanted cells at the ends: said.
+        CHECK(note->find("contact 'source' cuts across the end of region 'spacer'") != std::string::npos);
+        CHECK(note->find("contact 'drain' cuts across the end of region 'spacer'") != std::string::npos);
+        CHECK(note->find("of region 'silicon'") == std::string::npos);
+        const Model again = must_read(must_write(text, m));
+        CHECK(strip(again) == strip(m));
+        const auto complex = NiTCAD::mesh::layered_partition3d(to_layered(again));
+        if (!complex) FAIL(complex.error().message);
+        const auto report = NiTCAD::mesh::check_complex(*complex);
+        if (!report) FAIL(report.error().message);
+        // The extrusion's volume per region: its prisms' areas times lengths (cells tile, sections are disjoint).
+        std::map<int, double> want, got;
+        for (std::size_t r = 0; r < again.regions.size(); ++r) {
+            for (const Solid& s : again.regions[r].solids) {
+                std::int64_t a2 = 0;
+                for (std::size_t k = 0; k < s.polygon.size(); ++k) {
+                    const Pt p = s.polygon[k], q = s.polygon[(k + 1) % s.polygon.size()];
+                    a2 += p.x * q.y - q.x * p.y;
+                }
+                want[static_cast<int>(r)] += 0.5 * static_cast<double>(a2 < 0 ? -a2 : a2) * static_cast<double>(s.to - s.from) * 1e-24;
+            }
+        }
+        for (std::size_t v = 0; v < complex->volumes.size(); ++v) got[complex->volumes[v].region] += report->volume[v];
+        REQUIRE(got.size() == want.size());
+        for (const auto& [r, cm3] : want) {
+            INFO("region " << r);
+            CHECK(std::abs(got[r] - cm3) <= 1e-12 * cm3);
+        }
+    }
     SECTION("a void in the extrusion is refused with why") {
         std::string text = lf(deck_file("finfet_3d_reduced.deck"));
         text.replace(text.find("extrude = fin 0:85nm"), 20, "extrude = fin 0:55nm");
@@ -458,7 +492,16 @@ TEST_CASE("app solid: the edits, refused where they would leave a solid invalid"
     CHECK(!set_extent(m, well, 5000, 5000));
     CHECK(set_vertex(m, well, 2, {5000, 2000}));  // its neighbours follow
     CHECK(m.regions[2].solids[0].polygon == std::vector<Pt>{{0, 0}, {5000, 0}, {5000, 2000}, {0, 2000}});
-    CHECK(!set_vertex(m, well, 2, {4000, 3000}, false));  // slanted: slice 4
+    // Slanted since slice 4 (SD6): a vertex moved alone, a vertex inserted exactly on the slanted edge (one off it
+    // refused), the slanted side not moved as a face; then put back.
+    REQUIRE(set_vertex(m, well, 2, {4000, 3000}, false));
+    CHECK(m.regions[2].solids[0].polygon == std::vector<Pt>{{0, 0}, {5000, 0}, {4000, 3000}, {0, 2000}});
+    CHECK(!move_face(m, well, 3, 100));  // the side over edge 1, from (5000, 0) to (4000, 3000)
+    CHECK(!insert_vertex(m, well, 1, {4500, 1501}));
+    REQUIRE(insert_vertex(m, well, 1, {4500, 1500}));
+    CHECK(remove_vertex(m, well, 2));
+    REQUIRE(set_vertex(m, well, 2, {5000, 2000}, false));
+    CHECK(m.regions[2].solids[0].polygon == std::vector<Pt>{{0, 0}, {5000, 0}, {5000, 2000}, {0, 2000}});
     CHECK(insert_vertex(m, well, 0, {3000, 0}));
     CHECK(!insert_vertex(m, well, 0, {3000, 10}));
     CHECK(m.regions[2].solids[0].polygon.size() == 5);
@@ -477,7 +520,7 @@ TEST_CASE("app solid: the edits, refused where they would leave a solid invalid"
     std::ranges::sort(poly);
     CHECK(poly == std::vector<Pt>{{0, 0}, {0, 1000}, {1000, 1000}, {1000, 2000}, {2000, 0}, {2000, 2000}});
     CHECK(m.regions[3].solids[0].bounds() == Box3{{0, 0, 0}, {2000, 2000, 1000}});
-    CHECK(add_prism(m, 2, 0, 1000, {{0, 0}, {2000, 0}, {0, 2000}}, "sio2") < 0);  // slanted
+    CHECK(add_prism(m, 2, 0, 1000, {{0, 0}, {2000, 2000}, {2000, 0}, {0, 2000}}, "sio2") < 0);  // crossing itself
     CHECK(add_prism(m, 2, 1000, 0, {{0, 0}, {2000, 0}, {2000, 1000}, {0, 1000}}, "sio2") < 0);
     CHECK(add_box(m, {{0, 0, 0}, {0, 10, 10}}, "sio2") < 0);
     const int d = duplicate_solid(m, ox, {0, 0, 100});
