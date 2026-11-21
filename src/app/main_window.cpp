@@ -15,7 +15,9 @@
 #include <charconv>
 #include <format>
 #include <fstream>
+#include <set>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -37,6 +39,68 @@ constexpr const wchar_t* panel_class = L"NiTCADInspector";
 
 // Status bar parts.
 constexpr int status_state = 0, status_file = 1, status_adapter = 2, status_cursor = 3;
+
+// Unit 26l (SD5): a 3D mesh's surface for the modeller's preview: the edges (pairs of points, µm) of the tet faces on
+// the boundary or between tets of different regions (each tet's region where the model puts its centroid).
+std::vector<solid::V3> surface_edges(const solid::Model& model, const mesh::SimplexMesh& s) {
+    const std::size_t tets = s.cells.size() / 4;
+    std::vector<int> region(tets);
+    for (std::size_t t = 0; t < tets; ++t) {
+        std::array<double, 3> c{};
+        for (std::size_t k = 0; k < 4; ++k) {
+            for (std::size_t a = 0; a < 3; ++a) c[a] += s.points[static_cast<std::size_t>(s.cells[4 * t + k])][a] / 4.0;
+        }
+        const auto q = [&](double cm) { return static_cast<solid::Coord>(std::llround(cm / geo::quantum_cm)); };
+        region[t] = solid::region_at(model, {q(c[0]), q(c[1]), q(c[2])});
+    }
+    // Faces keyed by their sorted nodes (21 bits each): the first tet's region, and whether a second differs or is
+    // missing.
+    struct Seen {
+        int region;
+        int count;
+        bool differs;
+    };
+    std::unordered_map<std::uint64_t, Seen> faces;
+    faces.reserve(tets * 3);
+    const auto key = [](std::array<std::int32_t, 3> f) {
+        std::ranges::sort(f);
+        return (static_cast<std::uint64_t>(f[0]) << 42) | (static_cast<std::uint64_t>(f[1]) << 21) | static_cast<std::uint64_t>(f[2]);
+    };
+    for (std::size_t t = 0; t < tets; ++t) {
+        const auto* v = &s.cells[4 * t];
+        for (int omit = 0; omit < 4; ++omit) {
+            std::array<std::int32_t, 3> f{};
+            for (int k = 0, j = 0; k < 4; ++k) {
+                if (k != omit) f[static_cast<std::size_t>(j++)] = v[k];
+            }
+            auto [it, fresh] = faces.try_emplace(key(f), Seen{region[t], 1, false});
+            if (!fresh) {
+                ++it->second.count;
+                it->second.differs = it->second.differs || it->second.region != region[t];
+            }
+        }
+    }
+    std::set<std::uint64_t> edges;
+    const std::uint64_t mask = (std::uint64_t{1} << 21) - 1;
+    for (const auto& [k, f] : faces) {
+        if (f.count != 1 && !f.differs) continue;
+        const std::uint64_t n[3] = {k >> 42, (k >> 21) & mask, k & mask};
+        for (int i = 0; i < 3; ++i) {
+            for (int j = i + 1; j < 3; ++j) edges.insert((n[i] << 21) | n[j]);
+        }
+    }
+    std::vector<solid::V3> out;
+    out.reserve(2 * edges.size());
+    const auto um = [&](std::uint64_t node) {
+        const auto& p = s.points[static_cast<std::size_t>(node)];
+        return solid::V3{p[0] * 1e4, p[1] * 1e4, p[2] * 1e4};
+    };
+    for (const std::uint64_t e : edges) {
+        out.push_back(um(e >> 21));
+        out.push_back(um(e & mask));
+    }
+    return out;
+}
 
 // The tree's item data: a kind in the high word, an index in the low.
 enum TreeKind : int { tree_none = 0, tree_field = 1, tree_view = 2, tree_region = 3 };
@@ -148,6 +212,7 @@ MainWindow::~MainWindow() {
     runner_.wait();
     if (viewport_) viewport_->release();  // the swap chains before the renderer
     if (run_page_) run_page_->release();
+    if (solid_) solid_->release();
     if (hwnd_) {
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
         DestroyWindow(hwnd_);
@@ -223,6 +288,7 @@ bool MainWindow::create_children() {
     results_->on_pass = [this](std::size_t k) { results_show_pass(k); };
     geometry_ = std::make_unique<GeometryPage>(hwnd_, *this, id_geometry, id_geometry_controls,
                                                options_.adapter == render::Adapter::warp);
+    solid_ = std::make_unique<SolidPage>(hwnd_, *this, id_solid, id_solid_controls);
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
     // Unit 26j: the console along the window's bottom, a classic output window: the tab's text (plain, black on
     // white) or the points table over a tab strip (Output, Points, Messages); right-click for Copy, Save, Clear
@@ -469,6 +535,11 @@ bool MainWindow::pre_translate(MSG& m) {
         geometry_->commit(GetDlgCtrlID(m.hwnd) - id_geometry_controls);
         return true;
     }
+    if (m.message == WM_KEYDOWN && m.wParam == VK_RETURN && m.hwnd && solid_ && GetParent(m.hwnd) == solid_->inspector() &&
+        GetDlgCtrlID(m.hwnd) != static_cast<int>(id_solid_controls) + static_cast<int>(SolidPage::c_vertices)) {
+        solid_->commit(GetDlgCtrlID(m.hwnd) - id_solid_controls);
+        return true;
+    }
     return IsDialogMessageW(hwnd_, &m) != FALSE;
 }
 
@@ -482,7 +553,7 @@ void MainWindow::update_command_states() {
     };
     enable(Command::check, !busy);
     // Unit 26k (GD9): on the Geometry tab, Run is off while the layout does not build.
-    enable(Command::run, !busy && !(tab_ == tab_geometry && geometry_ && !geometry_->run_blocked().empty()));
+    enable(Command::run, !busy && !(tab_ == tab_geometry && geometry_ && !(solid_shown_ ? solid_->run_blocked() : geometry_->run_blocked()).empty()));
     enable(Command::stop, runner_.state() == RunState::running);
     enable(Command::open_deck, !busy);
     enable(Command::new_deck, !busy);
@@ -535,6 +606,7 @@ void MainWindow::apply_dpi(int dpi) {
     run_page_->set_dpi(dpi, font_);
     results_->set_dpi(dpi, font_, bold_);
     geometry_->set_dpi(dpi, font_, bold_);
+    solid_->set_dpi(dpi, font_, bold_);
     layout();
 }
 
@@ -574,8 +646,13 @@ void MainWindow::layout() {
     // Unit 26k: the Geometry tab's page, and its section in the inspector's place.
     place(geometry_->hwnd(), whole);
     place(geometry_->inspector(), panes_.inspector);
-    ShowWindow(geometry_->hwnd(), tab_ == tab_geometry ? SW_SHOW : SW_HIDE);
-    ShowWindow(geometry_->inspector(), tab_ == tab_geometry && panes_.inspector.width > 0 ? SW_SHOW : SW_HIDE);
+    ShowWindow(geometry_->hwnd(), tab_ == tab_geometry && !solid_shown_ ? SW_SHOW : SW_HIDE);
+    ShowWindow(geometry_->inspector(), tab_ == tab_geometry && !solid_shown_ && panes_.inspector.width > 0 ? SW_SHOW : SW_HIDE);
+    // Unit 26l: the 3D modeller in its place for a 3D deck.
+    place(solid_->hwnd(), whole);
+    place(solid_->inspector(), panes_.inspector);
+    ShowWindow(solid_->hwnd(), tab_ == tab_geometry && solid_shown_ ? SW_SHOW : SW_HIDE);
+    ShowWindow(solid_->inspector(), tab_ == tab_geometry && solid_shown_ && panes_.inspector.width > 0 ? SW_SHOW : SW_HIDE);
     ShowWindow(inspector_, tab_ == tab_geometry || panes_.inspector.width <= 0 ? SW_HIDE : SW_SHOW);
     // The tab strip is drawn over the page's top: keep the page above it in Z order.
     SetWindowPos(tabs_, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -1281,6 +1358,13 @@ void MainWindow::select_tab(int tab) {
         run_page_->update(runner_, renderer(), true);
         break;
     case tab_geometry:
+        update_geometry_page();
+        if (solid_shown_) {
+            solid_->reload();
+            SetFocus(solid_->canvas());
+            if (solid_->check() == SolidPage::Check::pending && !live_.pending() && live_edits_ == edits_) SetTimer(hwnd_, live_timer, 0, nullptr);
+            break;
+        }
         geometry_->reload();
         SetFocus(geometry_->canvas());
         // GD9: a deck not checked since it was opened is checked now (an edit's check is on its way otherwise).
@@ -2598,6 +2682,27 @@ std::optional<geo::Rect> MainWindow::geometry_bounds() {
 
 void MainWindow::geometry_status(const std::string& cursor) { set_status(status_cursor, cursor); }
 
+// --- the 3D modeller (Unit 26l) --------------------------------------------------------------------
+
+std::string MainWindow::solid_deck() { return deck_->text(); }
+
+void MainWindow::solid_edited(const std::string& text) {
+    deck_->set_text(text);
+    deck_changed();
+}
+
+void MainWindow::solid_status(const std::string& text) { set_status(status_cursor, text); }
+
+render::Renderer* MainWindow::solid_renderer() { return renderer(); }
+
+void MainWindow::update_geometry_page() {
+    const auto m = solid::read_model(deck_->text());
+    const bool shown = m && m->mesh != solid::MeshKind::unsupported;
+    if (shown == solid_shown_) return;
+    solid_shown_ = shown;
+    layout();
+}
+
 void MainWindow::geometry_selected(const std::string&) {}
 
 void MainWindow::on_live_check() {
@@ -2618,6 +2723,12 @@ void MainWindow::on_live_check() {
     if (!shown.empty()) {
         set_status(status_state, shown.front().message, level);
     } else if (auto plan = live_.take_plan()) {
+        // Unit 26l (SD5): the 3D modeller's mesh preview, the generated tets' boundary and interface faces.
+        if (solid_ && plan->generated && plan->generated->simplices.dimension == 3) {
+            if (const auto model = solid::read_model(text); model && model->mesh != solid::MeshKind::unsupported) {
+                solid_->set_mesh(text, surface_edges(*model, plan->generated->simplices));
+            }
+        }
         // The structure preview (XD4): results stay while the deck keeps their mesh.
         if (workspace_ && workspace_->has_results() && same_mesh(*workspace_, plan->device.mesh())) {
             set_status(status_state, "The deck builds (the results shown are of its last run).");
@@ -2645,6 +2756,7 @@ void MainWindow::on_live_check() {
         geometry_->set_mesh(text, std::move(o));
     }
     geometry_->checked(text, problems);
+    solid_->checked(text, problems);
     update_command_states();
 }
 
@@ -2699,7 +2811,7 @@ void MainWindow::focus_next_pane() {
                       : tab_ == tab_start   ? start_->hwnd()
                       : tab_ == tab_run     ? run_page_->hwnd()
                       : tab_ == tab_results ? results_->hwnd()
-                      : tab_ == tab_geometry ? geometry_->canvas()
+                      : tab_ == tab_geometry ? (solid_shown_ ? solid_->canvas() : geometry_->canvas())
                                             : viewport_->hwnd();
     const HWND order[] = {tree_, page, child(id_view)};
     std::size_t k = 0;
@@ -2784,7 +2896,14 @@ void MainWindow::execute(Command c) {
     case Command::paste:
     case Command::duplicate:
     case Command::delete_selection:
-        if (tab_ == tab_geometry && GetParent(GetFocus()) != geometry_->inspector()) {
+        if (tab_ == tab_geometry && solid_shown_ && GetParent(GetFocus()) != solid_->inspector()) {
+            if (c == Command::undo) solid_->undo();
+            else if (c == Command::redo) solid_->redo();
+            else if (c == Command::duplicate) solid_->duplicate();
+            else if (c == Command::delete_selection || c == Command::cut) solid_->remove();
+            return;
+        }
+        if (tab_ == tab_geometry && !solid_shown_ && GetParent(GetFocus()) != geometry_->inspector()) {
             if (c == Command::undo) geometry_->undo();
             else if (c == Command::redo) geometry_->redo();
             else if (c == Command::cut) {
@@ -2809,6 +2928,11 @@ void MainWindow::execute(Command c) {
     case Command::tool_pan:
     case Command::tool_measure:
         select_tab(tab_geometry);
+        if (solid_shown_) {
+            solid_->set_tool(static_cast<SolidPage::Tool>(static_cast<int>(c) - static_cast<int>(Command::tool_select)));
+            SetFocus(solid_->canvas());
+            return;
+        }
         geometry_->set_tool(static_cast<GeometryPage::Tool>(static_cast<int>(c) - static_cast<int>(Command::tool_select)));
         SetFocus(geometry_->canvas());
         return;
@@ -2838,7 +2962,7 @@ void MainWindow::execute(Command c) {
     case Command::run:
         if (runner_.busy()) return;
         if (tab_ == tab_geometry) {
-            if (const std::string why = geometry_->run_blocked(); !why.empty()) {
+            if (const std::string why = (solid_shown_ ? solid_->run_blocked() : geometry_->run_blocked()); !why.empty()) {
                 set_status(status_state, why, LogLevel::warning);
                 return;
             }
@@ -3553,6 +3677,7 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         save_state();
         viewport_->release();
         run_page_->release();
+        solid_->release();
         DestroyWindow(hwnd_);
         return 0;
     case WM_DESTROY:

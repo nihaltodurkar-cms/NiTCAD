@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "NiTCAD/mesh/generate.hpp"
+#include "arrangement2d.hpp"
 #include "polygon2d.hpp"
 #include "predicates.hpp"
 
@@ -87,7 +88,7 @@ bool touches(const Point& a, const Point& b, const Point& p, double tol) {
     return u > 0.0 && u < 1.0 && side(a, b, p, tol) == 0;
 }
 
-std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D& g) {
+std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D& g, const detail::ArrangementLabels* how = nullptr) {
     struct Orig {
         Point a, b;
         std::int32_t shape;  // -1: the domain's side
@@ -118,6 +119,9 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
     // (any shape's vertex, not only its two segments' ends) is that point.
     std::multimap<double, Point> made;
     for (const Orig& o : orig) made.emplace(o.a[0], o.a);
+    if (how != nullptr) {
+        for (const Point& p : how->pins) made.emplace(p[0], Point{p[0], p[1], 0});
+    }
     const auto share = [&](Point p, const Orig& s, const Orig& t) {
         const auto near = [&](const Point& q) { return std::abs(q[0] - p[0]) <= tol && std::abs(q[1] - p[1]) <= tol; };
         for (const Point* q : {&s.a, &s.b, &t.a, &t.b}) {
@@ -206,6 +210,18 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
         }
     }
 
+    // Pins (labelled use): every segment through one, exactly, is split there.
+    std::vector<Point> pins;
+    if (how != nullptr) {
+        for (const Point& p0 : how->pins) {
+            const Point p{p0[0], p0[1], 0};
+            pins.push_back(p);
+            for (std::size_t i = 0; i < n; ++i) {
+                if (orient(orig[i].a, orig[i].b, p) == 0 && touches(orig[i].a, orig[i].b, p, 0.0)) splits[i].push_back(p);
+            }
+        }
+    }
+
     // The vertices, and the split edges (one per pair of vertices, every segment along it its source).
     std::vector<Point> pts;
     for (const auto& sp : splits) pts.insert(pts.end(), sp.begin(), sp.end());
@@ -286,6 +302,30 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
         }
         std::array<std::int32_t, 2> r{in[0] ? g.background : outside, in[1] ? g.background : outside};
         std::array<bool, 2> done{!in[0], !in[1]};
+        if (how != nullptr) {  // labelled: every shape holding each side, then the caller's label
+            std::array<std::vector<std::size_t>, 2> hold;
+            for (std::size_t s = 0; s < g.shapes.size(); ++s) {
+                std::optional<std::size_t> own;
+                for (const std::size_t i : edges[e].src) {
+                    if (orig[i].shape == static_cast<std::int32_t>(s)) own = i;
+                }
+                std::array<bool, 2> inside{false, false};
+                if (own) {
+                    inside = {along(*own), !along(*own)};
+                } else {
+                    if (m[0] < box[s][0] || m[0] > box[s][1] || m[1] < box[s][2] || m[1] > box[s][3]) continue;
+                    const bool k = detail::strictly_inside_2d(ccw[s], m);
+                    inside = {k, k};
+                }
+                for (std::size_t side = 0; side < 2; ++side) {
+                    if (inside[side]) hold[side].push_back(s);
+                }
+            }
+            for (std::size_t side = 0; side < 2; ++side) {
+                if (in[side]) r[side] = how->label(hold[side], m);
+            }
+            done = {true, true};
+        }
         for (std::size_t s = g.shapes.size(); s-- > 0 && !(done[0] && done[1]);) {
             std::optional<std::size_t> own;
             for (const std::size_t i : edges[e].src) {
@@ -536,7 +576,7 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
         const std::size_t m = loop.size();
         for (std::size_t k = 0; k < m; ++k) {
             const std::size_t v = from(loop[k]);
-            bool keep = degree[v] >= 3;
+            bool keep = degree[v] >= 3 || std::ranges::any_of(pins, [&](const Point& q) { return same_pt(q, pts[v]); });
             if (!keep) {
                 const auto [a, b] = line_of(loop[(k + m - 1) % m]);
                 const auto [c, d] = line_of(loop[k]);
@@ -560,6 +600,14 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
 }
 
 }  // namespace
+
+namespace detail {
+
+std::expected<Geometry2D, base::Error> labelled_partition2d(const LayeredGeometry2D& shapes, const ArrangementLabels& how) {
+    return general_partition(shapes, &how);
+}
+
+}  // namespace detail
 
 std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry2D& g) {
     for (int a = 0; a < 2; ++a) {

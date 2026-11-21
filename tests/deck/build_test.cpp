@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -1188,4 +1190,120 @@ TEST_CASE("deck build: the shaped extruded FinFET deck meshes and is certified",
     const auto p = deck::build(*d);
     if (!p) FAIL(p.error().message);
     CHECK(p->device.interface_certificate() != nullptr);
+}
+
+// Unit 26l slice 0 (SD1): a layered generate3d deck.
+TEST_CASE("deck build: a layered generate3d deck builds; a prism and a box of one solid mesh alike (Unit 26l)", "[deck]") {
+    const std::string mesh = R"([mesh]
+type = generate3d
+layered = on
+domain = 0 1um 0 0.6um 0 0.6um
+patch gate = 0.3um 0 0.6um  0.7um 0.6um 0.6um
+patch body = 0 0 0  1um 0.6um 0
+max_size = 0.15um
+interface_resolution = 0.02um
+)";
+    const std::string tail = R"(
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[contact gate]
+kind = electrode
+patch = gate
+electrode = metal
+work_function = 4.4
+
+[equilibrium]
+)";
+    const std::string boxed = mesh + R"(
+[region si]
+material = silicon
+
+[region ox]
+material = sio2
+box = 0 1um 0 0.6um 0.4um 0.6um
+)" + tail;
+    const deck::Plan a = must(boxed);
+    CHECK(a.device.regions().size() == 2);
+    CHECK(a.device.mesh().find_boundary("gate") != nullptr);
+    CHECK(a.device.mesh().find_boundary("x_min") != nullptr);  // the faces not in a patch box: by name
+    std::string prism = boxed;
+    prism.replace(prism.find("box = 0 1um 0 0.6um 0.4um 0.6um"), 31, "prism = z 0.4um 0.6um, 0 0, 1um 0, 1um 0.6um, 0 0.6um");
+    const deck::Plan b = must(prism);
+    CHECK(io::mesh_digest(a.device.mesh()) == io::mesh_digest(b.device.mesh()));
+    std::string along_x = boxed;  // the same oxide as a prism along x, its polygon in (y, z)
+    along_x.replace(along_x.find("box = 0 1um 0 0.6um 0.4um 0.6um"), 31, "prism = x 0 1um, 0 0.4um, 0.6um 0.4um, 0.6um 0.6um, 0 0.6um");
+    CHECK(io::mesh_digest(a.device.mesh()) == io::mesh_digest(must(along_x).device.mesh()));
+
+    const auto fails = [](const std::string& text, std::string_view message) {
+        const std::string m = failure(text);
+        CAPTURE(m);
+        CHECK(m.find(message) != std::string::npos);
+    };
+    std::string t = boxed;
+    fails(t.replace(t.find("layered = on\n"), 13, ""), "t.deck:3: domain is for a layered generate3d mesh (layered = on)");
+    t = boxed;
+    fails(t.replace(t.find("domain = 0 1um 0 0.6um 0 0.6um\n"), 31, "cuboid = 0 1um 0 0.6um 0 0.6um\n"),
+          "t.deck:4: 'cuboid' is for generate3d without layers: a layered one takes domain");
+    t = boxed;
+    fails(t.replace(t.find("domain = 0 1um 0 0.6um 0 0.6um\n"), 31, ""), "a layered generate3d mesh needs a domain");
+    t = boxed;  // a slanted oxide builds since slice 4 (SD6): a trapezoid along y, its polygon in (z, x)
+    t.replace(t.find("box = 0 1um 0 0.6um 0.4um 0.6um"), 31, "prism = y 0 0.6um, 0.4um 0.1um, 0.4um 0.9um, 0.6um 0.8um, 0.6um 0.2um");
+    CHECK(must(t).device.regions().size() == 2);
+    t = prism;
+    fails(t.replace(t.find("prism = z"), 9, "prism = w"), "t.deck:15: a prism is '<axis x|y|z> <from> <to>, <u v>, <u v>, ...'");
+    t = boxed;
+    fails(t.replace(t.find("patch gate = 0.3um 0 0.6um  0.7um 0.6um 0.6um"), 45, "patch gate = 0.3um 0.1um 0.3um  0.7um 0.5um 0.5um"),
+          "t.deck:5: [mesh] layered: a patch box selects no boundary facet");
+    t = boxed;
+    fails(t.replace(t.find("[region si]\nmaterial = silicon\n"), 30, "[region si]\nmaterial = silicon\nseed = 0 0 0\n"),
+          "a layered generate3d mesh takes box and prism in its regions");
+    fails(R"([mesh]
+type = tensor
+x = 0 1um
+[region si]
+material = silicon
+prism = z 0 1um, 0 0, 1um 0, 1um 1um
+[equilibrium]
+)", "t.deck:6: prism is for a layered generate3d mesh (layered = on)");
+}
+
+// Unit 26l (SE2): the reduced FinFET written as layers (decks/finfet_3d_reduced.deck's [mesh] and regions redrawn as
+// boxes); the complex's volumes and patch areas equal the extrusion's (the mesh test). Meshing takes about twenty
+// minutes in Release, so hidden; run it by name.
+TEST_CASE("deck build: the reduced FinFET as layered generate3d meshes and is certified (Unit 26l)", "[.benchmark][deck][layered3d]") {
+    std::ifstream in(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_reduced.deck", std::ios::binary);
+    REQUIRE(in);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto mesh_at = text.find("[mesh]"), mesh_end = text.find("[region buried_oxide]");
+    text.replace(mesh_at, mesh_end - mesh_at, R"([mesh]
+type = generate3d
+layered = on
+domain = 0 85nm 0 52nm 0 14nm
+patch source = 0 20nm 2nm  0 50nm 12nm
+patch drain = 85nm 20nm 2nm  85nm 50nm 12nm
+patch gate = 30nm 20nm 0  55nm 52nm 14nm
+patch substrate = 0 0 0  85nm 0 14nm
+max_size = 8nm
+interface_resolution = 0.08nm
+
+)");
+    for (const auto& [from, to] : std::vector<std::pair<std::string, std::string>>{
+             {"extrude = box 0:85nm\n", ""},
+             {"extrude = il hk 0:30nm\nextrude = il hk 55nm:85nm\n", "box = 0 30nm 20nm 52nm 0 14nm\nbox = 55nm 85nm 20nm 52nm 0 14nm\n"},
+             {"extrude = hk 30nm:55nm\n", "box = 30nm 55nm 20nm 52nm 0 14nm\n"},
+             {"extrude = il 30nm:55nm\n", "box = 30nm 55nm 20nm 50.5nm 1.5nm 12.5nm\n"},
+             {"extrude = fin 0:85nm\n", "box = 0 85nm 20nm 50nm 2nm 12nm\n"}}) {
+        const auto at = text.find(from);
+        REQUIRE(at != std::string::npos);
+        text.replace(at, from.size(), to);
+    }
+    const auto p = plan_of(text);
+    if (!p) FAIL(p.error().message);
+    CHECK(p->device.interface_certificate() != nullptr);
+    CHECK(p->device.contacts().size() == 4);
 }

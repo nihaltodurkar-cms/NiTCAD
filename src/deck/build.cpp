@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <limits>
 #include <map>
 #include <optional>
@@ -112,6 +113,7 @@ struct RegionSpec {
     const Section* section = nullptr;
     std::optional<device::Region> region;
     std::vector<const Entry*> boxes, polygons, seeds;
+    std::vector<const Entry*> prisms;    // Unit 26l (SD1): layered generate3d meshes
     std::vector<const Entry*> extrudes;  // Unit 53 (FD13): extrude3d meshes
 };
 
@@ -203,6 +205,7 @@ private:
     std::expected<void, base::Error> tensor_mesh(const Section& s, device::DeviceDescription& d);
     std::expected<void, base::Error> generated_2d(const Section& s);
     std::expected<void, base::Error> generated_3d(const Section& s);
+    std::expected<void, base::Error> layered_3d(const Section& s);  // Unit 26l (SD1)
     std::expected<void, base::Error> extruded_3d(const Section& s);
     // The meshing keys generate3d and extrude3d share; true when `e` was one of them.
     std::expected<bool, base::Error> option_3d(const Entry& e, mesh::MeshOptions3D& o) const;
@@ -321,6 +324,7 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         if (e.key == "polygon") { spec.polygons.push_back(&e); continue; }
         if (e.key == "seed") { spec.seeds.push_back(&e); continue; }
         if (e.key == "extrude") { spec.extrudes.push_back(&e); continue; }
+        if (e.key == "prism") { spec.prisms.push_back(&e); continue; }
         if (auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
             if (e.key == "band_to_band.direct_gap") {
                 NITCAD_DECK_TRY(v, flag(e));
@@ -616,12 +620,18 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
 }
 
 std::expected<void, base::Error> Builder::generated_3d(const Section& s) {
+    for (const Entry& e : s.entries) {
+        if (e.key != "layered") continue;
+        NITCAD_DECK_TRY(on, flag(e));
+        if (on) return layered_3d(s);
+    }
     mesh::Geometry3D g;
     mesh::MeshOptions3D o;
     std::vector<const Entry*> patches;
     bool cuboid = false;
     for (const Entry& e : s.entries) {
-        if (e.key == "type") continue;
+        if (e.key == "type" || e.key == "layered") continue;
+        if (e.key == "domain") return std::unexpected(at(e.line, "domain is for a layered generate3d mesh (layered = on)"));
         if (e.key == "vertex") {
             NITCAD_DECK_TRY(p, points(e, e.value, 3));
             if (p.size() != 1) return std::unexpected(at(e.line, "a vertex is one point"));
@@ -671,9 +681,9 @@ std::expected<void, base::Error> Builder::generated_3d(const Section& s) {
     }
     for (std::size_t r = 0; r < regions_.size(); ++r) {
         const RegionSpec& spec = regions_[r];
-        if (!spec.boxes.empty() || !spec.polygons.empty()) {
-            return std::unexpected(at((spec.boxes.empty() ? spec.polygons : spec.boxes).front()->line,
-                                      "a generate3d mesh takes seed in its regions"));
+        if (!spec.boxes.empty() || !spec.polygons.empty() || !spec.prisms.empty()) {
+            return std::unexpected(at((!spec.boxes.empty() ? spec.boxes : !spec.polygons.empty() ? spec.polygons : spec.prisms).front()->line,
+                                      "a generate3d mesh takes seed in its regions (box and prism with layered = on)"));
         }
         for (const Entry* e : spec.seeds) {
             NITCAD_DECK_TRY(p, points(*e, e->value, 3));
@@ -691,6 +701,115 @@ std::expected<void, base::Error> Builder::generated_3d(const Section& s) {
     generated_ = std::move(*m);
     return {};
 }
+
+// Unit 26l (SD1): a layered generate3d mesh. `[mesh]` gives the domain (x0 x1 y0 y1 z0 z1), the patch boxes
+// (`patch <name> = x0 y0 z0 x1 y1 z1`, as extrude3d's) and the 3D meshing keys; one region without solids is the
+// background, and every region `box` (x0 x1 y0 y1 z0 z1) and `prism` (<axis> <from> <to>, u v, ...) is painted in
+// deck order over what it covers; the kernel resolves the layers into the polyhedral complex (SD2).
+std::expected<void, base::Error> Builder::layered_3d(const Section& s) {
+    mesh::LayeredGeometry3D l;
+    mesh::MeshOptions3D o;
+    const Entry* domain = nullptr;
+    std::vector<const Entry*> patch_entries;
+    for (const Entry& e : s.entries) {
+        if (e.key == "type" || e.key == "layered") continue;
+        if (e.key == "domain") {
+            domain = &e;
+        } else if (e.key.starts_with("patch ")) {
+            const auto w = tokens(e.key);
+            if (w.size() != 2) return std::unexpected(at(e.line, "a layered generate3d patch is 'patch <name> = <x0 y0 z0 x1 y1 z1>'"));
+            NITCAD_DECK_TRY(b, lengths(e, e.value, 6));
+            if (b[0] > b[3] || b[1] > b[4] || b[2] > b[5]) return std::unexpected(at(e.line, "a box needs lo <= hi on each axis"));
+            l.patches.push_back({std::string(w[1]), {b[0], b[1], b[2]}, {b[3], b[4], b[5]}});
+            patch_entries.push_back(&e);
+        } else if (e.key == "cuboid" || e.key == "vertex" || e.key == "plane" || e.key.starts_with("face ")) {
+            return std::unexpected(at(e.line, "'" + e.key + "' is for generate3d without layers: a layered one takes domain"));
+        } else {
+            NITCAD_DECK_TRY(taken, option_3d(e, o));
+            if (!taken) return std::unexpected(unknown(e, s));
+        }
+    }
+    if (domain == nullptr) return std::unexpected(at(s.line, "a layered generate3d mesh needs a domain (x0 x1 y0 y1 z0 z1)"));
+    NITCAD_DECK_TRY(d, box(*domain, 3));
+    l.lo = {d.bounds[0], d.bounds[2], d.bounds[4]};
+    l.hi = {d.bounds[1], d.bounds[3], d.bounds[5]};
+    std::vector<std::pair<const Entry*, std::int32_t>> solids;
+    for (std::size_t r = 0; r < regions_.size(); ++r) {
+        const RegionSpec& spec = regions_[r];
+        if (!spec.seeds.empty() || !spec.polygons.empty()) {
+            return std::unexpected(at((spec.seeds.empty() ? spec.polygons : spec.seeds).front()->line,
+                                      "a layered generate3d mesh takes box and prism in its regions"));
+        }
+        if (spec.boxes.empty() && spec.prisms.empty()) {
+            if (l.background >= 0) return std::unexpected(at(spec.section->line, "two regions without a shape: only one may be the background"));
+            l.background = static_cast<std::int32_t>(r);
+        }
+        for (const Entry* e : spec.boxes) solids.emplace_back(e, static_cast<std::int32_t>(r));
+        for (const Entry* e : spec.prisms) solids.emplace_back(e, static_cast<std::int32_t>(r));
+    }
+    std::ranges::sort(solids, {}, [](const auto& p) { return p.first->line; });
+    for (const auto& [e, r] : solids) {
+        mesh::LayeredSolid v;
+        v.region = r;
+        if (e->key == "box") {
+            NITCAD_DECK_TRY(b, box(*e, 3));
+            v.kind = mesh::LayeredSolid::Kind::box;
+            v.lo = {b.bounds[0], b.bounds[2], b.bounds[4]};
+            v.hi = {b.bounds[1], b.bounds[3], b.bounds[5]};
+        } else {
+            // prism = <axis> <from> <to>, u v, u v, ...
+            const std::string_view text = e->value;
+            const std::size_t comma = text.find(',');
+            const auto head = tokens(text.substr(0, comma));
+            if (comma == std::string_view::npos || head.size() != 3 || (head[0] != "x" && head[0] != "y" && head[0] != "z")) {
+                return std::unexpected(at(e->line, "a prism is '<axis x|y|z> <from> <to>, <u v>, <u v>, ...'"));
+            }
+            v.kind = mesh::LayeredSolid::Kind::prism;
+            v.axis = head[0] == "x" ? 0 : head[0] == "y" ? 1 : 2;
+            NITCAD_DECK_TRY(from, lift(e->line, length(head[1])));
+            NITCAD_DECK_TRY(to, lift(e->line, length(head[2])));
+            v.from = from;
+            v.to = to;
+            NITCAD_DECK_TRY(p, points(*e, text.substr(comma + 1), 2));
+            v.polygon = std::move(p);
+        }
+        l.solids.push_back(std::move(v));
+    }
+    auto complex = mesh::layered_partition3d(l);
+    if (!complex) {
+        const auto& err = complex.error();
+        const bool of_patch = err.message.starts_with("a patch box");
+        const auto& list = of_patch ? patch_entries : std::vector<const Entry*>{};
+        int line = s.line;
+        if (err.context && err.context->index) {
+            const std::size_t k = *err.context->index;
+            if (of_patch && k < list.size()) line = list[k]->line;
+            else if (!of_patch && k < solids.size()) line = solids[k].first->line;
+        }
+        return std::unexpected(located(line, "[mesh] layered", std::move(complex.error())));
+    }
+    auto m = mesh::generate_mesh(*complex, o);
+    if (!m) {
+        // Unit 26l (SD5): the generator's interface and patch-edge rules name the facet they fail on; a layered
+        // deck says where it is (the facet's vertex centroid, cm), so the modeller can mark it.
+        auto err = std::move(m.error());
+        const std::string_view msg = err.message;
+        const bool of_facet = (msg.find("interface") != std::string_view::npos && !msg.starts_with("interface_resolution")) ||
+                              msg.starts_with("a patch edge") || msg.starts_with("a patch-edge vertex") || msg.starts_with("a domain-edge vertex");
+        if (of_facet && err.context && err.context->index && *err.context->index < complex->facets.size()) {
+            const auto& f = complex->facets[*err.context->index];
+            std::array<double, 3> c{};
+            for (const std::size_t v : f.vertices) {
+                for (std::size_t k = 0; k < 3; ++k) c[k] += complex->vertices[v][k] / static_cast<double>(f.vertices.size());
+            }
+            err.message += std::format(" near ({:.6g}, {:.6g}, {:.6g})", c[0], c[1], c[2]);
+        }
+        return std::unexpected(located(s.line, "[mesh] generate3d", std::move(err)));
+    }
+    generated_ = std::move(*m);
+    return {};
+}
+
 
 std::expected<bool, base::Error> Builder::option_3d(const Entry& e, mesh::MeshOptions3D& o) const {
     if (e.key == "max_size") {
@@ -988,6 +1107,11 @@ std::expected<void, base::Error> Builder::build_mesh(device::DeviceDescription& 
     if (type_ != MeshType::extrude3d) {
         for (const RegionSpec& g : regions_) {
             if (!g.extrudes.empty()) return std::unexpected(at(g.extrudes.front()->line, "extrude is for an extrude3d mesh"));
+        }
+    }
+    if (type_ != MeshType::generate3d) {
+        for (const RegionSpec& g : regions_) {
+            if (!g.prisms.empty()) return std::unexpected(at(g.prisms.front()->line, "prism is for a layered generate3d mesh (layered = on)"));
         }
     }
     std::expected<void, base::Error> made;

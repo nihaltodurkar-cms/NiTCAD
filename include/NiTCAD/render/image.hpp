@@ -89,6 +89,31 @@ struct ScreenPoint {
 };
 [[nodiscard]] ScreenPoint screen_position(const FieldScene& scene, int width, int height, const Float3& point);
 
+// The view draw() lays out for a FieldScene at this size, in double precision (Unit 26l, SD4: the modeller's
+// picking inverts it): the camera's unit axes (right, up, forward: into the screen), the fitted centre of the
+// bounds, the view's offset (cx, cy) and half extents in um on the view plane through the centre, the view
+// rectangle in pixels, and for perspective the eye, the tangent of half the field of view and the eye's distance
+// to that plane.
+struct ViewFrame {
+    std::array<double, 3> right{}, up{}, forward{}, centre{};
+    double cx = 0.0, cy = 0.0, half_w = 1.0, half_h = 1.0;
+    float left = 0.0f, top = 0.0f, right_px = 1.0f, bottom_px = 1.0f;
+    double radius = 1.0;  // the bounds' radius about the centre
+    bool perspective = false;
+    std::array<double, 3> eye{};
+    double tan_half = 0.0, depth = 0.0;
+};
+[[nodiscard]] ViewFrame view_frame(const FieldScene& scene, int width, int height);
+
+// The ray through a pixel (x right, y down) of the scene drawn at this size: from the eye (perspective) or from in
+// front of the bounds (orthographic), its direction a unit vector into the screen, um.
+struct ScreenRay {
+    std::array<double, 3> origin{}, direction{};
+};
+[[nodiscard]] ScreenRay screen_ray(const FieldScene& scene, int width, int height, double x, double y);
+// The length in um one pixel spans at a world point (perspective: less nearer the eye).
+[[nodiscard]] double um_per_pixel(const FieldScene& scene, int width, int height, const std::array<double, 3>& point);
+
 // The enhanced look's lights for a FieldScene drawn into a view of this aspect (width / height)
 // (Unit 26f, KD2): unit vectors toward the key and fill lights and the camera's up, and the eye, a
 // unit vector toward the viewer (orthographic) or the camera's position in um (perspective). All zero,

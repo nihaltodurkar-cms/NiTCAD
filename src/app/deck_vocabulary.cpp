@@ -48,10 +48,10 @@ constexpr std::array<KeyInfo, 28> mesh_keys{{
     {"z", 0, false, "<axis>", "tensor: z nodes", {}, {}, "tensor"},
     {"straddle", 1, true, "<position> <spacing>", "tensor: a material interface on axis x, y or z", {}, {}, "tensor"},
     {"patch", 1, true, "<x y>, <x y>", "generate2d: a boundary patch", {}, {}, "generate2d"},
-    {"layered", 0, false, "off", "generate2d: region box and polygon shapes painted in deck order (Unit 26k)", on_off, {},
-     "generate2d"},
-    {"domain", 0, false, "<x0 x1 y0 y1>", "generate2d layered: the domain (default: the shapes' bounds)", {}, {}, "generate2d"},
-    {"patch", 1, true, "<x0 y0 z0 x1 y1 z1>", "extrude3d: the boundary facets in the box", {}, {}, "extrude3d"},
+    {"layered", 0, false, "off", "generate2d, generate3d: region shapes (box, polygon, prism) painted in deck order (Units 26k, 26l)", on_off, {},
+     "generate2d generate3d"},
+    {"domain", 0, false, "<x0 x1 y0 y1 [z0 z1]>", "layered: the domain (2D default: the shapes' bounds; 3D required)", {}, {}, "generate2d generate3d"},
+    {"patch", 1, true, "<x0 y0 z0 x1 y1 z1>", "extrude3d, layered generate3d: the boundary facets in the box", {}, {}, "extrude3d generate3d"},
     {"patch", 2, true, "<x y z>, ...", "generate3d: patch <face> <name>, a polygon tiling the face", {}, {},
      "generate3d"},
     {"max_size", 0, false, "<length>", "generated meshes: largest element size", {}, {}, "generate2d generate3d extrude3d"},
@@ -81,10 +81,11 @@ constexpr std::array<KeyInfo, 28> mesh_keys{{
     {"path", 0, false, "<file>", "file: a mesh file", {}, {}, "file"},
 }};
 
-constexpr std::array<KeyInfo, 6> region_keys{{
+constexpr std::array<KeyInfo, 7> region_keys{{
     {"material", 0, false, "silicon", "the region's material (algaas takes its Al fraction)", materials, {}, {}},
     {"box", 0, true, "<lo hi> per dimension", "tensor meshes: the region's box", {}, {}, {}},
     {"polygon", 0, true, "<x y>, ...", "generate2d: the region's polygon", {}, {}, {}},
+    {"prism", 0, true, "<axis> <from> <to>, <u v>, ...", "layered generate3d: a polygon across the axis, extruded from..to", {}, {}, {}},
     {"seed", 0, true, "<x y z>", "generate3d with planes: a point inside the region", {}, {}, {}},
     {"extrude", 0, true, "<cells> <t_lo>:<t_hi>", "extrude3d: cells filled in the sections between two stations", {}, {}, {}},
     {"band_to_band.direct_gap", 0, false, "off", "direct-gap band-to-band tunnelling", on_off, {}, {}},
