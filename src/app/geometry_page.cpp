@@ -26,9 +26,7 @@ using namespace geo;
 
 constexpr const wchar_t* canvas_class = L"NiTCADGeometryCanvas";
 constexpr const wchar_t* panel_class = L"NiTCADGeometryPanel";
-constexpr int id_strip = 1, id_canvas = 2, id_tool_first = 10, id_fit = 20, id_mesh = 21;
-constexpr std::array<const wchar_t*, 6> tool_texts{L"Select (V)", L"Rectangle (R)", L"Polygon (P)", L"Contact (C)",
-                                                   L"Pan (H)", L"Measure (M)"};
+constexpr int id_strip = 1, id_canvas = 2, id_bar = 100;
 
 template <class T>
 void release(T*& p) {
@@ -169,15 +167,9 @@ GeometryPage::GeometryPage(HWND parent, Host& host, int id, int inspector_id, bo
                              nullptr);
     SetWindowLongPtrW(strip_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     SetWindowLongPtrW(strip_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(panel_proc));
-    for (std::size_t k = 0; k < tool_texts.size(); ++k) {
-        tool_buttons_.push_back(make(L"BUTTON", tool_texts[k], WS_TABSTOP | BS_AUTORADIOBUTTON | BS_PUSHLIKE | (k == 0 ? WS_GROUP : 0),
-                                     strip_, id_tool_first + static_cast<int>(k)));
-    }
-    tool_buttons_.push_back(make(L"BUTTON", L"Fit (F)", WS_TABSTOP | WS_GROUP | BS_PUSHBUTTON, strip_, id_fit));
-    mesh_button_ = make(L"BUTTON", L"Mesh preview", WS_TABSTOP | BS_AUTOCHECKBOX | BS_PUSHLIKE, strip_, id_mesh);
-    tool_buttons_.push_back(mesh_button_);
-    canvas_ = CreateWindowExW(0, canvas_class, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, panel_,
+    canvas_ = CreateWindowExW(0, canvas_class, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, 0, 0, 10, 10, panel_,
                               reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_canvas)), GetModuleHandleW(nullptr), this);
+    bar_ = std::make_unique<ModellerBar>(strip_, panel_, id_bar, false, panel_proc, this);
 
     // The Geometry section, in the inspector's place.
     inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL, 0, 0, 10, 10,
@@ -251,7 +243,7 @@ void GeometryPage::set_dpi(int dpi, HFONT font, HFONT bold) {
     font_ = font;
     bold_ = bold;
     view_.dpi = dpi;
-    for (HWND h : tool_buttons_) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    bar_->set_font(font, dpi);
     for (HWND h : controls_) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     SendMessageW(control(c_heading), WM_SETFONT, reinterpret_cast<WPARAM>(bold), TRUE);
     release(text_);
@@ -266,14 +258,11 @@ void GeometryPage::layout() {
     GetClientRect(panel_, &r);
     const int pad = MulDiv(4, dpi_, 96), bh = MulDiv(24, dpi_, 96);
     MoveWindow(strip_, 0, 0, r.right, bh + 2 * pad, TRUE);
-    int x = pad;
-    for (std::size_t k = 0; k < tool_buttons_.size(); ++k) {
-        // The tools, Fit, then Mesh preview.
-        const int w = MulDiv(k < tool_texts.size() ? 92 : k == tool_texts.size() ? 64 : 108, dpi_, 96);
-        MoveWindow(tool_buttons_[k], x, pad, w, bh, TRUE);
-        x += w + (k + 1 == tool_texts.size() ? 3 * pad : pad / 2);
-    }
+    bar_->layout_strip(r.right, pad, bh);
+    canvas_top_ = bh + 2 * pad;
     MoveWindow(canvas_, 0, bh + 2 * pad, r.right, std::max<int>(1, r.bottom - bh - 2 * pad), TRUE);
+    bar_->raise();
+    place_bar();
     if (target_) {
         RECT c{};
         GetClientRect(canvas_, &c);
@@ -410,7 +399,7 @@ void GeometryPage::set_mesh(const std::string& text, MeshOverlay mesh) {
 
 void GeometryPage::set_mesh_preview(bool on) {
     mesh_preview_ = on;
-    if (mesh_button_) SendMessageW(mesh_button_, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+    bar_->set_mesh(on);
     invalidate();
 }
 
@@ -536,13 +525,195 @@ void GeometryPage::set_tool(Tool t) {
 }
 
 void GeometryPage::update_tool_buttons() {
-    for (std::size_t k = 0; k < tool_texts.size(); ++k) {
-        SendMessageW(tool_buttons_[k], BM_SETCHECK, static_cast<int>(k) == static_cast<int>(tool_) ? BST_CHECKED : BST_UNCHECKED, 0);
+    // A tool armed by its key opens a group that holds it (Pan and Measure are in none: the group stays).
+    const auto in = [&](modeller::Group g) {
+        return std::ranges::any_of(modeller::tools(g), [&](const modeller::ToolEntry& e) {
+            return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_);
+        });
+    };
+    if (!in(bar_->group())) {
+        for (int g = 0; g < modeller::group_count; ++g) {
+            if (in(static_cast<modeller::Group>(g))) {
+                bar_->set_group(static_cast<modeller::Group>(g));
+                break;
+            }
+        }
     }
+    bar_->set_tool(static_cast<int>(tool_));
+    bar_->set_measure(tool_ == Tool::measure);
+}
+
+// --- Unit 26m slice 0: the camera lock, the floating bar, the deck line and the chip (MT1-MT3) ---------------------
+
+void GeometryPage::set_camera_fixed(bool fixed) {
+    camera_fixed_ = fixed;
+    bar_->set_camera_fixed(fixed);
+    if (fixed && drag_ == Drag::pan) cancel();
+}
+
+void GeometryPage::set_group(modeller::Group g) {
+    bar_->set_group(g);
+    const auto list = modeller::tools(g);
+    const bool has = std::ranges::any_of(list, [&](const modeller::ToolEntry& e) { return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_); });
+    if (!has && !list.empty() && list.front().action == modeller::Action::tool) {
+        set_tool(static_cast<Tool>(list.front().tool));
+    } else {
+        bar_->set_tool(static_cast<int>(tool_));
+    }
+    place_bar();
+}
+
+std::optional<modeller::Box> GeometryPage::selection_bounds() const {
+    std::optional<Rect> all;
+    const auto add = [&](Rect r) {
+        if (!all) all = r;
+        else all = Rect{{std::min(all->lo.x, r.lo.x), std::min(all->lo.y, r.lo.y)}, {std::max(all->hi.x, r.hi.x), std::max(all->hi.y, r.hi.y)}};
+    };
+    for (const ShapeRef s : selection_) {
+        if (s.region < 0 || s.region >= static_cast<int>(g_.regions.size())) continue;
+        const auto& shapes = g_.regions[static_cast<std::size_t>(s.region)].shapes;
+        if (s.shape >= 0 && s.shape < static_cast<int>(shapes.size())) add(shapes[static_cast<std::size_t>(s.shape)].bounds());
+        else if (s.shape < 0) add(g_.domain);
+    }
+    if (contact_ >= 0 && contact_ < static_cast<int>(g_.contacts.size())) {
+        const Contact& c = g_.contacts[static_cast<std::size_t>(contact_)];
+        add(normalized(c.a, c.b));
+    }
+    if (!all) return std::nullopt;
+    return modeller::Box{view_.sx(all->lo.x), view_.sy(all->hi.y), view_.sx(all->hi.x), view_.sy(all->lo.y)};
+}
+
+void GeometryPage::place_bar() {
+    RECT c{};
+    GetClientRect(canvas_, &c);
+    const double top = canvas_top_, ruler = ruler_px();
+    const modeller::Box viewport{ruler, top + ruler, static_cast<double>(c.right), top + c.bottom};
+    std::optional<modeller::Box> s = selection_bounds();
+    if (s) *s = {s->left, s->top + top, s->right, s->bottom + top};
+    bar_->place(viewport, s);
+}
+
+modeller::Placement GeometryPage::bar_placement() const {
+    modeller::Placement p = bar_->placement();
+    p.bar.top -= canvas_top_;
+    p.bar.bottom -= canvas_top_;
+    return p;
+}
+
+std::string GeometryPage::fresh_contact() const {
+    for (int n = 1;; ++n) {
+        std::string name = "contact_" + std::to_string(n);
+        // Not a contact's name, nor a patch's left in the deck (a renamed contact keeps its patch).
+        if (std::ranges::none_of(g_.contacts, [&](const Contact& c) { return c.name == name; }) &&
+            text_seen_.find("patch " + name + " ") == std::string::npos) {
+            return name;
+        }
+    }
+}
+
+std::optional<Geometry> GeometryPage::pending() const {
+    switch (drag_) {
+    case Drag::move:
+    case Drag::handle:
+    case Drag::vertex:
+    case Drag::domain:
+    case Drag::contact_end: return g_;
+    case Drag::rectangle: {
+        Geometry next = g_;
+        if (add_box(next, normalized(anchor_, at_), material_) < 0) return std::nullopt;
+        return next;
+    }
+    case Drag::contact: {
+        Geometry next = g_;
+        if (add_contact(next, fresh_contact(), "ohmic", anchor_, at_) < 0) return std::nullopt;
+        return next;
+    }
+    default: return std::nullopt;
+    }
+}
+
+std::string GeometryPage::chip_value() const {
+    using modeller::chip_length;
+    const auto offset = [](Coord dx, Coord dy) {
+        std::string out;
+        if (dx != 0) out = "\xCE\x94x " + chip_length(dx);
+        if (dy != 0) out += (out.empty() ? "" : ", ") + std::string("\xCE\x94y ") + chip_length(dy);
+        return out.empty() ? std::string("\xCE\x94 0 \xC2\xB5m") : out;
+    };
+    std::string v;
+    switch (drag_) {
+    case Drag::move:
+    case Drag::vertex:
+    case Drag::contact_end: v = offset(drag_d_.x, drag_d_.y); break;
+    case Drag::handle:
+    case Drag::domain: {
+        Rect r = g_.domain;
+        if (drag_ == Drag::handle && selection_.size() == 1 && selection_[0].shape >= 0) {
+            r = g_.regions[static_cast<std::size_t>(selection_[0].region)].shapes[static_cast<std::size_t>(selection_[0].shape)].bounds();
+        }
+        v = chip_length(r.hi.x - r.lo.x) + " \xC3\x97 " + chip_length(r.hi.y - r.lo.y);
+        break;
+    }
+    case Drag::rectangle: {
+        const Rect r = normalized(anchor_, at_);
+        v = chip_length(r.hi.x - r.lo.x) + " \xC3\x97 " + chip_length(r.hi.y - r.lo.y);
+        break;
+    }
+    case Drag::contact: v = chip_length(std::abs(at_.x - anchor_.x) + std::abs(at_.y - anchor_.y)); break;
+    case Drag::measure: {
+        const double dx = static_cast<double>(at_.x - anchor_.x), dy = static_cast<double>(at_.y - anchor_.y);
+        v = std::format("{:.6g} \xC2\xB5m", std::sqrt(dx * dx + dy * dy) / static_cast<double>(per_um));
+        break;
+    }
+    default: return {};
+    }
+    if (!entry_.empty()) v += "   [" + entry_.text() + (entry_.value() ? "]" : "?]");
+    return v;
+}
+
+void GeometryPage::after_drag_step(double x, double y) {
+    if (const auto next = pending()) {
+        auto out = write_geometry(text_seen_, *next);
+        live_line_ = out ? modeller::deck_line(text_seen_, *out) : out.error();
+        host_.geometry_status(live_line_);
+    } else {
+        live_line_.clear();
+    }
+    const int off = MulDiv(16, dpi_, 96);
+    bar_->chip(static_cast<int>(x) + off, static_cast<int>(y) + canvas_top_ + off, chip_value());
+}
+
+void GeometryPage::end_drag_ui() {
+    entry_.clear();
+    typed_axis_ = -1;
+    live_line_.clear();
+    bar_->chip(0, 0, "");
+}
+
+Coord GeometryPage::typed_or(Coord dragged) const {
+    const auto v = entry_.value();
+    if (!v) return dragged;
+    return *v >= 0 && dragged < 0 ? -*v : *v;
+}
+
+bool GeometryPage::on_char(wchar_t c) {
+    if (drag_ != Drag::move && drag_ != Drag::rectangle) return false;
+    if (c == L'\b') {
+        if (!entry_.backspace()) return true;
+    } else if (!entry_.type(c)) {
+        return false;
+    }
+    if (typed_axis_ < 0) {
+        const Pt d = drag_ == Drag::move ? drag_d_ : Pt{at_.x - anchor_.x, at_.y - anchor_.y};
+        typed_axis_ = std::abs(d.y) > std::abs(d.x) ? 1 : 0;
+    }
+    on_move(last_x_, last_y_, false);
+    return true;
 }
 
 void GeometryPage::cancel() {
     if (drag_ != Drag::none && drag_ != Drag::measure) g_ = drag_ == Drag::rubber || drag_ == Drag::pan ? g_ : g_start_;
+    end_drag_ui();
     drag_ = Drag::none;
     start_ = Start::none;
     polygon_.clear();
@@ -773,9 +944,13 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
         SetCapture(canvas_);
     };
     if (space_ || tool_ == Tool::pan) {
-        begin(Drag::pan);
+        // MT1: the Pan tool and Space+drag move the view only while the camera is free.
+        if (!camera_fixed_) begin(Drag::pan);
         return;
     }
+    entry_.clear();
+    typed_axis_ = -1;
+    drag_d_ = {};
     switch (tool_) {
     case Tool::rectangle:
         anchor_ = at_ = snapped(x, y, false);
@@ -824,6 +999,28 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
         }
     }
     const Hit hit = hit_test(g_, view_, x, y, one);
+    // MT2: what is picked opens its group.
+    {
+        modeller::Picked k = modeller::Picked::nothing;
+        if (hit.kind == HitKind::vertex || hit.kind == HitKind::edge) k = hit.shape.shape >= 0 ? modeller::Picked::edge : k;
+        else if (hit.kind == HitKind::contact || hit.kind == HitKind::contact_end) k = modeller::Picked::contact;
+        else if (hit.kind == HitKind::handle || (hit.kind == HitKind::shape && hit.shape.shape >= 0)) k = modeller::Picked::solid;
+        const modeller::Group g = modeller::group_for(k);
+        if (g != bar_->group()) {
+            bar_->set_group(g);
+            bar_->set_tool(static_cast<int>(tool_));
+        }
+    }
+    // MT1, MQ3: empty background (or a region's background) pans a free camera; Shift keeps the rubber band.
+    const bool background = hit.kind == HitKind::none || ((hit.kind == HitKind::shape || hit.kind == HitKind::edge) && hit.shape.shape < 0);
+    if (modeller::navigation(camera_fixed_, false, {modeller::Button::left, background, shift, true, false}) == modeller::Nav::pan) {
+        contact_ = -1;
+        if (!ctrl) selection_ = hit.kind == HitKind::none ? std::vector<ShapeRef>{} : std::vector<ShapeRef>{hit.shape};
+        update_inspector();
+        begin(Drag::pan);
+        invalidate();
+        return;
+    }
     switch (hit.kind) {
     case HitKind::handle:
         drag_index_ = hit.index;
@@ -929,7 +1126,10 @@ void GeometryPage::on_move(double x, double y, bool shift) {
     case Drag::move: {
         const Pt p = snapped(x, y, shift, one);
         g_ = g_start_;
-        for (const ShapeRef s : selection_) move_shape(g_, s, p.x - anchor_.x, p.y - anchor_.y);
+        drag_d_ = {p.x - anchor_.x, p.y - anchor_.y};
+        if (typed_axis_ == 0) drag_d_.x = typed_or(drag_d_.x);
+        if (typed_axis_ == 1) drag_d_.y = typed_or(drag_d_.y);
+        for (const ShapeRef s : selection_) move_shape(g_, s, drag_d_.x, drag_d_.y);
         break;
     }
     case Drag::handle: {
@@ -944,6 +1144,7 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         if (!one) break;
         const Pt p = snapped(x, y, shift, one);
         g_ = g_start_;
+        drag_d_ = {p.x - anchor_.x, p.y - anchor_.y};
         set_vertex(g_, *one, drag_index_, p, !alone_);
         break;
     }
@@ -960,6 +1161,7 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         const Rect& d = g_.domain;
         if (c.a.x == c.b.x) p = {c.a.x, std::clamp(p.y, d.lo.y, d.hi.y)};
         else p = {std::clamp(p.x, d.lo.x, d.hi.x), c.a.y};
+        drag_d_ = {p.x - anchor_.x, p.y - anchor_.y};
         (drag_index_ == 0 ? c.a : c.b) = p;
         set_contact(g_, contact_, c.a, c.b);
         break;
@@ -978,6 +1180,10 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         break;
     }
     case Drag::rectangle:
+        at_ = snapped(x, y, shift);
+        if (typed_axis_ == 0) at_.x = anchor_.x + typed_or(at_.x - anchor_.x);
+        if (typed_axis_ == 1) at_.y = anchor_.y + typed_or(at_.y - anchor_.y);
+        break;
     case Drag::measure: at_ = snapped(x, y, shift); break;
     }
     invalidate();
@@ -1003,6 +1209,7 @@ void GeometryPage::on_up(double x, double y, bool shift) {
     if (start_ == Start::height) return;  // the click's own release
     on_move(x, y, shift);
     const Drag d = drag_;
+    end_drag_ui();
     drag_ = Drag::none;
     if (GetCapture() == canvas_) ReleaseCapture();
     switch (d) {
@@ -1067,7 +1274,13 @@ void GeometryPage::on_up(double x, double y, bool shift) {
 
 bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
     if (ctrl) return false;
+    // MT3: while a drag takes a typed value, letters and digits are its (WM_CHAR), not the tools' keys.
+    if ((drag_ == Drag::move || drag_ == Drag::rectangle) && ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') ||
+                                                          (key >= VK_NUMPAD0 && key <= VK_DIVIDE) || key == VK_OEM_PERIOD || key == VK_OEM_MINUS || key == VK_BACK)) {
+        return true;
+    }
     switch (key) {
+    case 'L': set_camera_fixed(!camera_fixed_); return true;
     case 'V': set_tool(Tool::select); return true;
     case 'R': set_tool(Tool::rectangle); return true;
     case 'P': set_tool(Tool::polygon); return true;
@@ -1086,6 +1299,10 @@ bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
         cancel();
         return true;
     case VK_RETURN: {
+        if (drag_ != Drag::none && drag_ != Drag::pan && drag_ != Drag::rubber) {  // MT3: Enter applies the drag as it stands
+            on_up(last_x_, last_y_, false);
+            return true;
+        }
         if (tool_ != Tool::polygon || polygon_.size() < 3) return true;
         std::vector<Pt> p = polygon_;
         polygon_.clear();
@@ -1433,6 +1650,7 @@ double GeometryPage::render() {
     const HRESULT hr = target_->EndDraw();
     if (hr == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) release_target();
     ValidateRect(canvas_, nullptr);
+    place_bar();
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -1446,19 +1664,23 @@ LRESULT CALLBACK GeometryPage::panel_proc(HWND hwnd, UINT message, WPARAM w, LPA
             return 0;
         }
         if (message == WM_COMMAND && HIWORD(w) == BN_CLICKED) {
-            const int id = LOWORD(w);
-            if (id >= id_tool_first && id < id_tool_first + static_cast<int>(tool_texts.size())) {
-                self->set_tool(static_cast<Tool>(id - id_tool_first));
-                SetFocus(self->canvas_);
-                return 0;
-            }
-            if (id == id_fit) {
-                self->fit();
-                SetFocus(self->canvas_);
-                return 0;
-            }
-            if (id == id_mesh) {
-                self->set_mesh_preview(SendMessageW(self->mesh_button_, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            if (const auto c = self->bar_->command(LOWORD(w))) {
+                using Kind = ModellerBar::Command::Kind;
+                switch (c->kind) {
+                case Kind::group: self->set_group(static_cast<modeller::Group>(c->index)); break;
+                case Kind::tool: self->set_tool(static_cast<Tool>(c->index)); break;
+                case Kind::duplicate: self->duplicate(); break;
+                case Kind::corner:
+                    switch (c->index) {
+                    case ModellerBar::camera: self->set_camera_fixed(!self->camera_fixed_); break;
+                    case ModellerBar::reset:
+                    case ModellerBar::fit: self->fit(); break;
+                    case ModellerBar::measure: self->set_tool(self->tool_ == Tool::measure ? Tool::select : Tool::measure); break;
+                    case ModellerBar::mesh: self->set_mesh_preview(!self->mesh_preview_); break;
+                    default: break;
+                    }
+                    break;
+                }
                 SetFocus(self->canvas_);
                 return 0;
             }
@@ -1520,7 +1742,10 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         return 0;
     case WM_LBUTTONDOWN: on_down(x, y, shift, ctrl, false); return 0;
     case WM_LBUTTONDBLCLK: on_down(x, y, shift, ctrl, true); return 0;
-    case WM_MOUSEMOVE: on_move(x, y, shift); return 0;
+    case WM_MOUSEMOVE:
+        on_move(x, y, shift);
+        after_drag_step(x, y);
+        return 0;
     case WM_LBUTTONUP:
         if (start_ != Start::none || (drag_ != Drag::none && drag_ != Drag::pan)) on_up(x, y, shift);
         else if (drag_ == Drag::pan) {
@@ -1530,6 +1755,7 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         return 0;
     case WM_MBUTTONDOWN:
         SetFocus(canvas_);
+        if (modeller::navigation(camera_fixed_, false, {modeller::Button::middle}) == modeller::Nav::none) return 0;
         last_x_ = x;
         last_y_ = y;
         drag_ = Drag::pan;
@@ -1542,6 +1768,7 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         }
         return 0;
     case WM_MOUSEWHEEL: {
+        if (!modeller::wheel_zooms(camera_fixed_)) return 0;
         POINT p{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
         ScreenToClient(canvas_, &p);
         const double f = std::pow(1.2, GET_WHEEL_DELTA_WPARAM(w) / 120.0);
@@ -1563,7 +1790,9 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
     case WM_KEYUP:
         if (w == VK_SPACE) space_ = false;
         return 0;
-    case WM_CHAR: return 0;
+    case WM_CHAR:
+        if (on_char(static_cast<wchar_t>(w))) after_drag_step(last_x_, last_y_);
+        return 0;
     case WM_SETCURSOR:
         if (LOWORD(l) == HTCLIENT) {
             SetCursor(LoadCursorW(nullptr, tool_ == Tool::select ? IDC_ARROW : tool_ == Tool::pan || space_ ? IDC_SIZEALL : IDC_CROSS));

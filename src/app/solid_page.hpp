@@ -17,6 +17,10 @@
 // - Every edit goes to the deck at once by minimal edits; undo and redo step through the deck texts the page wrote.
 //   An extrude3d deck is shown and selected but not edited until Convert (SQ5) makes it layered.
 //
+// - Unit 26m slice 0 (MT1-MT3): the fixed tool row is a group switcher; the armed group's tools float beside the
+//   selection; Camera free / fixed (L) decides whether the mouse moves the view (modeller.hpp); Reset view; the status
+//   bar shows the deck line a drag will write, the chip at the cursor its value, typed digits setting it exactly.
+//
 // The tests drive the view by its messages (SE8; no screen automation).
 #pragma once
 
@@ -31,6 +35,9 @@
 #include "NiTCAD/app/solid.hpp"
 #include "NiTCAD/app/solid_view.hpp"
 #include "NiTCAD/render/image.hpp"
+#include "modeller_bar.hpp"
+
+#include <memory>
 
 namespace NiTCAD::app {
 
@@ -78,6 +85,20 @@ public:
     bool convert();  // an extrude3d deck made layered (SQ5)
     bool select_region(const std::string& name);
     bool commit(int control);
+
+    // --- Unit 26m slice 0 (MT1-MT3) ---
+    void set_camera_fixed(bool fixed);
+    [[nodiscard]] bool camera_fixed() const noexcept { return camera_fixed_; }
+    void reset_view();  // the camera the page opened with
+    void set_group(modeller::Group g);
+    [[nodiscard]] modeller::Group group() const noexcept { return bar_->group(); }
+    [[nodiscard]] const ModellerBar& bar() const noexcept { return *bar_; }
+    // The floating bar's place over the canvas (canvas pixels), and the selection's screen bounds it was put beside.
+    [[nodiscard]] modeller::Placement bar_placement() const;
+    [[nodiscard]] std::optional<modeller::Box> selection_bounds() const;
+    [[nodiscard]] const std::string& live_line() const noexcept { return live_line_; }  // "" when no drag
+    [[nodiscard]] std::string chip() const { return bar_->chip_text(); }
+    [[nodiscard]] const modeller::Entry& typed() const noexcept { return entry_; }
 
     // State, for the tests.
     [[nodiscard]] const solid::Model& model() const noexcept { return m_; }
@@ -149,7 +170,6 @@ private:
 
     Host& host_;
     HWND panel_ = nullptr, strip_ = nullptr, canvas_ = nullptr, inspector_ = nullptr;
-    std::vector<HWND> tool_buttons_;
     std::vector<HWND> controls_;
     int inspector_id_ = 0;
     int dpi_ = 96;
@@ -193,8 +213,26 @@ private:
     std::vector<solid::Problem> problems_;
     std::vector<solid::V3> mesh_;
     bool mesh_preview_ = false;
-    HWND mesh_button_ = nullptr;
     void locate_problems();
+
+    // Unit 26m slice 0.
+    std::unique_ptr<ModellerBar> bar_;
+    bool camera_fixed_ = false;  // MQ2: free on open
+    render::Camera start_camera_;
+    modeller::Entry entry_;
+    int typed_axis_ = -1;         // a two-axis drag's axis the typed value sets
+    solid::P3 drag_d_{};          // the drag's offset now (move, plane, axis, vertex)
+    solid::Coord drag_s_ = 0;     // a face's offset now
+    std::string live_line_;
+    int canvas_top_ = 0;
+    void after_drag_step(double x, double y);  // the deck line and the chip
+    [[nodiscard]] std::optional<solid::Model> pending() const;
+    [[nodiscard]] std::string chip_value() const;
+    bool on_char(wchar_t c);
+    void apply_drag();  // Enter: the drag ended as it stands
+    void finish_height();
+    void place_bar();
+    void end_drag_ui();
 };
 
 }  // namespace NiTCAD::app

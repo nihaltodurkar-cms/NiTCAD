@@ -1,0 +1,584 @@
+// Unit 26m slice 0 (DECISIONS.md MT1-MT3), driven by window messages (no screen automation): the camera lock in the 3D
+// modeller and the 2D editor (MC2), the floating bar's place and the groups picks open (MC3), the deck line shown
+// during a drag against the line the edit writes, and typed values (MC4), the cost of the bar and the deck line
+// with 100 solids (MC9).
+#include <catch2/catch_test_macros.hpp>
+
+#include "main_window.hpp"
+#include "fixtures.hpp"
+
+#include <windows.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <format>
+#include <functional>
+#include <optional>
+#include <tuple>
+#include <fstream>
+#include <string>
+#include <vector>
+
+#include "NiTCAD/app/modeller.hpp"
+#include "NiTCAD/app/solid.hpp"
+#include "NiTCAD/app/solid_view.hpp"
+#include "win32.hpp"
+
+using namespace NiTCAD;
+using namespace NiTCAD::app;
+
+namespace {
+
+void pump() {
+    MSG m;
+    while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+}
+
+std::unique_ptr<MainWindow> window() {
+    app::WindowOptions o;
+    o.adapter = render::Adapter::warp;
+    o.show = false;
+    o.quit_on_close = false;
+    auto w = MainWindow::create(o);
+    REQUIRE(w);
+    return w;
+}
+
+std::filesystem::path write(const std::string& name, const std::string& text) {
+    const auto dir = app_test::scratch("modeller_window_" + name);
+    const auto p = dir / (name + ".deck");
+    std::ofstream(p, std::ios::binary) << text;
+    return p;
+}
+
+bool has(const std::string& text, const std::string& what) { return text.find(what) != std::string::npos; }
+
+const std::string mos = R"([mesh]
+type = generate3d
+layered = on
+domain = 0 1um 0 0.6um 0 0.6um
+patch gate = 0.3um 0 0.6um  0.7um 0.6um 0.6um
+patch body = 0 0 0  1um 0.6um 0
+max_size = 0.15um
+interface_resolution = 0.01um
+
+[region si]
+material = silicon
+
+[region ox]
+material = sio2
+box = 0 1um 0 0.6um 0.4um 0.6um
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[contact gate]
+kind = electrode
+patch = gate
+electrode = metal
+work_function = 4.4
+
+[equilibrium]
+)";
+
+const std::string layered2d = R"([mesh]
+type = generate2d
+layered = on
+domain = 0 2um 0 1um
+patch source = 0 0, 0 0.6um
+max_size = 0.25um
+interface_resolution = 20nm
+
+[region p]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 2um 0.8um 1um
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact source]
+kind = ohmic
+patch = source
+
+[equilibrium]
+)";
+
+LPARAM lp(double x, double y) { return MAKELPARAM(static_cast<int>(std::lround(x)), static_cast<int>(std::lround(y))); }
+void send(HWND h, UINT m, WPARAM w, double x, double y) { SendMessageW(h, m, w, lp(x, y)); }
+void wheel(HWND canvas, double x, double y, int delta) {
+    POINT p{static_cast<LONG>(x), static_cast<LONG>(y)};
+    ClientToScreen(canvas, &p);
+    SendMessageW(canvas, WM_MOUSEWHEEL, MAKEWPARAM(0, delta), MAKELPARAM(p.x, p.y));
+}
+void type(HWND canvas, const std::wstring& s) {
+    for (const wchar_t c : s) SendMessageW(canvas, WM_CHAR, c, 0);
+}
+
+bool same(const render::Camera& a, const render::Camera& b) {
+    return std::memcmp(&a.target, &b.target, sizeof a.target) == 0 && std::memcmp(&a.azimuth_deg, &b.azimuth_deg, sizeof(float)) == 0 &&
+           std::memcmp(&a.elevation_deg, &b.elevation_deg, sizeof(float)) == 0 && std::memcmp(&a.extent_um, &b.extent_um, sizeof(float)) == 0 &&
+           a.projection == b.projection && std::memcmp(&a.zoom, &b.zoom, sizeof(float)) == 0 && std::memcmp(&a.pan, &b.pan, sizeof a.pan) == 0;
+}
+
+// A pixel of the canvas where the pick finds `want` (scanning a grid), or none.
+std::optional<std::array<double, 2>> find_pick(const SolidPage& page, const std::function<bool(const solid::Pick&)>& want) {
+    RECT c{};
+    GetClientRect(page.canvas(), &c);
+    for (int y = 2; y < c.bottom; y += 3) {
+        for (int x = 2; x < c.right; x += 3) {
+            if (want(solid::pick(page.model(), page.view(), x, y, page.selection()))) return std::array<double, 2>{double(x), double(y)};
+        }
+    }
+    return std::nullopt;
+}
+
+struct Opened {
+    std::unique_ptr<MainWindow> w;
+    SolidPage* page = nullptr;
+};
+Opened open_3d(const std::string& name, const std::string& deck) {
+    Opened o{window()};
+    REQUIRE(o.w->open_deck(write(name, deck)));
+    pump();
+    o.w->execute(Command::tab_geometry);
+    REQUIRE(o.w->solid_shown());
+    o.page = &o.w->solid_page();
+    REQUIRE(o.page->render() >= 0.0);
+    return o;
+}
+
+// Draws the box of the 26l test (0 0.2um 0 0.3um 0.4um 0.5um) and leaves it selected.
+solid::SolidRef draw_box(MainWindow& w, SolidPage& page) {
+    page.set_work_plane({2, 4 * solid::per_um / 10});
+    page.set_tool(SolidPage::Tool::box);
+    const auto a = page.screen_of_um({0.0, 0.0, 0.4}), b = page.screen_of_um({0.2, 0.3, 0.4});
+    send(page.canvas(), WM_LBUTTONDOWN, MK_LBUTTON, a[0], a[1]);
+    send(page.canvas(), WM_MOUSEMOVE, MK_LBUTTON, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+    send(page.canvas(), WM_MOUSEMOVE, MK_LBUTTON, b[0], b[1]);
+    send(page.canvas(), WM_LBUTTONUP, 0, b[0], b[1]);
+    const auto h = page.screen_of_um({0.2, 0.3, 0.5});
+    send(page.canvas(), WM_MOUSEMOVE, 0, h[0], h[1]);
+    send(page.canvas(), WM_LBUTTONDOWN, MK_LBUTTON, h[0], h[1]);
+    send(page.canvas(), WM_LBUTTONUP, 0, h[0], h[1]);
+    REQUIRE(has(w.deck().text(), "box = 0 0.2um 0 0.3um 0.4um 0.5um\n"));
+    REQUIRE(page.selection().solids.size() == 1);
+    page.set_tool(SolidPage::Tool::select);
+    page.render();
+    return page.selection().solids[0];
+}
+
+// The face handle's pixel (x_max: face 1) of the selected solid, checked by the pick.
+std::array<double, 2> face_handle(const SolidPage& page, solid::SolidRef s, int face) {
+    const auto hs = solid::handles(page.model(), page.view(), s);
+    const auto h = std::ranges::find_if(hs, [&](const solid::Handle& k) { return k.kind == solid::HandleKind::face && k.index == face; });
+    REQUIRE(h != hs.end());
+    auto p = page.screen_of_um(h->pts[0]);
+    p = {std::round(p[0]), std::round(p[1])};
+    const solid::Pick k = solid::pick(page.model(), page.view(), p[0], p[1], page.selection());
+    REQUIRE(k.kind == solid::PickKind::handle);
+    REQUIRE(k.handle == solid::HandleKind::face);
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("app window modeller: the 3D camera free and fixed, Reset view, the state kept over a reload (MC2)", "[app][window][modeller]") {
+    auto [w, pp] = open_3d("camera3d", mos);
+    SolidPage& page = *pp;
+    const HWND c = page.canvas();
+    CHECK_FALSE(page.camera_fixed());  // MQ2: free on open
+    const render::Camera start = page.view().camera;
+    // A background pixel: the ray misses the domain.
+    const auto bg = find_pick(page, [](const solid::Pick& p) { return p.kind == solid::PickKind::none; });
+    REQUIRE(bg);
+    const double x = (*bg)[0], y = (*bg)[1];
+
+    // Free: a left drag on the background orbits; the wheel zooms; Reset view restores the start exactly.
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, x, y);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, x + 30, y + 12);
+    send(c, WM_LBUTTONUP, 0, x + 30, y + 12);
+    CHECK(page.view().camera.azimuth_deg != start.azimuth_deg);
+    CHECK(page.view().camera.elevation_deg != start.elevation_deg);
+    wheel(c, 300, 200, 120);
+    CHECK(page.view().camera.zoom != start.zoom);
+    // Shift+left on the background pans.
+    const auto pan0 = page.view().camera.pan;
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON | MK_SHIFT, x, y);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON | MK_SHIFT, x + 20, y + 10);
+    send(c, WM_LBUTTONUP, 0, x + 20, y + 10);
+    CHECK(page.view().camera.pan != pan0);
+    page.reset_view();
+    CHECK(same(page.view().camera, start));
+
+    // Fixed (L): left, middle and right drags and the wheel leave the camera bit-identical.
+    SendMessageW(c, WM_KEYDOWN, 'L', 0);
+    REQUIRE(page.camera_fixed());
+    page.render();
+    const render::Camera fixed = page.view().camera;
+    for (const auto [down, up, keys] : {std::tuple{WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON}, std::tuple{WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON},
+                                        std::tuple{WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON}}) {
+        send(c, down, keys, x, y);
+        send(c, WM_MOUSEMOVE, keys, x + 40, y + 25);
+        send(c, up, 0, x + 40, y + 25);
+        CHECK(same(page.view().camera, fixed));
+        send(c, down, keys | MK_SHIFT, x, y);
+        send(c, WM_MOUSEMOVE, keys | MK_SHIFT, x + 40, y + 25);
+        send(c, up, 0, x + 40, y + 25);
+        CHECK(same(page.view().camera, fixed));
+    }
+    wheel(c, 300, 200, 120);
+    wheel(c, 300, 200, -240);
+    CHECK(same(page.view().camera, fixed));
+    page.set_tool(SolidPage::Tool::pan);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, x, y);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, x + 40, y + 25);
+    send(c, WM_LBUTTONUP, 0, x + 40, y + 25);
+    CHECK(same(page.view().camera, fixed));
+    page.set_tool(SolidPage::Tool::select);
+
+    // Fixed, a left drag on a face handle still resizes the solid.
+    const solid::SolidRef box = draw_box(*w, page);
+    CHECK(same(page.view().camera, fixed));
+    const auto f = face_handle(page, box, 1);
+    const auto to = page.screen_of_um({0.3, 0.15, 0.45});
+    const auto from = page.screen_of_um({0.2, 0.15, 0.45});
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, f[0], f[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, f[0] + (to[0] - from[0]) / 2, f[1] + (to[1] - from[1]) / 2);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, f[0] + to[0] - from[0], f[1] + to[1] - from[1]);
+    send(c, WM_LBUTTONUP, 0, f[0] + to[0] - from[0], f[1] + to[1] - from[1]);
+    CHECK(has(w->deck().text(), "box = 0 0.3um 0 0.3um 0.4um 0.5um\n"));
+    CHECK(same(page.view().camera, fixed));
+
+    // The state survives a reload of the deck and the tab shown again.
+    page.reload(true);
+    w->execute(Command::tab_geometry);
+    CHECK(page.camera_fixed());
+    SendMessageW(c, WM_KEYDOWN, 'L', 0);
+    CHECK_FALSE(page.camera_fixed());
+}
+
+TEST_CASE("app window modeller: the 2D camera free and fixed; Shift keeps the rubber band (MC2, MQ6)", "[app][window][modeller]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("camera2d", layered2d)));
+    pump();
+    w->execute(Command::tab_geometry);
+    GeometryPage& page = w->geometry_page();
+    REQUIRE(page.geometry().editable());
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    const HWND c = page.canvas();
+    CHECK_FALSE(page.camera_fixed());
+    // Outside the domain (x < 0): background.
+    const double x = page.view().sx(-1000), y = page.view().sy(5000);
+
+    // Free: a left drag on the background pans by the drag; the wheel zooms.
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, x, y);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, x + 30, y + 12);
+    send(c, WM_LBUTTONUP, 0, x + 30, y + 12);
+    CHECK(page.view().origin_x == 80.0);
+    CHECK(page.view().origin_y == 462.0);
+    wheel(c, 300, 200, 120);
+    CHECK(page.view().px_per_um != 200.0);
+
+    // Fixed: no drag or wheel moves the view; a left drag on the background is the rubber band.
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    SendMessageW(c, WM_KEYDOWN, 'L', 0);
+    REQUIRE(page.camera_fixed());
+    for (const auto [down, up, keys] : {std::tuple{WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON}, std::tuple{WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON},
+                                        std::tuple{WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON}}) {
+        send(c, down, keys, x, y);
+        send(c, WM_MOUSEMOVE, keys, x + 40, y + 25);
+        send(c, up, 0, x + 40, y + 25);
+        CHECK(page.view().origin_x == 50.0);
+        CHECK(page.view().origin_y == 450.0);
+    }
+    wheel(c, 300, 200, 120);
+    CHECK(page.view().px_per_um == 200.0);
+    // Fixed, a drag on the oxide still moves it.
+    page.set_tool(GeometryPage::Tool::select);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, page.view().sx(10000), page.view().sy(9000));
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, page.view().sx(10000), page.view().sy(8500));
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, page.view().sx(10000), page.view().sy(8000));
+    send(c, WM_LBUTTONUP, 0, page.view().sx(10000), page.view().sy(8000));
+    CHECK(has(w->deck().text(), "box = 0 2um 0.7um 0.9um\n"));
+    CHECK(page.view().origin_x == 50.0);
+
+    // Free again, Shift+drag on the background is the rubber band: the view stays, the oxide is selected.
+    SendMessageW(c, WM_KEYDOWN, 'L', 0);
+    REQUIRE_FALSE(page.camera_fixed());
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON | MK_SHIFT, page.view().sx(-1000), page.view().sy(12000));
+    send(c, WM_MOUSEMOVE, MK_LBUTTON | MK_SHIFT, page.view().sx(21000), page.view().sy(6000));
+    send(c, WM_LBUTTONUP, 0, page.view().sx(21000), page.view().sy(6000));
+    CHECK(page.view().origin_x == 50.0);
+    REQUIRE(page.selection().size() == 1);
+    CHECK(page.selection()[0].region == 1);
+}
+
+TEST_CASE("app window modeller: picks open their groups; the bar lies inside the view and off the selection at three dpi and six "
+          "directions (MC3)",
+          "[app][window][modeller]") {
+    auto [w, pp] = open_3d("bar", mos);
+    SolidPage& page = *pp;
+    const HWND c = page.canvas();
+    CHECK(page.group() == modeller::Group::solid);
+    page.set_tool(SolidPage::Tool::box);
+    CHECK(page.group() == modeller::Group::solid);
+    page.set_tool(SolidPage::Tool::select);
+    page.render();
+    const solid::SolidRef ox{1, 0};  // the oxide's box, on top: seen from the default view
+
+    // A click on the solid: Transform; on its face handle: Faces; on its edge: Edges; on a contact: Faces; on nothing: Solid.
+    const auto click = [&](std::array<double, 2> p) {
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, p[0], p[1]);
+        send(c, WM_LBUTTONUP, 0, p[0], p[1]);
+        page.render();
+    };
+    const auto on_box = find_pick(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::face && p.solid == ox; });
+    REQUIRE(on_box);
+    click(*on_box);
+    CHECK(page.group() == modeller::Group::transform);
+    CHECK(page.bar().line().starts_with("Move:"));
+    click(face_handle(page, ox, 1));
+    CHECK(page.group() == modeller::Group::faces);
+    CHECK(page.bar().line().starts_with("Push/Pull:"));
+    const auto edge = find_pick(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::edge; });
+    REQUIRE(edge);
+    click(*edge);
+    CHECK(page.group() == modeller::Group::edges);
+    CHECK(has(page.bar().line(), "slice 2"));
+    const auto contact = find_pick(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::contact; });
+    REQUIRE(contact);
+    click(*contact);
+    CHECK(page.group() == modeller::Group::faces);
+    const auto none = find_pick(page, [](const solid::Pick& p) { return p.kind == solid::PickKind::none; });
+    REQUIRE(none);
+    click(*none);
+    CHECK(page.group() == modeller::Group::solid);
+    // A tool's key opens a group holding it; the switcher's group arms its first tool.
+    SendMessageW(c, WM_KEYDOWN, 'C', 0);
+    CHECK(page.group() == modeller::Group::faces);
+    page.set_group(modeller::Group::solid);
+    CHECK(page.tool() == SolidPage::Tool::select);
+
+    // The bar's place for a small box (drawn, selected): three dpi, six directions.
+    const solid::SolidRef box = draw_box(*w, page);
+    REQUIRE(page.select_region(page.model().regions[static_cast<std::size_t>(box.region)].name));
+    int corners = 0, total = 0;
+    for (const int dpi : {96, 144, 192}) {
+        HFONT font = win32::ui_font(dpi), bold = win32::ui_font(dpi, true);
+        page.set_dpi(dpi, font, bold);
+        for (int v = 0; v < 6; ++v) {
+            page.named_view(v);
+            REQUIRE(page.render() >= 0.0);
+            RECT r{};
+            GetClientRect(c, &r);
+            const modeller::Box view{0, 0, double(r.right), double(r.bottom)};
+            const modeller::Placement p = page.bar_placement();
+            const auto s = page.selection_bounds();
+            REQUIRE(s);
+            INFO("dpi " << dpi << ", view " << v << ": bar " << p.bar.left << ' ' << p.bar.top << ' ' << p.bar.right << ' ' << p.bar.bottom);
+            CHECK(p.bar.inside(view));
+            CHECK(p.bar == modeller::place_bar(view, *s, p.bar.width(), p.bar.height(), MulDiv(8, dpi, 96)).bar);
+            if (p.corner) ++corners;
+            else CHECK_FALSE(p.bar.overlaps(*s));
+            ++total;
+        }
+        page.set_dpi(96, nullptr, nullptr);
+        DeleteObject(font);
+        DeleteObject(bold);
+    }
+    std::printf("MC3: the bar in the corner for %d of %d placements (the selection leaving no side room)\n", corners, total);
+    CHECK(corners < total);
+}
+
+TEST_CASE("app window modeller: the deck line shown while dragging is the line written; typed values set a drag exactly (MC4, MT3)",
+          "[app][window][modeller]") {
+    auto [w, pp] = open_3d("line3d", mos);
+    SolidPage& page = *pp;
+    const HWND c = page.canvas();
+
+    // Drawing a box: the line at the height's last move is the line the click writes.
+    page.set_work_plane({2, 4 * solid::per_um / 10});
+    page.set_tool(SolidPage::Tool::box);
+    std::string before = w->deck().text();
+    const auto a = page.screen_of_um({0.0, 0.0, 0.4}), b = page.screen_of_um({0.2, 0.3, 0.4});
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, a[0], a[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, b[0], b[1]);
+    CHECK(has(page.live_line(), "[region silicon_1]"));
+    CHECK(has(page.chip(), "0.2 \xC2\xB5m \xC3\x97 0.3 \xC2\xB5m"));
+    send(c, WM_LBUTTONUP, 0, b[0], b[1]);
+    const auto h = page.screen_of_um({0.2, 0.3, 0.5});
+    send(c, WM_MOUSEMOVE, 0, h[0], h[1]);
+    const std::string shown = page.live_line();
+    CHECK(has(page.chip(), "height 0.1 \xC2\xB5m"));
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, h[0], h[1]);
+    send(c, WM_LBUTTONUP, 0, h[0], h[1]);
+    std::string after = w->deck().text();
+    REQUIRE(has(after, "box = 0 0.2um 0 0.3um 0.4um 0.5um\n"));
+    CHECK(shown == modeller::deck_line(before, after));
+    CHECK(page.live_line().empty());
+    CHECK(page.chip().empty());
+
+    // A face pushed 0.1 µm by its handle: the line while dragging; then a typed 0.05 µm, Enter applying it.
+    page.set_tool(SolidPage::Tool::select);
+    page.render();
+    const solid::SolidRef box = page.selection().solids[0];
+    auto f = face_handle(page, box, 1);
+    const auto step = page.screen_of_um({0.3, 0.15, 0.45}), at = page.screen_of_um({0.2, 0.15, 0.45});
+    const double dx = step[0] - at[0], dy = step[1] - at[1];
+    before = after;
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, f[0], f[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, f[0] + dx, f[1] + dy);
+    const std::string pushing = page.live_line();
+    CHECK(has(page.chip(), "push"));
+    send(c, WM_LBUTTONUP, 0, f[0] + dx, f[1] + dy);
+    after = w->deck().text();
+    CHECK(pushing == modeller::deck_line(before, after));
+    CHECK(pushing == "box = 0 0.3um 0 0.3um 0.4um 0.5um");
+
+    page.render();
+    f = face_handle(page, box, 1);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, f[0], f[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, f[0] + 0.3 * dx, f[1] + 0.3 * dy);
+    SendMessageW(c, WM_KEYDOWN, 'M', 0);  // a unit letter during a typed drag: not the Measure tool
+    type(c, L"0.05");
+    CHECK(page.typed().text() == "0.05");
+    CHECK(page.tool() == SolidPage::Tool::select);
+    CHECK(page.live_line() == "box = 0 0.35um 0 0.3um 0.4um 0.5um");
+    SendMessageW(c, WM_KEYDOWN, VK_RETURN, 0);
+    send(c, WM_LBUTTONUP, 0, f[0], f[1]);
+    CHECK(has(w->deck().text(), "box = 0 0.35um 0 0.3um 0.4um 0.5um\n"));
+    // Typed with a unit, Esc cancelling: the deck stays.
+    page.render();
+    f = face_handle(page, box, 1);
+    before = w->deck().text();
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, f[0], f[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, f[0] + dx, f[1] + dy);
+    type(c, L"20nm");
+    CHECK(page.live_line() == "box = 0 0.37um 0 0.3um 0.4um 0.5um");
+    SendMessageW(c, WM_KEYDOWN, VK_ESCAPE, 0);
+    send(c, WM_LBUTTONUP, 0, f[0] + dx, f[1] + dy);
+    CHECK(w->deck().text() == before);
+    CHECK(page.typed().empty());
+
+    // The box's height typed: 0.15 µm.
+    page.set_tool(SolidPage::Tool::box);
+    page.set_work_plane({2, 0});
+    const auto p0 = page.screen_of_um({0.5, 0.1, 0.0}), p1 = page.screen_of_um({0.8, 0.4, 0.0});
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, p0[0], p0[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, p1[0], p1[1]);
+    send(c, WM_LBUTTONUP, 0, p1[0], p1[1]);
+    const auto ph = page.screen_of_um({0.8, 0.4, 0.05});
+    send(c, WM_MOUSEMOVE, 0, ph[0], ph[1]);
+    type(c, L"0.15");
+    CHECK(has(page.chip(), "height 0.15 \xC2\xB5m"));
+    SendMessageW(c, WM_KEYDOWN, VK_RETURN, 0);
+    CHECK(has(w->deck().text(), "box = 0.5um 0.8um 0.1um 0.4um 0 0.15um\n"));
+}
+
+TEST_CASE("app window modeller: the 2D deck line and typed values (MC4, MQ6)", "[app][window][modeller]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("line2d", layered2d)));
+    pump();
+    w->execute(Command::tab_geometry);
+    GeometryPage& page = w->geometry_page();
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    const HWND c = page.canvas();
+    const auto at = [&](geo::Coord x, geo::Coord y) { return std::array<double, 2>{page.view().sx(x), page.view().sy(y)}; };
+
+    // A rectangle: the line at the last move is the line written.
+    page.set_material("sio2");
+    page.set_tool(GeometryPage::Tool::rectangle);
+    std::string before = w->deck().text();
+    auto a = at(4000, 2000), b = at(8000, 5000);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, a[0], a[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, b[0], b[1]);
+    const std::string shown = page.live_line();
+    CHECK(has(page.chip(), "0.4 \xC2\xB5m \xC3\x97 0.3 \xC2\xB5m"));
+    send(c, WM_LBUTTONUP, 0, b[0], b[1]);
+    std::string after = w->deck().text();
+    REQUIRE(has(after, "box = 0.4um 0.8um 0.2um 0.5um\n"));
+    CHECK(shown == modeller::deck_line(before, after));
+
+    // Typed: the larger offset (x) set to 0.25 µm.
+    a = at(10000, 2000), b = at(14000, 5000);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, a[0], a[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, b[0], b[1]);
+    SendMessageW(c, WM_KEYDOWN, 'R', 0);
+    type(c, L"0.25");
+    CHECK(page.tool() == GeometryPage::Tool::rectangle);
+    CHECK(has(page.live_line(), "box = 1um 1.25um 0.2um 0.5um"));
+    send(c, WM_LBUTTONUP, 0, b[0], b[1]);
+    CHECK(has(w->deck().text(), "box = 1um 1.25um 0.2um 0.5um\n"));
+    // Typed while dragging leftwards: the value in the drag's direction.
+    a = at(19000, 2000), b = at(16000, 4000);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, a[0], a[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, b[0], b[1]);
+    type(c, L"0.2");
+    send(c, WM_LBUTTONUP, 0, b[0], b[1]);
+    CHECK(has(w->deck().text(), "box = 1.7um 1.9um 0.2um 0.4um\n"));
+
+    // A move: the line while dragging; typed 0.1 µm along y, Enter applying it.
+    page.set_tool(GeometryPage::Tool::select);
+    before = w->deck().text();
+    a = at(6000, 3500);
+    b = at(6000, 4500);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, a[0], a[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, b[0], b[1]);
+    CHECK(page.live_line() == "box = 0.4um 0.8um 0.3um 0.6um");
+    type(c, L"0.2");
+    CHECK(page.live_line() == "box = 0.4um 0.8um 0.4um 0.7um");
+    SendMessageW(c, WM_KEYDOWN, VK_RETURN, 0);
+    send(c, WM_LBUTTONUP, 0, b[0], b[1]);
+    after = w->deck().text();
+    CHECK(has(after, "box = 0.4um 0.8um 0.4um 0.7um\n"));
+    CHECK(modeller::deck_line(before, after) == "box = 0.4um 0.8um 0.4um 0.7um");
+}
+
+TEST_CASE("app window modeller: the bar and the deck line add at most 1 ms a frame with 100 solids (MC9)", "[app][window][modeller][perf]") {
+    std::string deck = "[mesh]\ntype = generate3d\nlayered = on\ndomain = 0 10um 0 10um 0 1um\nmax_size = 0.5um\n\n[region si]\nmaterial = silicon\n";
+    for (int k = 0; k < 100; ++k) {
+        deck += std::format("\n[region r{}]\nmaterial = {}\nbox = {}um {}.8um {}um {}.8um 0 0.{}um\n", k, k % 2 ? "sio2" : "silicon", k % 10, k % 10,
+                            k / 10, k / 10, 3 + k % 7);
+    }
+    deck += "\n[equilibrium]\n";
+    auto [w, pp] = open_3d("hundred", deck);
+    SolidPage& page = *pp;
+    REQUIRE(page.model().regions.size() == 101);
+    REQUIRE(page.select_region("r55"));
+    page.render();
+    const std::string text = w->deck().text();
+    const solid::SolidRef ref = page.selection().solids[0];
+    std::vector<double> added;
+    for (int k = 1; k <= 31; ++k) {
+        solid::Model m = page.model();
+        solid::move_solid(m, ref, {k * 100, 0, 0});
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto out = solid::write_model(text, m);
+        REQUIRE(out);
+        const std::string line = modeller::deck_line(text, *out);
+        const auto s = page.selection_bounds();
+        const auto p = modeller::place_bar({0, 0, 800, 600}, s, 300, 62, 8);
+        added.push_back(1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        REQUIRE(has(line, "box = "));
+        REQUIRE(std::abs(p.bar.width() - 300) < 1e-9);
+    }
+    std::ranges::sort(added);
+    std::printf("MC9: the deck line and the bar's place with 100 solids: median %.3f ms (max %.3f)\n", added[added.size() / 2], added.back());
+#ifdef NDEBUG
+    CHECK(added[added.size() / 2] <= 1.0);
+#endif
+}

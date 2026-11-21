@@ -17,6 +17,10 @@
 //   its message along the canvas's foot; Run stays off on this tab while the layout does not build. Mesh preview
 //   overlays the mesh the last check built, while it is of the text shown.
 //
+// - Unit 26m slice 0 (MT1-MT3, MQ6): the group switcher and the floating bar, Camera free / fixed (L: free, a left
+//   drag on empty background pans, Shift+drag keeps the rubber band; fixed, no drag or wheel moves the view), the
+//   deck line a drag will write in the status bar, its value in the chip at the cursor, typed digits setting it.
+//
 // The tests drive the canvas by its messages (GE8; no screen automation).
 #pragma once
 
@@ -32,6 +36,9 @@
 
 #include "NiTCAD/app/document.hpp"
 #include "NiTCAD/app/geometry.hpp"
+#include "modeller_bar.hpp"
+
+#include <memory>
 
 struct ID2D1Factory;
 struct ID2D1HwndRenderTarget;
@@ -83,6 +90,18 @@ public:
     bool select_region(const std::string& name);
     // An inspector box's or button's value taken (Enter, a button, a choice); false when not one of its controls.
     bool commit(int control);
+
+    // --- Unit 26m slice 0 (MT1-MT3, MQ6) ---
+    void set_camera_fixed(bool fixed);
+    [[nodiscard]] bool camera_fixed() const noexcept { return camera_fixed_; }
+    void set_group(modeller::Group g);
+    [[nodiscard]] modeller::Group group() const noexcept { return bar_->group(); }
+    [[nodiscard]] const ModellerBar& bar() const noexcept { return *bar_; }
+    [[nodiscard]] modeller::Placement bar_placement() const;              // canvas pixels
+    [[nodiscard]] std::optional<modeller::Box> selection_bounds() const;  // canvas pixels
+    [[nodiscard]] const std::string& live_line() const noexcept { return live_line_; }  // "" when no drag
+    [[nodiscard]] std::string chip() const { return bar_->chip_text(); }
+    [[nodiscard]] const modeller::Entry& typed() const noexcept { return entry_; }
 
     // State, for the tests.
     [[nodiscard]] const geo::Geometry& geometry() const noexcept { return g_; }
@@ -157,7 +176,6 @@ private:
 
     Host& host_;
     HWND panel_ = nullptr, strip_ = nullptr, canvas_ = nullptr, inspector_ = nullptr;
-    std::vector<HWND> tool_buttons_;
     std::vector<HWND> controls_;
     int inspector_id_ = 0;
     int dpi_ = 96;
@@ -202,7 +220,6 @@ private:
     std::string mesh_text_;
     MeshOverlay mesh_;
     bool mesh_preview_ = false;
-    HWND mesh_button_ = nullptr;
     void locate_problems();
 
     // A new device being drawn (can_start).
@@ -215,6 +232,23 @@ private:
     [[nodiscard]] geo::Pt start_point(double x, double y) const;
     void start_finish();
     void prune_selection();
+
+    // Unit 26m slice 0.
+    std::unique_ptr<ModellerBar> bar_;
+    bool camera_fixed_ = false;  // MQ2: free on open
+    modeller::Entry entry_;
+    int typed_axis_ = -1;  // the axis (0 x, 1 y) a typed value sets
+    geo::Pt drag_d_{};     // the drag's offset now
+    std::string live_line_;
+    int canvas_top_ = 0;
+    void after_drag_step(double x, double y);
+    [[nodiscard]] std::optional<geo::Geometry> pending() const;
+    [[nodiscard]] std::string chip_value() const;
+    [[nodiscard]] std::string fresh_contact() const;
+    [[nodiscard]] geo::Coord typed_or(geo::Coord dragged) const;
+    bool on_char(wchar_t c);
+    void place_bar();
+    void end_drag_ui();
 };
 
 }  // namespace NiTCAD::app

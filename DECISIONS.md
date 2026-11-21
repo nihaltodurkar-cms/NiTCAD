@@ -1959,6 +1959,28 @@ The first three are Unit 64; the last stays until measured (Unit 16 U12, the own
 adds graded pairs along its whole length, so fillets may cost many nodes (MT12's estimate shows it); the floating bar and live deck line touch every drag path, so MC4 and MC9
 are the gates there; `[parameters]` is a deck change, so MC1 and MC7 guard every existing deck.
 
+**Slice 0 as built (MT1–MT3, 2026-11-21; owner "start"; Release, MSVC 14.51, 6 cores).** `app::modeller`
+(`include/NiTCAD/app/modeller.hpp`, no Win32): the groups and their tools, `navigation` (what a press does to the
+view, camera free or fixed), `place_bar`, `deck_line`, `Entry` (typed values). `ModellerBar` (`src/app/modeller_bar.*`,
+shared by both pages): the group switcher and the corner's buttons (Camera free/fixed (L), Reset view, Fit, Measure,
+Mesh) in the strip where the fixed tool row was, the floating bar (the armed group's tools and its line) and the value
+chip as children of the page over the canvas (the canvas clips siblings). Both pages: the camera lock on every drag,
+the Pan tool, Space and the wheel; picks open their group; the status bar shows the deck line of the drag (the edit's
+own writer on the in-progress model); the chip its value; typed digits (nm, um, cm; µm by default) set it, in the
+drag's direction, Enter applying, Esc cancelling. Typed values are taken by the 3D axis, face, move, plane, base and
+height drags and the 2D move and rectangle; on a two-axis drag they set the axis of the larger offset (recorded).
+- MC1: the 26k and 26l window tests pass unchanged (789 assertions in 22 cases with slice 0's; no test named the old
+  row); app unit tests 110/110. Decks untouched.
+- MC2, MC3, MC4: `tests/app/modeller_window_test.cpp` (6 cases) and `tests/app/modeller_test.cpp` (5 cases, 6000
+  random bar placements over 96/144/192 dpi). In the window table (3 dpi × 6 views) the bar never needed the corner.
+- MC9: deck line + bar placement with 100 solids, median 0.197 ms (≤ 1 ms); SE5 orbit 5.10 ms, drag 5.21 ms; GE5 2.93 ms.
+- MC11: 14/15 mutants caught; the survivor (the bar's overlap test removed) is equivalent, since a place beside the
+  selection never overlaps it.
+- Not done in slice 0 (recorded): Section stays in the inspector rather than the view's corner; Shift+left-drag pans in
+  3D (MT1), the 2D editor keeps Shift for the rubber band (MQ3); the camera state lives in the page (kept across
+  reloads and tab changes, not written to the view settings file). Whether the floating bar draws cleanly over the
+  D3D12 flip-model canvas needs the owner's eyes (no screen automation).
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
