@@ -359,6 +359,7 @@ add_executable(nitcad_mesh_test
   tests/mesh/layered2d_test.cpp
   tests/mesh/layered3d_test.cpp
   tests/mesh/layered3d_slanted_test.cpp
+  tests/mesh/interface_pieces_test.cpp
   tests/mesh/triangulation3d_test.cpp
   tests/mesh/generate3d_test.cpp
   tests/mesh/complex_test.cpp
