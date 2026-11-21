@@ -1889,7 +1889,7 @@ oblique domains (layered domains are boxes); pinched pieces (two loops meeting a
 | # | Slice | Change | Notes |
 |---|---|---|---|
 | IP1 | 0 | **Reproduce and pin.** A fixture per refusal, from layered 3D decks: a square and a 16-sided nanowire through a gate (hole), a fin flush with the domain's side and a fillet running into it (domain edge), a fin at a domain corner, a slanted fin crossed by the STI top (fold). Each refused today with the message named above; the fold hypothesis checked and the record corrected if wrong. | Tests only. |
-| IP2 | 1 | **Holed pieces.** A piece's boundary is any number of loops: the outer one and its holes (orientation from the piece's normal). The inset is applied to every loop (holes grow by 1.5 s); the graded feature pairs run along every loop's edges; `pair_set` triangulates the inset domain with its holes. Hole edges are feature lines like any other (junctions with the piercing solid's side faces, sectors checked as now). | MQ1. |
+| IP2 | 1 | **Holed pieces.** A piece's boundary is any number of loops: the outer one and its holes (orientation from the piece's normal). The inset is applied to every loop (holes grow by 1.5 s); the graded feature pairs run along every loop's edges; `pair_set` triangulates the inset domain with its holes. Hole edges are feature lines like any other (junctions with the piercing solid's side faces, sectors checked as now). | IQ1. |
 | IP3 | 2 | **Domain edges and corners, right angles only.** A trace that reaches a domain edge where two box faces meet at 90° is straddled into both faces: the pairs are mirrored across each face plane, so by the same mirror symmetry as U12's exact right-angle bend the dual faces stay planar there. A domain corner (three faces at 90°) likewise. Any other edge angle stays refused. | Exactness argued as U12's 90° case; checked by IC3. |
 | IP4 | 3 | **Folded coplanar pieces.** Two pieces that share an edge, have the same two regions on the same sides, and whose normals agree within 1e-12 are one 180° junction (skipped by the clearance check, as exactly coplanar pieces are now); the feature between them gets no corner nodes. | Only for 26l's ulp folds. |
 | IP5 | — | **Commits:** this proposal, a commit per slice, ARCHITECTURE (the mesh chapter's generator rules, 11.3) and the records. The owner may stop after any slice. | |
@@ -1908,13 +1908,13 @@ oblique domains (layered domains are boxes); pinched pieces (two loops meeting a
 
 **Questions (each with a recommendation; ruled by the standing "choose recommended" rule, 2026-11-11):**
 
-- **MQ1 — holes.** (a) Native loops: the inset, the graded pairs and `pair_set`'s triangulation take holes. (b) Seams:
+- **IQ1 — holes.** (a) Native loops: the inset, the graded pairs and `pair_set`'s triangulation take holes. (b) Seams:
   cut each holed piece into simple pieces along added edges, meshed as now (the seams become 180° junctions with
   extra pairs). **Recommended (a)**: no artificial feature lines, fewer nodes; (b) only if (a) cannot certify.
   Ruled (a).
-- **MQ2 — order.** (a) Holes, then domain edges, then folds (by how often a drawn device hits them: every
+- **IQ2 — order.** (a) Holes, then domain edges, then folds (by how often a drawn device hits them: every
   gate-all-around device has a hole). (b) Folds first (smallest). **Recommended (a)**. Ruled (a).
-- **MQ3 — the reference in IC3.** (a) The swept generator where the device is an extrusion, else a shifted or
+- **IQ3 — the reference in IC3.** (a) The swept generator where the device is an extrusion, else a shifted or
   exactly coplanar layout. (b) A tensor grid. **Recommended (a)**: same physics path, different mesher. Ruled (a).
 
 **Risks:** the domain-edge argument assumes mirror symmetry, which grading toward a corner may break (U12's
