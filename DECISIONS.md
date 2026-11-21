@@ -1855,6 +1855,72 @@ limits found), 6.14 (as built, the modeller) and the two 11.3 rows (geometry and
 Left for later units: curved solids, oblique planes, slanted sidewalls crossed by a plane (the generator's 4 s rule),
 interface pieces with holes, snapping onto slanted faces.
 
+### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
+
+**Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
+(Unit 26m's biggest risk) and how to fix them; "yes" to proposing this unit, holes first. The branch starts from
+`app/solid-modeller` `a8ca49f` (Unit 26l, PR #111 open), whose layered 3D decks are the fixtures.
+
+**Where things stand.** The polyhedral generator (Unit 53) meshes each interface piece by mirrored node pairs at
+± s/2 (s = `interface_resolution`), so the dual faces lie in the interface and the P4 certificate (Unit 16) holds.
+Its layout step (`src/mesh/complex_interfaces.cpp`) refuses:
+- **holes:** a piece's boundary is walked as one loop; a second loop is refused ("an interface piece has holes",
+  line 326). `pair_set` takes that one inset polygon. A nanowire through a gate, or a plug through a layer, gives
+  such a piece;
+- **domain edges and corners:** a piece edge whose two boundary facets lie on different domain faces is refused
+  (line 373), and so is a piece reaching a domain corner (line 524). Fins, fillets and arrays flush with the domain's
+  sides give these;
+- **a plane crossing a slanted wall** (26l SD6, recorded): the 4 s clearance check (line 617) skips touching
+  non-parallel pieces and exactly coplanar ones. A slanted wall split by a plane is two pieces folded by about an
+  ulp (26l SQ4): they touch, are not exactly coplanar, and are parallel, so their distance 0 is refused. This
+  reading is a hypothesis from the code, confirmed or not in slice 0.
+
+**Standing conditions:** every deck and complex that meshes today meshes to the same bits (the new paths only run
+where the old code refused). The P4 certificate is required and unchanged. The 60-degree sector rule (U12, the
+owner's ruling of 2026-10-14) and the 4 s rule between unrelated interfaces are kept. Criteria fixed before code.
+Targeted Release tests; full suites and Debug only on the owner's word; `-j 6`, 6 threads. No new dependency.
+Nothing pushed or merged without authorization.
+
+**Left out:** sectors under 60° (needs the measurement U12 asks for, and the owner's word to loosen a frozen rule);
+oblique domains (layered domains are boxes); pinched pieces (two loops meeting at a vertex).
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| IP1 | 0 | **Reproduce and pin.** A fixture per refusal, from layered 3D decks: a square and a 16-sided nanowire through a gate (hole), a fin flush with the domain's side and a fillet running into it (domain edge), a fin at a domain corner, a slanted fin crossed by the STI top (fold). Each refused today with the message named above; the fold hypothesis checked and the record corrected if wrong. | Tests only. |
+| IP2 | 1 | **Holed pieces.** A piece's boundary is any number of loops: the outer one and its holes (orientation from the piece's normal). The inset is applied to every loop (holes grow by 1.5 s); the graded feature pairs run along every loop's edges; `pair_set` triangulates the inset domain with its holes. Hole edges are feature lines like any other (junctions with the piercing solid's side faces, sectors checked as now). | MQ1. |
+| IP3 | 2 | **Domain edges and corners, right angles only.** A trace that reaches a domain edge where two box faces meet at 90° is straddled into both faces: the pairs are mirrored across each face plane, so by the same mirror symmetry as U12's exact right-angle bend the dual faces stay planar there. A domain corner (three faces at 90°) likewise. Any other edge angle stays refused. | Exactness argued as U12's 90° case; checked by IC3. |
+| IP4 | 3 | **Folded coplanar pieces.** Two pieces that share an edge, have the same two regions on the same sides, and whose normals agree within 1e-12 are one 180° junction (skipped by the clearance check, as exactly coplanar pieces are now); the feature between them gets no corner nodes. | Only for 26l's ulp folds. |
+| IP5 | — | **Commits:** this proposal, a commit per slice, ARCHITECTURE (the mesh chapter's generator rules, 11.3) and the records. The owner may stop after any slice. | |
+
+**Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
+
+| # | Criterion |
+|---|---|
+| IC1 | **Nothing else moves:** every example and test deck, and every complex in the mesh tests, meshes to the same bits as before. |
+| IC2 | **Certified:** every IP1 fixture now meshes, passes every import check, and carries a valid P4 certificate. |
+| IC3 | **Accurate:** each fixed fixture's equilibrium (potential and carrier densities at the nodes, interpolated to 200 sample points) agrees to 1e-6 relative (1e-9 V absolute where the potential is near zero) with a reference: the same device meshed by the swept generator (Unit 54) where it is an extrusion (the nanowire, the flush fin), else the same layout moved 10 s off the domain edge (a domain-edge case) or cut exactly coplanar (the fold). |
+| IC4 | **Still refused:** sectors under 60°, unrelated interfaces under 4 s, pinched pieces, non-right domain edges: the same messages as before (table). |
+| IC5 | **Random holes:** 200 seeded layouts with 1 to 4 holes per piece (boxes and prisms piercing slabs) mesh and certify, or are refused only by a rule IC4 keeps (counted). |
+| IC6 | **Cost:** a holed fixture's node count ≤ 1.2 × that of the same layout with the hole's solid made of the slab's region plus the hole's own interface (recorded, not a gate, if missed); generator time recorded. |
+| IC7 | **Mutants:** at least 8 per slice caught (e.g. a hole loop not inset; a hole's orientation reversed; pairs mirrored across one face only at a domain edge; a non-right edge accepted; the fold tolerance applied to non-touching pieces). |
+
+**Questions (each with a recommendation; ruled by the standing "choose recommended" rule, 2026-11-11):**
+
+- **MQ1 — holes.** (a) Native loops: the inset, the graded pairs and `pair_set`'s triangulation take holes. (b) Seams:
+  cut each holed piece into simple pieces along added edges, meshed as now (the seams become 180° junctions with
+  extra pairs). **Recommended (a)**: no artificial feature lines, fewer nodes; (b) only if (a) cannot certify.
+  Ruled (a).
+- **MQ2 — order.** (a) Holes, then domain edges, then folds (by how often a drawn device hits them: every
+  gate-all-around device has a hole). (b) Folds first (smallest). **Recommended (a)**. Ruled (a).
+- **MQ3 — the reference in IC3.** (a) The swept generator where the device is an extrusion, else a shifted or
+  exactly coplanar layout. (b) A tensor grid. **Recommended (a)**: same physics path, different mesher. Ruled (a).
+
+**Risks:** the domain-edge argument assumes mirror symmetry, which grading toward a corner may break (U12's
+measurements found bisector nodes made a right-angle corner worse), so IC2 and IC3 are the gates; `pair_set` with
+holes is new triangulation code, so IC5's random layouts guard it.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
