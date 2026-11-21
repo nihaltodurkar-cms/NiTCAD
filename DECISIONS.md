@@ -2082,8 +2082,9 @@ layouts (`layered_partition3d`) in a 1 x 2 x 1 µm oxide domain, s = 0.02 µm un
   full suite): `app_window.solid_check_window` used a box punching a hole in the oxide's interface plane as an
   invalid deck. The hole meshes now, so the deck is refused by the next rule ("an interface feature line is shorter
   than 6 s", the box's 0.1 µm sides) with the marker on the box's side (z = 0.45 µm, not 0.4). Still one
-  diagnostic naming the interface: the row's name, comment and expected z were updated, and it passes. Debug not
-  run.
+  diagnostic naming the interface: the row's name, comment and expected z were updated, and it passes.
+- **Full Debug suite (owner's word, 2026-11-21; at `07372d2`, `ctest --preset debug -j 6`, a fresh Debug build,
+  /W4 /WX clean):** 242 of 242 passed in 1,048 s.
 
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
