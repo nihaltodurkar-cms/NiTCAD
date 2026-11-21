@@ -110,6 +110,8 @@ struct ShapeRef {
 // its edges in any direction since slice 4, GD10). Any edit of a tiled deck first makes it layered.
 int add_box(Geometry& g, Rect r, std::string material);
 int add_polygon(Geometry& g, std::vector<Pt> points, std::string material);
+// Whether a polygon is one add_polygon takes (as above); the 3D modeller's prisms use it too (Unit 26l).
+[[nodiscard]] bool polygon_ok(const std::vector<Pt>& points);
 bool move_shape(Geometry& g, ShapeRef s, Coord dx, Coord dy);
 bool set_box(Geometry& g, ShapeRef s, Rect r);
 // `follow`: its neighbours follow along the horizontal and vertical edges they share with it (else it moves alone).

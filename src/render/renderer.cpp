@@ -1739,6 +1739,81 @@ ScreenPoint screen_position(const FieldScene& scene, int width, int height, cons
     return {px.x, px.y, w != 0.0f ? z / w : z};
 }
 
+// --- the view in double precision (Unit 26l, SD4) ------------------------------------------------------------------
+
+// make_view's layout, kept in double: the same expressions, without the float matrix.
+ViewFrame view_frame(const FieldScene& s, int width, int height) {
+    const D2D1_RECT_F rect = field_view_rect(s, width, height);
+    const double aspect = (rect.right - rect.left) / (rect.bottom - rect.top);
+    const double az = s.camera.azimuth_deg * std::numbers::pi / 180.0;
+    const double el = s.camera.elevation_deg * std::numbers::pi / 180.0;
+    const std::array<double, 3> eye{std::cos(el) * std::sin(az), std::sin(el), std::cos(el) * std::cos(az)};
+    ViewFrame f;
+    f.forward = {-eye[0], -eye[1], -eye[2]};
+    std::array<double, 3> world_up{0.0, 1.0, 0.0};
+    if (std::abs(dotd(world_up, f.forward)) > 0.999) world_up = {0.0, 0.0, -1.0};
+    f.right = unitd(crossd(f.forward, world_up));
+    f.up = crossd(f.right, f.forward);
+    const std::array<double, 3> lo{s.lo[0], s.lo[1], s.lo[2]}, hi{s.hi[0], s.hi[1], s.hi[2]};
+    f.centre = {0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.5 * (lo[2] + hi[2])};
+    double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300, radius = 0.0;
+    for (int k = 0; k < 8; ++k) {
+        const std::array<double, 3> p{(k & 1) ? hi[0] : lo[0], (k & 2) ? hi[1] : lo[1], (k & 4) ? hi[2] : lo[2]};
+        const std::array<double, 3> d{p[0] - f.centre[0], p[1] - f.centre[1], p[2] - f.centre[2]};
+        x0 = std::min(x0, dotd(d, f.right));
+        x1 = std::max(x1, dotd(d, f.right));
+        y0 = std::min(y0, dotd(d, f.up));
+        y1 = std::max(y1, dotd(d, f.up));
+        radius = std::max(radius, std::sqrt(dotd(d, d)));
+    }
+    f.radius = std::max(radius, 1e-6);
+    f.half_h = std::max({0.5 * (y1 - y0), 0.5 * (x1 - x0) / aspect, 1e-6}) / 0.92 / static_cast<double>(s.camera.zoom);
+    f.half_w = f.half_h * aspect;
+    f.cx = 0.5 * (x0 + x1) - static_cast<double>(s.camera.pan[0]) * f.half_w;
+    f.cy = 0.5 * (y0 + y1) - static_cast<double>(s.camera.pan[1]) * f.half_h;
+    f.left = rect.left;
+    f.top = rect.top;
+    f.right_px = rect.right;
+    f.bottom_px = rect.bottom;
+    if (s.camera.projection == Projection::perspective) {
+        f.perspective = true;
+        f.tan_half = std::tan(0.5 * s.camera.fov_deg * std::numbers::pi / 180.0);
+        f.depth = f.half_h / f.tan_half + f.radius;
+        for (std::size_t i = 0; i < 3; ++i) f.eye[i] = f.centre[i] + f.cx * f.right[i] + f.cy * f.up[i] - f.depth * f.forward[i];
+    }
+    return f;
+}
+
+ScreenRay screen_ray(const FieldScene& s, int width, int height, double x, double y) {
+    const ViewFrame f = view_frame(s, width, height);
+    const double nx = 2.0 * (x - f.left) / (f.right_px - f.left) - 1.0;
+    const double ny = 1.0 - 2.0 * (y - f.top) / (f.bottom_px - f.top);
+    ScreenRay r;
+    if (!f.perspective) {
+        // vx = nx half_w, vy = ny half_h; p = c + (vx + cx) right + (vy + cy) up + vz forward, from in front.
+        const double vx = nx * f.half_w + f.cx, vy = ny * f.half_h + f.cy, vz = -2.0 * f.radius;
+        for (std::size_t i = 0; i < 3; ++i) r.origin[i] = f.centre[i] + vx * f.right[i] + vy * f.up[i] + vz * f.forward[i];
+        r.direction = f.forward;
+        return r;
+    }
+    // On the view plane through the centre (vz = 0): vx = nx D tan aspect, vy = ny D tan.
+    const double aspect = f.half_w / f.half_h;
+    const double vx = nx * f.depth * f.tan_half * aspect + f.cx, vy = ny * f.depth * f.tan_half + f.cy;
+    std::array<double, 3> p{};
+    for (std::size_t i = 0; i < 3; ++i) p[i] = f.centre[i] + vx * f.right[i] + vy * f.up[i];
+    r.origin = f.eye;
+    r.direction = unitd({p[0] - f.eye[0], p[1] - f.eye[1], p[2] - f.eye[2]});
+    return r;
+}
+
+double um_per_pixel(const FieldScene& s, int width, int height, const std::array<double, 3>& p) {
+    const ViewFrame f = view_frame(s, width, height);
+    const double per_px = 2.0 * f.half_h / (f.bottom_px - f.top);  // on the view plane through the centre
+    if (!f.perspective) return per_px;
+    const double d = dotd({p[0] - f.eye[0], p[1] - f.eye[1], p[2] - f.eye[2]}, f.forward);
+    return per_px * std::max(d, 1e-9) / f.depth;
+}
+
 // --- the axis box (Unit 26h, JD1) -----------------------------------------------------------------
 
 AxisBox axis_box(const FieldScene& s, int width, int height) {

@@ -99,15 +99,20 @@ std::vector<std::string> choices_of(std::string_view section, std::string_view k
 
 std::wstring wide(std::string_view s) { return win32::widen(s); }
 
-// A deck to draw on when it has no mesh yet (the New 2D layout button).
-constexpr std::string_view layout_template = R"(# A 2D device drawn on the Geometry tab: the regions are layers, each painted over the ones above it in
+// The starter decks of a device drawn on a deck with no mesh (can_start): the drawn box is the domain, silicon its
+// background; the mesh sizes follow the box. The 3D one has a body contact on its bottom face, so it builds; the
+// Geometry tab then shows the 3D modeller for it (Unit 26l).
+std::string layout2d(Rect d) {
+    const Coord w = d.hi.x - d.lo.x, h = d.hi.y - d.lo.y;
+    const Coord size = std::max<Coord>(10, std::max(w, h) / 20), res = std::clamp<Coord>(std::min(w, h) / 10, 10, 100);
+    return std::format(R"(# A 2D device drawn on the Geometry tab: the regions are layers, each painted over the ones above it in
 # the deck (Unit 26k).
 [mesh]
 type = generate2d
 layered = on
-domain = 0 2um 0 1um
-max_size = 0.1um
-interface_resolution = 10nm
+domain = {} {} {} {}
+max_size = {}
+interface_resolution = {}
 
 [region substrate]
 material = silicon
@@ -116,7 +121,37 @@ material = silicon
 profile = acceptor constant 1e16
 
 [equilibrium]
-)";
+)", format_length(d.lo.x), format_length(d.hi.x), format_length(d.lo.y), format_length(d.hi.y), format_length(size), format_length(res));
+}
+
+std::string layout3d(Rect d, Coord height) {
+    const Coord w = d.hi.x - d.lo.x, h = d.hi.y - d.lo.y;
+    const Coord size = std::max<Coord>(10, std::max({w, h, height}) / 8);
+    const Coord res = std::clamp<Coord>(std::min({w, h, height}) / 10, 10, 100);
+    const std::string x0 = format_length(d.lo.x), x1 = format_length(d.hi.x), y0 = format_length(d.lo.y), y1 = format_length(d.hi.y);
+    return std::format(R"(# A 3D device drawn on the Geometry tab: the regions are layers, each solid replacing what it covers, in
+# deck order (Unit 26l).
+[mesh]
+type = generate3d
+layered = on
+domain = {0} {1} {2} {3} 0 {4}
+patch body = {0} {2} 0  {1} {3} 0
+max_size = {5}
+interface_resolution = {6}
+
+[region substrate]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[equilibrium]
+)", x0, x1, y0, y1, format_length(height), format_length(size), format_length(res));
+}
 
 }  // namespace
 
@@ -177,7 +212,6 @@ GeometryPage::GeometryPage(HWND parent, Host& host, int id, int inspector_id, bo
     add(c_kind, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST);
     add(c_draw_label, L"STATIC", L"Draw with", SS_LEFT);
     add(c_draw, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST);
-    add(c_new_layout, L"BUTTON", L"New 2D layout", WS_TABSTOP | BS_PUSHBUTTON);
     for (const int c : {c_material, c_draw}) {
         for (const std::string& m : choices_of("region", "material")) {
             SendMessageW(control(c), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(wide(m).c_str()));
@@ -286,7 +320,6 @@ void GeometryPage::layout_inspector() {
     pair(c_kind_label, c_kind, MulDiv(160, dpi_, 96));
     y += pad;
     pair(c_draw_label, c_draw, MulDiv(200, dpi_, 96));
-    line(c_new_layout);
 }
 
 // --- the deck -------------------------------------------------------------------------------------------------
@@ -511,10 +544,45 @@ void GeometryPage::update_tool_buttons() {
 void GeometryPage::cancel() {
     if (drag_ != Drag::none && drag_ != Drag::measure) g_ = drag_ == Drag::rubber || drag_ == Drag::pan ? g_ : g_start_;
     drag_ = Drag::none;
+    start_ = Start::none;
     polygon_.clear();
     hover_.reset();
     if (GetCapture() == canvas_) ReleaseCapture();
     invalidate();
+}
+
+// --- a new device drawn on a deck with no mesh ------------------------------------------------------------------
+
+bool GeometryPage::can_start() const { return !g_.editable() && message_.starts_with("the deck has no [mesh]"); }
+
+Pt GeometryPage::start_point(double x, double y) const {
+    const Coord step = grid_step(view_);
+    const Pt p = view_.model(x, y);
+    const auto round = [&](Coord v) { return static_cast<Coord>(std::llround(static_cast<double>(v) / static_cast<double>(step))) * step; };
+    return {round(p.x), round(p.y)};
+}
+
+std::string GeometryPage::start_readout() const {
+    if (start_ == Start::none) return {};
+    const auto um = [](Coord q) { return std::format("{:g}", static_cast<double>(q) / per_um); };
+    const Coord w = std::abs(start_b_.x - start_a_.x), h = std::abs(start_b_.y - start_a_.y);
+    if (start_ == Start::footprint) return std::format("{} × {} µm", um(w), um(h));
+    return std::format("{} × {} × {} µm", um(w), um(h), um(start_h_));
+}
+
+void GeometryPage::start_finish() {
+    const Rect d{{std::min(start_a_.x, start_b_.x), std::min(start_a_.y, start_b_.y)},
+                 {std::max(start_a_.x, start_b_.x), std::max(start_a_.y, start_b_.y)}};
+    const bool three = start_ == Start::height;
+    const Coord height = start_h_;
+    start_ = Start::none;
+    if (GetCapture() == canvas_) ReleaseCapture();
+    if (three) {
+        apply_text(layout3d(d, height));  // the host shows the 3D modeller for it
+        return;
+    }
+    apply_text(layout2d(d));
+    fit();
 }
 
 void GeometryPage::fit() {
@@ -548,7 +616,6 @@ void GeometryPage::update_inspector() {
     show({c_name_label, c_name, c_material_label, c_material, c_raise, c_lower, c_x_label, c_x, c_y_label, c_y, c_w_label,
           c_w, c_h_label, c_h, c_vertices_label, c_vertices, c_apply, c_kind_label, c_kind},
          false);
-    show({c_new_layout}, !g_.editable() && message_.starts_with("the deck has no [mesh]"));
     show({c_draw_label, c_draw}, g_.editable());
     const auto xywh = [&](Rect r, bool contact) {
         show({c_x_label, c_x, c_y_label, c_y, c_w_label, c_w, c_h_label, c_h}, true);
@@ -562,7 +629,9 @@ void GeometryPage::update_inspector() {
         set(c_h, ui_length(contact ? r.hi.y : r.hi.y - r.lo.y));
     };
     std::string hint;
-    if (!g_.editable()) {
+    if (can_start()) {
+        hint = "The deck has no mesh yet. Drag on the canvas to draw a 2D device; Ctrl+drag for a 3D one.";
+    } else if (!g_.editable()) {
         hint = message_.empty() ? std::string("Open a 2D deck to draw its device.") : message_;
     } else if (contact_ >= 0) {
         const Contact& c = g_.contacts[static_cast<std::size_t>(contact_)];
@@ -615,11 +684,6 @@ bool GeometryPage::commit(int c) {
     };
     if (c == c_draw) {
         material_ = choice(c_draw);
-        return true;
-    }
-    if (c == c_new_layout) {
-        apply_text(std::string(layout_template));
-        fit();
         return true;
     }
     Geometry next = g_;
@@ -690,6 +754,18 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
     SetFocus(canvas_);
     press_x_ = last_x_ = x;
     press_y_ = last_y_ = y;
+    if (can_start()) {
+        if (start_ == Start::height) {
+            start_finish();  // the 3D device's height given: a click ends it
+            return;
+        }
+        start_ = Start::footprint;
+        start3d_ = ctrl;
+        start_a_ = start_b_ = start_point(x, y);
+        SetCapture(canvas_);
+        invalidate();
+        return;
+    }
     if (!g_.editable()) return;
     const auto begin = [&](Drag d) {
         drag_ = d;
@@ -816,6 +892,23 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
 void GeometryPage::on_move(double x, double y, bool shift) {
     const Pt raw = view_.model(x, y);
     host_.geometry_status(std::format("x {} µm, y {} µm", ui_length(raw.x), ui_length(raw.y)));
+    if (start_ == Start::footprint) {
+        start_b_ = start_point(x, y);
+        last_x_ = x;
+        last_y_ = y;
+        invalidate();
+        return;
+    }
+    if (start_ == Start::height) {
+        // The height follows the cursor up from where the footprint ended, on the grid, at least one step.
+        const Coord step = grid_step(view_);
+        const double um = (start_y_ - y) / view_.px_per_um;
+        start_h_ = std::max(step, static_cast<Coord>(std::llround(um * per_um / static_cast<double>(step))) * step);
+        last_x_ = x;
+        last_y_ = y;
+        invalidate();
+        return;
+    }
     const double dx = x - last_x_, dy = y - last_y_;
     last_x_ = x;
     last_y_ = y;
@@ -891,6 +984,23 @@ void GeometryPage::on_move(double x, double y, bool shift) {
 }
 
 void GeometryPage::on_up(double x, double y, bool shift) {
+    if (start_ == Start::footprint) {
+        on_move(x, y, shift);
+        if (start_a_.x == start_b_.x || start_a_.y == start_b_.y) {
+            cancel();  // a click, or a line: nothing drawn
+            return;
+        }
+        if (!start3d_) {
+            start_finish();
+            return;
+        }
+        start_ = Start::height;  // the height follows the cursor now; a click ends it (capture kept)
+        start_y_ = y;
+        start_h_ = grid_step(view_);
+        invalidate();
+        return;
+    }
+    if (start_ == Start::height) return;  // the click's own release
     on_move(x, y, shift);
     const Drag d = drag_;
     drag_ = Drag::none;
@@ -968,7 +1078,7 @@ bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
     case VK_HOME: fit(); return true;
     case VK_DELETE: remove(); return true;
     case VK_ESCAPE:
-        if (drag_ == Drag::none && polygon_.empty()) {
+        if (start_ == Start::none && drag_ == Drag::none && polygon_.empty()) {
             selection_.clear();
             contact_ = -1;
             update_inspector();
@@ -1062,7 +1172,65 @@ double GeometryPage::render() {
     const auto sx = [&](Coord x) { return static_cast<float>(view_.sx(x)); };
     const auto sy = [&](Coord y) { return static_cast<float>(view_.sy(y)); };
     const float px = static_cast<float>(dpi_) / 96.0f;
-    if (!g_.editable()) {
+    if (can_start()) {
+        // A deck with no mesh: a grid to draw a new device on, the hint, and the device being drawn with its size.
+        target_->PushAxisAlignedClip(D2D1::RectF(R, R, W, H), D2D1_ANTIALIAS_MODE_ALIASED);
+        target_->FillRectangle(D2D1::RectF(R, R, W, H), color(rgb(1, 1, 1)));
+        const Coord step = grid_step(view_);
+        const Pt a = view_.model(R, H), b = view_.model(W, R);
+        const auto first = [&](Coord v) { return static_cast<Coord>(std::floor(static_cast<double>(v) / static_cast<double>(step))) * step; };
+        if ((b.x - a.x) / step < 600 && (b.y - a.y) / step < 600) {
+            const D2D1_COLOR_F grid = rgb(0, 0, 0, 0.07f);
+            for (Coord x = first(a.x); x <= b.x; x += step) target_->DrawLine({sx(x), R}, {sx(x), H}, color(grid), 1.0f);
+            for (Coord y = first(a.y); y <= b.y; y += step) target_->DrawLine({R, sy(y)}, {W, sy(y)}, color(grid), 1.0f);
+        }
+        target_->DrawLine({sx(0), R}, {sx(0), H}, color(rgb(0, 0, 0, 0.3f)), 1.0f);  // the axes through the origin
+        target_->DrawLine({R, sy(0)}, {W, sy(0)}, color(rgb(0, 0, 0, 0.3f)), 1.0f);
+        const auto fill = [&](std::initializer_list<D2D1_POINT_2F> pts, D2D1_COLOR_F k) {
+            ID2D1PathGeometry* path = nullptr;
+            d2d_->CreatePathGeometry(&path);
+            if (!path) return;
+            ID2D1GeometrySink* sink = nullptr;
+            path->Open(&sink);
+            if (sink) {
+                auto p = pts.begin();
+                sink->BeginFigure(*p, D2D1_FIGURE_BEGIN_FILLED);
+                for (++p; p != pts.end(); ++p) sink->AddLine(*p);
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                sink->Close();
+                sink->Release();
+                target_->FillGeometry(path, color(k));
+                target_->DrawGeometry(path, color(rgb(0.13f, 0.33f, 0.66f)), 1.5f * px);
+            }
+            path->Release();
+        };
+        if (start_ != Start::none) {
+            const float l = std::min(sx(start_a_.x), sx(start_b_.x)), r = std::max(sx(start_a_.x), sx(start_b_.x));
+            const float t = std::min(sy(start_a_.y), sy(start_b_.y)), bt = std::max(sy(start_a_.y), sy(start_b_.y));
+            const D2D1_COLOR_F si = material_fill("silicon");
+            if (start_ == Start::height) {
+                // The box seen obliquely: its top face drawn up and to the right of the footprint by the height.
+                const float hp = static_cast<float>(static_cast<double>(start_h_) / per_um * view_.px_per_um) * 0.7071f;
+                fill({{l, bt}, {r, bt}, {r, t}, {l, t}}, si);
+                fill({{l, t}, {r, t}, {r + hp, t - hp}, {l + hp, t - hp}}, rgb(si.r * 1.08f, si.g * 1.08f, si.b * 1.08f));
+                fill({{r, t}, {r, bt}, {r + hp, bt - hp}, {r + hp, t - hp}}, rgb(si.r * 0.8f, si.g * 0.8f, si.b * 0.8f));
+            } else {
+                fill({{l, bt}, {r, bt}, {r, t}, {l, t}}, rgb(si.r, si.g, si.b, 0.85f));
+            }
+            // The live size at the cursor, on a white label.
+            const std::wstring s = wide(start_readout() + (start_ == Start::height ? "   click to finish, Esc to cancel" : ""));
+            const float lx = static_cast<float>(last_x_) + 14 * px, ly = static_cast<float>(last_y_) + 14 * px;
+            const float lw = (7.2f * static_cast<float>(s.size()) + 12) * px, lh = 22 * px;
+            target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(lx, ly, lx + lw, ly + lh), 4 * px, 4 * px), color(rgb(1, 1, 1, 0.95f)));
+            target_->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(lx, ly, lx + lw, ly + lh), 4 * px, 4 * px), color(rgb(0, 0, 0, 0.25f)), 1.0f);
+            text(s, lx + 6 * px, ly + 3 * px, lw, lh, rgb(0.1f, 0.1f, 0.1f));
+        }
+        target_->PopAxisAlignedClip();
+        text_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        text(L"Drag to draw a 2D device.   Ctrl+drag for 3D: release, move up for its height, click.", R, R + 10 * px, W - R, 24 * px,
+             rgb(0.35f, 0.35f, 0.35f));
+        text_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    } else if (!g_.editable()) {
         const std::wstring m = wide(message_.empty() ? std::string("Open a 2D deck to draw its device.") : message_);
         text_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         text(m, 0, H / 2 - 20 * px, W, 40 * px, rgb(0.35f, 0.35f, 0.35f));
@@ -1309,7 +1477,7 @@ LRESULT CALLBACK GeometryPage::inspector_proc(HWND hwnd, UINT message, WPARAM w,
         if (message == WM_COMMAND) {
             const int c = LOWORD(w) - self->inspector_id_;
             const int code = HIWORD(w);
-            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_new_layout)) ||
+            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply)) ||
                 (code == CBN_SELCHANGE && (c == c_material || c == c_kind || c == c_draw))) {
                 self->commit(c);
                 return 0;
@@ -1354,7 +1522,7 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
     case WM_LBUTTONDBLCLK: on_down(x, y, shift, ctrl, true); return 0;
     case WM_MOUSEMOVE: on_move(x, y, shift); return 0;
     case WM_LBUTTONUP:
-        if (drag_ != Drag::none && drag_ != Drag::pan) on_up(x, y, shift);
+        if (start_ != Start::none || (drag_ != Drag::none && drag_ != Drag::pan)) on_up(x, y, shift);
         else if (drag_ == Drag::pan) {
             drag_ = Drag::none;
             ReleaseCapture();
