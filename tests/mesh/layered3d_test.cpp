@@ -21,6 +21,13 @@ using namespace NiTCAD::mesh;
 
 namespace {
 
+// The unoptimised Debug build runs every 20th seeded layout (both halves of each sweep); Release runs them all.
+#ifdef NDEBUG
+constexpr int trial_stride = 1;
+#else
+constexpr int trial_stride = 20;
+#endif
+
 LayeredSolid box3(double x0, double x1, double y0, double y1, double z0, double z1, std::int32_t region) {
     LayeredSolid s;
     s.kind = LayeredSolid::Kind::box;
@@ -226,7 +233,7 @@ TEST_CASE("mesh layered3d: refusals name the solid (SD2)", "[mesh][layered3d]") 
 
 TEST_CASE("mesh layered3d: 1000 seeded random layouts resolve exactly (SE2)", "[mesh][layered3d]") {
     std::mt19937 rng(26015);
-    for (int trial = 0; trial < 1000; ++trial) {
+    for (int trial = 0; trial < 1000; trial += trial_stride) {
         CAPTURE(trial);
         const int n = 8;
         LayeredGeometry3D g{.lo = {0, 0, 0}, .hi = {n, n, n}, .background = 0, .solids = {}, .patches = {}};
@@ -298,7 +305,10 @@ TEST_CASE("mesh layered3d: 100 random boxes resolve within 50 ms (SE5)", "[mesh]
     }
     std::ranges::sort(ms);
     WARN(std::format("SE5: 100 random boxes resolved in {:.1f} ms (median of 3), {} volumes, {} facets", ms[1], volumes, facets));
+    // Release only (owner, 2026-11-19, as KG6): the unoptimised Debug build records the time.
+#ifdef NDEBUG
     CHECK(ms[1] <= 50.0);
+#endif
 }
 
 TEST_CASE("mesh layered3d: a layered MOS stack meshes through the polyhedral generator (SD1)", "[mesh][layered3d]") {

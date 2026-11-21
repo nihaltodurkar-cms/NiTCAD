@@ -21,6 +21,13 @@ using namespace NiTCAD::mesh;
 
 namespace {
 
+// The unoptimised Debug build runs every 20th seeded layout (both halves of each sweep); Release runs them all.
+#ifdef NDEBUG
+constexpr int trial_stride = 1;
+#else
+constexpr int trial_stride = 20;
+#endif
+
 LayeredSolid box3(double x0, double x1, double y0, double y1, double z0, double z1, std::int32_t region) {
     LayeredSolid s;
     s.kind = LayeredSolid::Kind::box;
@@ -253,7 +260,7 @@ TEST_CASE("mesh layered3d slanted: refusals and the uncovered message (SD6)", "[
 TEST_CASE("mesh layered3d slanted: 1000 seeded random layouts resolve exactly (SD6)", "[mesh][layered3d]") {
     std::mt19937 rng(26046);
     double slowest = 0.0;
-    for (int trial = 0; trial < 1000; ++trial) {
+    for (int trial = 0; trial < 1000; trial += trial_stride) {
         CAPTURE(trial);
         const int n = 8;
         const bool decimal = trial >= 700;  // the last 300 in tenths, so no coordinate but the integers is exact

@@ -74,11 +74,22 @@ message(STATUS "C++23 gate passed: /std:c++23preview, MSVC ${CMAKE_CXX_COMPILER_
 # are system headers and their warnings are silenced. CMake's default /W3 is removed so
 # it does not conflict with /W4.
 string(REGEX REPLACE "/W[0-4]" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+
+# Debug speed: a target with NITCAD_FAST_DEBUG (the numeric kernels, nitcad_linalg: Eigen's
+# sparse LU and ILUT, AMG) is optimised even in Debug, where unoptimised Eigen runs ~100x
+# slower than Release; every other target keeps /Od /Ob0 /RTC1. The Debug CRT, its checked
+# iterators and the asserts stay on everywhere, so the ABI is one.
+string(REGEX REPLACE "/O[bd][0-9]?|/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+set(_nitcad_slow_debug "$<AND:$<CONFIG:Debug>,$<NOT:$<BOOL:$<TARGET_PROPERTY:NITCAD_FAST_DEBUG>>>>")
+set(_nitcad_fast_debug "$<AND:$<CONFIG:Debug>,$<BOOL:$<TARGET_PROPERTY:NITCAD_FAST_DEBUG>>>")
+add_compile_options($<${_nitcad_slow_debug}:/Od> $<${_nitcad_slow_debug}:/Ob0> $<${_nitcad_slow_debug}:/RTC1>
+                    $<${_nitcad_fast_debug}:/O2> $<${_nitcad_fast_debug}:/Ob2>)
 add_compile_options(${NITCAD_LANG_FLAGS} /W4 /WX /external:W0)
 add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
 # --- Dependencies (from vcpkg.json) ------------------------------------------------
 find_package(Catch2 3 CONFIG REQUIRED)
+include(Catch)  # catch_discover_tests: the slow Release gates, one ctest entry per case
 find_package(Eigen3 CONFIG REQUIRED)
 # Optional: the build stamps its git revision into a run's provenance (Unit 42); "unknown" without.
 find_package(Git QUIET)
@@ -280,6 +291,7 @@ target_include_directories(nitcad_linalg PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/inc
 # Eigen is PRIVATE so its include path never reaches linalg consumers (6.10, Q5);
 # tests/linalg/header_boundary_test.cpp fails to compile if it does.
 target_link_libraries(nitcad_linalg PUBLIC NiTCAD::base PRIVATE Eigen3::Eigen)
+set_target_properties(nitcad_linalg PROPERTIES NITCAD_FAST_DEBUG ON)
 
 add_executable(nitcad_linalg_test
   tests/linalg/sparse_matrix_test.cpp
@@ -697,7 +709,10 @@ nitcad_add_file_tests(solve nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
 # Release and far longer in Debug, so they run in the Release configuration only.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-  add_test(NAME solve_mosfet COMMAND nitcad_solve_test "[mosfet]")
+  # One ctest entry per case (solve_mosfet.<case>), so ctest -j spreads the gates over the cores;
+  # the longest first (COST).
+  catch_discover_tests(nitcad_solve_test TEST_SPEC "[mosfet]" TEST_PREFIX "solve_mosfet." DISCOVERY_MODE PRE_TEST
+                       PROPERTIES COST 1000)
   # Likewise the slowest transient gates (tests/solve/transient_test.cpp, hidden tag [.transient]).
   add_test(NAME solve_transient COMMAND nitcad_solve_test "[transient]")
   # And the breakdown gates (tests/solve/impact_ionization_test.cpp, hidden tag [.breakdown]).
@@ -787,7 +802,8 @@ endif()
 # The Lombardi device gates (tests/deck/surface_mobility_test.cpp, hidden tag [.lombardi]: MOSFET
 # sweeps) run in the Release configuration only.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-  add_test(NAME deck_lombardi COMMAND nitcad_deck_test "[lombardi]")
+  catch_discover_tests(nitcad_deck_test TEST_SPEC "[lombardi]" TEST_PREFIX "deck_lombardi." DISCOVERY_MODE PRE_TEST
+                       PROPERTIES COST 1000)
   # And the MLDA example gates (tests/deck/quantum_confinement_test.cpp, [.mlda]; Unit 47).
   add_test(NAME deck_mlda COMMAND nitcad_deck_test "[mlda]")
 endif()

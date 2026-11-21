@@ -189,7 +189,10 @@ TEST_CASE("mesh layered: 200 rectangles resolve in at most 5 ms (GE5)", "[mesh][
     }
     std::ranges::sort(ms);
     WARN(std::format("GE5: 200 rectangles resolved in {:.2f} ms (median of 5), {} polygons", ms[2], polygons));
+    // Release only (owner, 2026-11-19, as KG6): the unoptimised Debug build records the time.
+#ifdef NDEBUG
     CHECK(ms[2] <= 5.0);
+#endif
 }
 // --- slice 4: slanted edges (GD10) ----------------------------------------------------------------------------------
 

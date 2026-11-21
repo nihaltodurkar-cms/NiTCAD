@@ -496,7 +496,10 @@ TEST_CASE("app geometry: a deck of 300 regions is written within 2 ms per edit (
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 50;
     WARN("GE5: 300 regions, write and read " << ms << " ms per edit");
+    // Release only (owner, 2026-11-19, as KG6): the unoptimised Debug build records the time.
+#ifdef NDEBUG
     CHECK(ms <= 2.0);
+#endif
 }
 
 TEST_CASE("app geometry: the grid, snapping and the Shift constraint", "[app][geometry]") {

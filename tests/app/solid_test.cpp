@@ -693,7 +693,10 @@ TEST_CASE("app solid: a deck of 100 solids is written within 2 ms per edit (SE5)
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 50;
     WARN("SE5: 100 solids, write and read " << ms << " ms per edit");
+    // Release only (owner, 2026-11-19, as KG6): the unoptimised Debug build records the time.
+#ifdef NDEBUG
     CHECK(ms <= 2.0);
+#endif
 }
 
 TEST_CASE("app solid: snapping to vertices, midpoints, edges, faces and the work plane's grid", "[app][solid]") {

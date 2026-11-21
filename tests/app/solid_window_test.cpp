@@ -147,11 +147,11 @@ const solid::Solid& deck_solid(const std::string& text, const std::string& regio
     auto m = solid::read_model(text);
     REQUIRE(m);
     keep = std::move(*m);
-    for (std::size_t r = 0; r < keep.regions.size(); ++r) {
-        if (keep.regions[r].name == region) return only_solid(keep, static_cast<int>(r));
-    }
-    FAIL("no region " << region << " in\n" << text);
-    return keep.regions[0].solids[0];
+    std::size_t r = 0;
+    while (r < keep.regions.size() && keep.regions[r].name != region) ++r;
+    INFO("no region " << region << " in\n" << text);
+    REQUIRE(r < keep.regions.size());
+    return only_solid(keep, static_cast<int>(r));
 }
 
 constexpr solid::Coord um = solid::per_um;
@@ -453,6 +453,9 @@ TEST_CASE("app window solid: orbiting and dragging with 100 solids take at most 
     SendMessageW(page.canvas(), WM_LBUTTONUP, 0, MAKELPARAM(gx + 62, gy));
     std::printf("SE5: 100 solids on WARP: orbit median %.2f ms (max %.2f), drag median %.2f ms (max %.2f); the scene builds' median %.2f ms\n", median(orbit),
                 *std::ranges::max_element(orbit), median(drag), *std::ranges::max_element(drag), median(build));
+    // Release only (owner, 2026-11-19, as KG6): the unoptimised Debug build records the time.
+#ifdef NDEBUG
     CHECK(median(orbit) <= 16.0);
     CHECK(median(drag) <= 16.0);
+#endif
 }
