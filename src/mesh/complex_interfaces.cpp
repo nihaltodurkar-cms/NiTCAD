@@ -148,10 +148,16 @@ Point InterfacePieceLayout::to_world(const Point& l, double offset) const {
 double InterfacePieceLayout::distance(const Point& x) const {
     const double h = axis >= 0 ? x[static_cast<std::size_t>(axis)] - polygon[0][static_cast<std::size_t>(axis)]
                                : dot3(sub(x, origin), normal);
-    if (inside_closed_2d(local, to_local(x))) return std::abs(h);
+    const Point l = to_local(x);
+    if (inside_closed_2d(local, l) && std::ranges::none_of(local_holes, [&](const std::vector<Point>& q) { return strictly_inside_2d(q, l); })) {
+        return std::abs(h);
+    }
     double d = std::numeric_limits<double>::infinity();
     for (std::size_t k = 0; k < polygon.size(); ++k) {
         d = std::min(d, segment_segment(x, x, polygon[k], polygon[(k + 1) % polygon.size()]));
+    }
+    for (const std::vector<Point>& q : holes) {
+        for (std::size_t k = 0; k < q.size(); ++k) d = std::min(d, segment_segment(x, x, q[k], q[(k + 1) % q.size()]));
     }
     return d;
 }
@@ -186,6 +192,100 @@ std::vector<double> line_lattice(const Point& start, const Point& dir, double le
     return at;
 }
 
+// A 2D domain with holes (rings[0] counterclockwise, the holes clockwise; disjoint, the holes inside) cut into
+// simple polygons along lines v = c, one through each hole: c the middle of the widest gap between the rings'
+// vertex v values inside the hole's v range, so no vertex lies on a cut and every crossing is transversal. Each
+// cut line's parts inside the domain (between crossings, by parity) become edges, and the faces left of the rings'
+// edges and of both directions of the cuts are traced: every hole is cut, so each face is simple (Unit 64, IP2).
+std::expected<std::vector<std::vector<Point>>, base::Error> cut_at_holes(const std::vector<std::vector<Point>>& rings) {
+    std::vector<double> vs;
+    for (const auto& r : rings) {
+        for (const Point& p : r) vs.push_back(p[1]);
+    }
+    std::ranges::sort(vs);
+    vs.erase(std::unique(vs.begin(), vs.end()), vs.end());
+    std::vector<double> cuts;
+    for (std::size_t h = 1; h < rings.size(); ++h) {
+        const auto [lo, hi] = std::ranges::minmax_element(rings[h], {}, [](const Point& p) { return p[1]; });
+        double best = 0.0, c = 0.0;
+        for (std::size_t k = 0; k + 1 < vs.size(); ++k) {
+            if (vs[k] < (*lo)[1] || vs[k + 1] > (*hi)[1]) continue;
+            if (vs[k + 1] - vs[k] > best) {
+                best = vs[k + 1] - vs[k];
+                c = 0.5 * (vs[k] + vs[k + 1]);
+            }
+        }
+        if (!(best > 0.0)) return std::unexpected(invalid("a holed pair set could not be cut (internal)", h));
+        cuts.push_back(c);
+    }
+    std::ranges::sort(cuts);
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+
+    // The graph: ring vertices and crossings; each vertex's ring successor, and its cut partner (or -1).
+    std::vector<Point> pts;
+    std::vector<std::size_t> succ;
+    std::vector<long long> partner;
+    std::vector<std::vector<std::pair<double, std::size_t>>> on_cut(cuts.size());  // (u, vertex) per cut
+    for (const auto& r : rings) {
+        const std::size_t first = pts.size();
+        for (std::size_t i = 0; i < r.size(); ++i) {
+            const Point& p = r[i];
+            const Point& q = r[(i + 1) % r.size()];
+            pts.push_back(p);
+            partner.push_back(-1);
+            // The crossings of pq, in order from p.
+            std::vector<std::pair<double, std::size_t>> xs;  // (t, cut)
+            for (std::size_t k = 0; k < cuts.size(); ++k) {
+                const double c = cuts[k];
+                if ((p[1] < c && c < q[1]) || (q[1] < c && c < p[1])) xs.emplace_back((c - p[1]) / (q[1] - p[1]), k);
+            }
+            std::ranges::sort(xs);
+            for (const auto& [t, k] : xs) {
+                const Point x{p[0] + t * (q[0] - p[0]), cuts[k], 0.0};
+                on_cut[k].emplace_back(x[0], pts.size());
+                pts.push_back(x);
+                partner.push_back(-1);
+            }
+        }
+        for (std::size_t v = first; v < pts.size(); ++v) succ.push_back(v + 1 < pts.size() ? v + 1 : first);
+    }
+    for (auto& line : on_cut) {
+        std::ranges::sort(line);
+        if (line.size() % 2 != 0) return std::unexpected(invalid("a holed pair set could not be cut (internal)", 0));
+        for (std::size_t k = 0; k + 1 < line.size(); k += 2) {
+            if (!(line[k + 1].first > line[k].first)) return std::unexpected(invalid("a holed pair set could not be cut (internal)", 0));
+            partner[line[k].second] = static_cast<long long>(line[k + 1].second);
+            partner[line[k + 1].second] = static_cast<long long>(line[k].second);
+        }
+    }
+    // Faces: arriving along a ring edge at a vertex with a cut, turn onto the cut (it lies inside, to the left);
+    // arriving along a cut, continue on the ring.
+    std::vector<char> ring_used(pts.size(), 0), cut_used(pts.size(), 0);  // the edge leaving each vertex
+    std::vector<std::vector<Point>> faces;
+    const auto trace = [&](std::size_t v, bool by_cut) {
+        std::vector<Point> f;
+        while (true) {
+            char& used = by_cut ? cut_used[v] : ring_used[v];
+            if (used) break;
+            used = 1;
+            f.push_back(pts[v]);
+            const std::size_t w = by_cut ? static_cast<std::size_t>(partner[v]) : succ[v];
+            by_cut = !by_cut && partner[w] >= 0;
+            v = w;
+            if (f.size() > 2 * pts.size()) break;
+        }
+        return f;
+    };
+    for (std::size_t v = 0; v < pts.size(); ++v) {
+        if (!ring_used[v]) faces.push_back(trace(v, false));
+        if (partner[v] >= 0 && !cut_used[v]) faces.push_back(trace(v, true));
+    }
+    for (const auto& f : faces) {
+        if (f.size() < 3 || !simple_2d(f) || polygon_turn(f) <= 0) return std::unexpected(invalid("a holed pair set could not be cut (internal)", 0));
+    }
+    return faces;
+}
+
 }  // namespace
 
 std::vector<double> trace_positions(const Point& start, const Point& dir, double length, double s) {
@@ -197,31 +297,43 @@ std::vector<double> trace_positions(const Point& start, const Point& dir, double
 }
 
 std::expected<std::vector<Point>, base::Error> pair_set(const InterfacePieceLayout& piece, double s, std::size_t max_nodes) {
-    // The inset polygon with its edges' graded points as extra (near-collinear) vertices.
-    std::vector<Point> poly;
-    const std::size_t n = piece.inset.size();
-    for (std::size_t i = 0; i < n; ++i) {
-        const Point& a = piece.inset[i];
-        const Point& b = piece.inset[(i + 1) % n];
-        poly.push_back(a);
-        const double len = std::hypot(b[0] - a[0], b[1] - a[1]);
-        // The feature line's lattice, carried to the inset edge parallel to it.
-        const Point& A = piece.polygon[i];
-        const Point& B = piece.polygon[(i + 1) % piece.polygon.size()];
-        const Point dir = unit(sub(B, A));
-        const Point aw = piece.to_world(a, 0.0);
-        for (const double t : line_lattice(aw, dir, len, s, 0.5 * s)) {
-            Point x{a[0] + (b[0] - a[0]) * (t / len), a[1] + (b[1] - a[1]) * (t / len), 0.0};
-            for (std::size_t c = 0; c < 2; ++c) {
-                if (a[c] == b[c]) x[c] = a[c];
+    // An inset ring with its edges' graded points as extra (near-collinear) vertices.
+    const auto ring = [&](const std::vector<Point>& inset, const std::vector<Point>& corners) {
+        std::vector<Point> poly;
+        const std::size_t n = inset.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            const Point& a = inset[i];
+            const Point& b = inset[(i + 1) % n];
+            poly.push_back(a);
+            const double len = std::hypot(b[0] - a[0], b[1] - a[1]);
+            // The feature line's lattice, carried to the inset edge parallel to it.
+            const Point& A = corners[i];
+            const Point& B = corners[(i + 1) % corners.size()];
+            const Point dir = unit(sub(B, A));
+            const Point aw = piece.to_world(a, 0.0);
+            for (const double t : line_lattice(aw, dir, len, s, 0.5 * s)) {
+                Point x{a[0] + (b[0] - a[0]) * (t / len), a[1] + (b[1] - a[1]) * (t / len), 0.0};
+                for (std::size_t c = 0; c < 2; ++c) {
+                    if (a[c] == b[c]) x[c] = a[c];
+                }
+                poly.push_back(x);
             }
-            poly.push_back(x);
         }
+        return poly;
+    };
+    Geometry2D g2{{RegionPolygon{ring(piece.inset, piece.polygon), 0}}, {}};
+    if (!piece.inset_holes.empty()) {
+        std::vector<std::vector<Point>> rings{std::move(g2.polygons[0].vertices)};
+        for (std::size_t h = 0; h < piece.inset_holes.size(); ++h) rings.push_back(ring(piece.inset_holes[h], piece.holes[h]));
+        auto cut = cut_at_holes(rings);
+        if (!cut) return std::unexpected(std::move(cut.error()));
+        g2.polygons.clear();
+        for (std::vector<Point>& q : *cut) g2.polygons.push_back(RegionPolygon{std::move(q), 0});
     }
     MeshOptions2D o2;
     o2.max_size = piece.spacing;
     o2.max_nodes = max_nodes;
-    auto m = generate_mesh(Geometry2D{{RegionPolygon{poly, 0}}, {}}, o2);
+    auto m = generate_mesh(g2, o2);
     if (!m) return std::unexpected(std::move(m.error()));
     return std::move(m->simplices.points);
 }
@@ -312,43 +424,98 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
         for (const auto& [v, list] : next) {
             if (list.size() != 2) return std::unexpected(invalid("an interface piece is not a simple polygon (a pinched vertex; unsupported)", f0));
         }
-        std::size_t prev = next.begin()->first;
-        std::size_t at = next.begin()->second[0];
-        pc.loop.push_back(prev);
-        while (at != pc.loop[0]) {
-            pc.loop.push_back(at);
-            const auto& nb = next[at];
-            const std::size_t to = nb[0] == prev ? nb[1] : nb[0];
-            prev = at;
-            at = to;
-            if (pc.loop.size() > edges) break;
+        // Every loop of the boundary (Unit 64, IP2): the first from the lowest vertex, as before holes.
+        std::vector<std::vector<std::size_t>> loops;
+        std::set<std::size_t> unvisited;
+        for (const auto& [v, list] : next) unvisited.insert(v);
+        std::size_t walked = 0;
+        while (!unvisited.empty() && walked <= edges) {
+            std::vector<std::size_t> lp;
+            std::size_t prev = *unvisited.begin();
+            std::size_t at = next[prev][0];
+            lp.push_back(prev);
+            while (at != lp[0]) {
+                lp.push_back(at);
+                const auto& nb = next[at];
+                const std::size_t to = nb[0] == prev ? nb[1] : nb[0];
+                prev = at;
+                at = to;
+                if (lp.size() > edges) break;
+            }
+            for (const std::size_t v : lp) unvisited.erase(v);
+            walked += lp.size();
+            loops.push_back(std::move(lp));
         }
-        if (pc.loop.size() != edges) return std::unexpected(invalid("an interface piece has holes (unsupported)", f0));
-        const std::size_t m = pc.loop.size();
-        std::vector<std::size_t> corners;
-        for (std::size_t i = 0; i < m; ++i) {
-            if (!collinear(P[pc.loop[(i + m - 1) % m]], P[pc.loop[i]], P[pc.loop[(i + 1) % m]])) corners.push_back(pc.loop[i]);
-        }
+        if (walked != edges) return std::unexpected(invalid("an interface piece's boundary is not a set of loops (internal)", f0));
+        const auto corners_of = [&](const std::vector<std::size_t>& lp) {
+            const std::size_t m = lp.size();
+            std::vector<Point> c;
+            for (std::size_t i = 0; i < m; ++i) {
+                if (!collinear(P[lp[(i + m - 1) % m]], P[lp[i]], P[lp[(i + 1) % m]])) c.push_back(P[lp[i]]);
+            }
+            return c;
+        };
         for (int a = 0; a < 3 && pc.axis < 0; ++a) {
             const auto aa = static_cast<std::size_t>(a);
-            if (std::ranges::all_of(pc.loop, [&](std::size_t v) { return P[v][aa] == P[pc.loop[0]][aa]; })) pc.axis = a;
+            if (std::ranges::all_of(loops[0], [&](std::size_t v) { return P[v][aa] == P[loops[0][0]][aa]; })) pc.axis = a;
         }
-        for (const std::size_t v : corners) pc.polygon.push_back(P[v]);
-        if (pc.axis >= 0) {
-            pc.normal = {0.0, 0.0, 0.0};
-            pc.normal[static_cast<std::size_t>(pc.axis)] = 1.0;
-        } else {
-            const auto& pl = F[f0].plane;
-            pc.normal = unit(cross(sub(P[pl[1]], P[pl[0]]), sub(P[pl[2]], P[pl[0]])));
-            pc.origin = pc.polygon[0];
-            pc.u = unit(sub(pc.polygon[1], pc.polygon[0]));
-            pc.w = cross(pc.normal, pc.u);
+        const auto set_frame = [&](const std::vector<Point>& c) {
+            if (pc.axis >= 0) {
+                pc.normal = {0.0, 0.0, 0.0};
+                pc.normal[static_cast<std::size_t>(pc.axis)] = 1.0;
+            } else {
+                const auto& pl = F[f0].plane;
+                pc.normal = unit(cross(sub(P[pl[1]], P[pl[0]]), sub(P[pl[2]], P[pl[0]])));
+                pc.origin = c[0];
+                pc.u = unit(sub(c[1], c[0]));
+                pc.w = cross(pc.normal, pc.u);
+            }
+        };
+        const auto to_frame = [&](const std::vector<Point>& c) {
+            std::vector<Point> l;
+            for (const Point& x : c) l.push_back(pc.to_local(x));
+            return l;
+        };
+        // The outer loop: the one of largest area (it holds the others); its corners fix the frame.
+        std::size_t outer = 0;
+        if (loops.size() > 1) {
+            set_frame(corners_of(loops[0]));
+            const auto area = [&](const std::vector<Point>& l) {
+                double a2 = 0.0;
+                for (std::size_t i = 0; i < l.size(); ++i) a2 += l[i][0] * l[(i + 1) % l.size()][1] - l[(i + 1) % l.size()][0] * l[i][1];
+                return std::abs(a2);
+            };
+            double best = -1.0;
+            for (std::size_t k = 0; k < loops.size(); ++k) {
+                const double a = area(to_frame(corners_of(loops[k])));
+                if (a > best) {
+                    best = a;
+                    outer = k;
+                }
+            }
         }
-        for (const Point& x : pc.polygon) pc.local.push_back(pc.to_local(x));
+        pc.loop = loops[outer];
+        pc.polygon = corners_of(pc.loop);
+        set_frame(pc.polygon);
+        pc.local = to_frame(pc.polygon);
         if (polygon_turn(pc.local) < 0) {
             std::ranges::reverse(pc.polygon);
             std::ranges::reverse(pc.local);
             std::ranges::reverse(pc.loop);
+        }
+        for (std::size_t k = 0; k < loops.size(); ++k) {
+            if (k == outer) continue;
+            std::vector<Point> c = corners_of(loops[k]);
+            std::vector<Point> l = to_frame(c);
+            if (polygon_turn(l) > 0) {
+                std::ranges::reverse(c);
+                std::ranges::reverse(l);
+                std::ranges::reverse(loops[k]);
+            }
+            if (!strictly_inside_2d(pc.local, l[0])) return std::unexpected(invalid("an interface piece's hole lies outside it (internal)", f0));
+            pc.hole_loops.push_back(loops[k]);
+            pc.holes.push_back(std::move(c));
+            pc.local_holes.push_back(std::move(l));
         }
     }
 
@@ -358,49 +525,53 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
     for (std::size_t k = 0; k < out.pieces.size(); ++k) {
         const InterfacePieceLayout& pc = out.pieces[k];
         const std::size_t f0 = pc.facets[0];
-        const std::size_t m = pc.loop.size();
-        loop_trace_face[k].assign(m, -1);
-        for (std::size_t i = 0; i < m; ++i) {
-            const std::size_t a = pc.loop[i];
-            const std::size_t b = pc.loop[(i + 1) % m];
-            const auto& fs = edge_facets.at(key(a, b));
-            std::vector<std::size_t> bnd;
-            for (const std::size_t f : fs) {
-                if (F[f].kind == FacetKind::boundary) bnd.push_back(f);
-            }
-            if (!bnd.empty()) {
-                if (bnd.size() != 2 || in.face_of[bnd[0]] != in.face_of[bnd[1]]) {
-                    return std::unexpected(invalid("an interface ends on a domain edge (the boundary must be planar across a trace; unsupported)", f0));
-                }
+        loop_trace_face[k].assign(pc.loop.size(), -1);
+        for (std::size_t L = 0; L <= pc.hole_loops.size(); ++L) {  // the outer loop, then the holes'
+            const std::vector<std::size_t>& loop = L == 0 ? pc.loop : pc.hole_loops[L - 1];
+            const std::size_t m = loop.size();
+            for (std::size_t i = 0; i < m; ++i) {
+                const std::size_t a = loop[i];
+                const std::size_t b = loop[(i + 1) % m];
+                const auto& fs = edge_facets.at(key(a, b));
+                std::vector<std::size_t> bnd;
                 for (const std::size_t f : fs) {
-                    if (F[f].kind == FacetKind::interface && piece_of[f] != static_cast<int>(k)) {
-                        return std::unexpected(invalid("two or more interfaces end on the boundary along one line (unsupported)", f0));
+                    if (F[f].kind == FacetKind::boundary) bnd.push_back(f);
+                }
+                if (!bnd.empty()) {
+                    if (L > 0) return std::unexpected(invalid("an interface piece's hole meets the boundary (internal)", f0));
+                    if (bnd.size() != 2 || in.face_of[bnd[0]] != in.face_of[bnd[1]]) {
+                        return std::unexpected(invalid("an interface ends on a domain edge (the boundary must be planar across a trace; unsupported)", f0));
+                    }
+                    for (const std::size_t f : fs) {
+                        if (F[f].kind == FacetKind::interface && piece_of[f] != static_cast<int>(k)) {
+                            return std::unexpected(invalid("two or more interfaces end on the boundary along one line (unsupported)", f0));
+                        }
+                    }
+                    loop_trace_face[k][i] = in.face_of[bnd[0]];
+                }
+                if (!checked.insert(key(a, b)).second) continue;
+                // Sectors between consecutive interface and boundary facets about the edge; the
+                // exterior one (between the two boundary facets) is skipped.
+                std::vector<std::pair<Point, std::size_t>> h;
+                for (const std::size_t f : fs) {
+                    if (F[f].kind == FacetKind::internal) continue;
+                    for (const auto& t : F[f].triangles) {
+                        if (std::ranges::find(t, a) == t.end() || std::ranges::find(t, b) == t.end()) continue;
+                        for (const std::size_t v : t) {
+                            if (v != a && v != b) h.emplace_back(P[v], f);
+                        }
+                        break;
                     }
                 }
-                loop_trace_face[k][i] = in.face_of[bnd[0]];
-            }
-            if (!checked.insert(key(a, b)).second) continue;
-            // Sectors between consecutive interface and boundary facets about the edge; the
-            // exterior one (between the two boundary facets) is skipped.
-            std::vector<std::pair<Point, std::size_t>> h;
-            for (const std::size_t f : fs) {
-                if (F[f].kind == FacetKind::internal) continue;
-                for (const auto& t : F[f].triangles) {
-                    if (std::ranges::find(t, a) == t.end() || std::ranges::find(t, b) == t.end()) continue;
-                    for (const std::size_t v : t) {
-                        if (v != a && v != b) h.emplace_back(P[v], f);
+                sort_about_line(P[a], P[b], h);
+                for (std::size_t j = 0; j < h.size(); ++j) {
+                    const auto& [p, fp] = h[j];
+                    const auto& [q, fq] = h[(j + 1) % h.size()];
+                    if (fp == fq) continue;
+                    if (F[fp].kind == FacetKind::boundary && F[fq].kind == FacetKind::boundary) continue;
+                    if (predicates::orient3d(P[a], P[b], p, q) > 0 && predicates::dihedral_below_60(P[a], P[b], p, q)) {
+                        return std::unexpected(invalid("an interface sector below 60 degrees (refused until justified, DECISIONS.md U12, FD7)", f0));
                     }
-                    break;
-                }
-            }
-            sort_about_line(P[a], P[b], h);
-            for (std::size_t j = 0; j < h.size(); ++j) {
-                const auto& [p, fp] = h[j];
-                const auto& [q, fq] = h[(j + 1) % h.size()];
-                if (fp == fq) continue;
-                if (F[fp].kind == FacetKind::boundary && F[fq].kind == FacetKind::boundary) continue;
-                if (predicates::orient3d(P[a], P[b], p, q) > 0 && predicates::dihedral_below_60(P[a], P[b], p, q)) {
-                    return std::unexpected(invalid("an interface sector below 60 degrees (refused until justified, DECISIONS.md U12, FD7)", f0));
                 }
             }
         }
@@ -550,19 +721,21 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
     };
     std::vector<Side> sides;
     for (std::size_t k = 0; k < out.pieces.size(); ++k) {
-        const auto& loop = out.pieces[k].loop;
-        const std::size_t m = loop.size();
-        std::size_t i0 = 0;
-        while (collinear(P[loop[(i0 + m - 1) % m]], P[loop[i0]], P[loop[(i0 + 1) % m]]) == true) ++i0;
-        Side cur{k, P[loop[i0]], {}, {loop[i0]}};
-        for (std::size_t n = 1; n <= m; ++n) {
-            const std::size_t i = (i0 + n) % m;
-            cur.vertices.push_back(loop[i]);
-            if (n == m || !collinear(P[loop[(i + m - 1) % m]], P[loop[i]], P[loop[(i + 1) % m]])) {
-                cur.b = P[loop[i]];
-                if (!(dist(cur.a, cur.b) >= 6.0 * s)) return std::unexpected(invalid("an interface feature line is shorter than 6 s", out.pieces[k].facets[0]));
-                sides.push_back(cur);
-                cur = Side{k, P[loop[i]], {}, {loop[i]}};
+        for (std::size_t L = 0; L <= out.pieces[k].hole_loops.size(); ++L) {
+            const auto& loop = L == 0 ? out.pieces[k].loop : out.pieces[k].hole_loops[L - 1];
+            const std::size_t m = loop.size();
+            std::size_t i0 = 0;
+            while (collinear(P[loop[(i0 + m - 1) % m]], P[loop[i0]], P[loop[(i0 + 1) % m]]) == true) ++i0;
+            Side cur{k, P[loop[i0]], {}, {loop[i0]}};
+            for (std::size_t n = 1; n <= m; ++n) {
+                const std::size_t i = (i0 + n) % m;
+                cur.vertices.push_back(loop[i]);
+                if (n == m || !collinear(P[loop[(i + m - 1) % m]], P[loop[i]], P[loop[(i + 1) % m]])) {
+                    cur.b = P[loop[i]];
+                    if (!(dist(cur.a, cur.b) >= 6.0 * s)) return std::unexpected(invalid("an interface feature line is shorter than 6 s", out.pieces[k].facets[0]));
+                    sides.push_back(cur);
+                    cur = Side{k, P[loop[i]], {}, {loop[i]}};
+                }
             }
         }
     }
@@ -592,6 +765,12 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
         for (const std::size_t f : out.pieces[k].facets) piece_vertices[k].insert(g.facets[f].vertices.begin(), g.facets[f].vertices.end());
     }
     const auto parallel = [](const Point& n1, const Point& n2) { return norm3(cross(n1, n2)) <= 1e-12; };
+    // Each piece's corner rings: its polygon, then its holes.
+    std::vector<std::vector<const std::vector<Point>*>> rings(out.pieces.size());
+    for (std::size_t k = 0; k < out.pieces.size(); ++k) {
+        rings[k].push_back(&out.pieces[k].polygon);
+        for (const auto& q : out.pieces[k].holes) rings[k].push_back(&q);
+    }
     // Each piece's clearance: its distance to the pieces and boundary faces checked here.
     std::vector<double> clearance(out.pieces.size(), std::numeric_limits<double>::infinity());
     for (std::size_t i = 0; i < out.pieces.size(); ++i) {
@@ -606,12 +785,19 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
             if (coplanar_pieces) continue;  // neighbours in one plane (a junction at 180 degrees)
             if (touching && !par) continue;
             double d = std::numeric_limits<double>::infinity();
-            for (const Point& x : A.polygon) d = std::min(d, B.distance(x));
-            for (const Point& x : B.polygon) d = std::min(d, A.distance(x));
-            for (std::size_t a = 0; a < A.polygon.size(); ++a) {
-                for (std::size_t b = 0; b < B.polygon.size(); ++b) {
-                    d = std::min(d, segment_segment(A.polygon[a], A.polygon[(a + 1) % A.polygon.size()], B.polygon[b],
-                                                    B.polygon[(b + 1) % B.polygon.size()]));
+            for (const auto* qa : rings[i]) {
+                for (const Point& x : *qa) d = std::min(d, B.distance(x));
+            }
+            for (const auto* qb : rings[j]) {
+                for (const Point& x : *qb) d = std::min(d, A.distance(x));
+            }
+            for (const auto* qa : rings[i]) {
+                for (const auto* qb : rings[j]) {
+                    for (std::size_t a = 0; a < qa->size(); ++a) {
+                        for (std::size_t b = 0; b < qb->size(); ++b) {
+                            d = std::min(d, segment_segment((*qa)[a], (*qa)[(a + 1) % qa->size()], (*qb)[b], (*qb)[(b + 1) % qb->size()]));
+                        }
+                    }
                 }
             }
             if (!(d >= 4.0 * s)) return std::unexpected(invalid("two interfaces within 4 s (a layer thinner than 4 s, or unrelated interfaces)", B.facets[0]));
@@ -627,11 +813,13 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
             if (touching) continue;
             double d = std::numeric_limits<double>::infinity();
             for (const auto& t : in.face_triangles[fi]) {
-                for (const Point& x : A.polygon) d = std::min(d, point_triangle(x, t[0], t[1], t[2]));
                 for (const Point& x : t) d = std::min(d, A.distance(x));
-                for (std::size_t a = 0; a < A.polygon.size(); ++a) {
-                    for (std::size_t e = 0; e < 3; ++e) {
-                        d = std::min(d, segment_segment(A.polygon[a], A.polygon[(a + 1) % A.polygon.size()], t[e], t[(e + 1) % 3]));
+                for (const auto* qa : rings[i]) {
+                    for (const Point& x : *qa) d = std::min(d, point_triangle(x, t[0], t[1], t[2]));
+                    for (std::size_t a = 0; a < qa->size(); ++a) {
+                        for (std::size_t e = 0; e < 3; ++e) {
+                            d = std::min(d, segment_segment((*qa)[a], (*qa)[(a + 1) % qa->size()], t[e], t[(e + 1) % 3]));
+                        }
                     }
                 }
             }
@@ -676,6 +864,44 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
             const Point d0 = sub(L[(i + 1) % nv], L[i]);
             const Point d1 = sub(pc.inset[(i + 1) % nv], pc.inset[i]);
             ok = d0[0] * d1[0] + d0[1] * d1[1] > 0.0;
+        }
+        // Holes (clockwise): the same offset to the left of each edge grows the hole by 1.5 s.
+        for (const std::vector<Point>& H : pc.local_holes) {
+            const std::size_t nh = H.size();
+            std::vector<Point> q;
+            for (std::size_t i = 0; i < nh && ok; ++i) {
+                const auto offset_line = [&](std::size_t a, std::size_t b) {
+                    const Point dd = sub(H[b], H[a]);
+                    const double len = std::hypot(dd[0], dd[1]);
+                    const Point inward{-dd[1] / len, dd[0] / len, 0.0};
+                    return std::pair{add(H[a], scale(1.5 * s, inward)), dd};
+                };
+                const auto [p1, d1] = offset_line((i + nh - 1) % nh, i);
+                const auto [p2, d2] = offset_line(i, (i + 1) % nh);
+                const double den = d1[0] * d2[1] - d1[1] * d2[0];
+                const double t = ((p2[0] - p1[0]) * d2[1] - (p2[1] - p1[1]) * d2[0]) / den;
+                q.push_back({p1[0] + t * d1[0], p1[1] + t * d1[1], 0.0});
+            }
+            ok = ok && simple_2d(q) && polygon_turn(q) < 0;
+            for (std::size_t i = 0; i < nh && ok; ++i) {
+                const Point d0 = sub(H[(i + 1) % nh], H[i]);
+                const Point d1 = sub(q[(i + 1) % nh], q[i]);
+                ok = d0[0] * d1[0] + d0[1] * d1[1] > 0.0;
+            }
+            // Inside the inset polygon and clear of the other insets: no edges meeting, a vertex inside.
+            ok = ok && strictly_inside_2d(pc.inset, q[0]);
+            const auto meets = [&](const std::vector<Point>& r) {
+                for (std::size_t a = 0; a < q.size(); ++a) {
+                    for (std::size_t b = 0; b < r.size(); ++b) {
+                        if (segments_meet_2d(q[a], q[(a + 1) % q.size()], r[b], r[(b + 1) % r.size()])) return true;
+                    }
+                }
+                return false;
+            };
+            ok = ok && !meets(pc.inset);
+            for (const std::vector<Point>& r : pc.inset_holes) ok = ok && !meets(r) && !strictly_inside_2d(r, q[0]) && !strictly_inside_2d(q, r[0]);
+            if (!ok) break;
+            pc.inset_holes.push_back(std::move(q));
         }
         if (!ok) return std::unexpected(invalid("an interface piece is too narrow for its 1.5 s inset", pc.facets[0]));
     }

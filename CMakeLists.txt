@@ -675,6 +675,7 @@ add_executable(nitcad_solve_test
   tests/solve/unstructured_test.cpp
   tests/solve/unstructured3d_test.cpp
   tests/solve/complex_convergence_test.cpp
+  tests/solve/interface_pieces_accuracy_test.cpp
   tests/solve/field_mobility_test.cpp
   tests/solve/fermi_dirac_test.cpp
   tests/solve/heterojunction_test.cpp

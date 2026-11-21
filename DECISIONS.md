@@ -1949,6 +1949,64 @@ layouts (`layered_partition3d`) in a 1 x 2 x 1 µm oxide domain, s = 0.02 µm un
 - **IC1:** the generator is unchanged; `mesh.generate_complex_interfaces`, `mesh.layered3d` and
   `mesh.layered3d_slanted` pass. Full suites and Debug not run (owner's word needed).
 
+**Slice 1 results (2026-11-21; IP2, IQ1 a):** holed interface pieces meshed natively, in
+`src/mesh/complex_interfaces.{hpp,cpp}` only.
+- **Code:**
+  - **Loops:** a piece's boundary is walked into every loop; the outer one is the loop of largest area in the frame
+    (it fixes the frame). The rest are holes, clockwise, in `hole_loops`, `holes`, `local_holes` and `inset_holes`.
+    The first loop still starts at the lowest vertex, so a piece without holes takes the old path unchanged.
+  - **Checks on hole edges:** sectors (U12), feature-line length (6 s) and separation (4 s). The piece's distance
+    (closed polygon less the holes' interiors) and its clearances run over the hole rings too. A hole meeting the
+    boundary would be refused as internal (it cannot: it would pinch the outer loop).
+  - **Inset:** each hole grows by 1.5 s, with the same offset to the left of its edges. It must stay simple,
+    clockwise, keep its edges' directions, lie inside the inset polygon and stay clear of the other insets, else
+    "too narrow for its 1.5 s inset".
+  - **Pair set:** a holed inset domain is cut along lines v = c into simple polygons of one region (`cut_at_holes`).
+    There is one line per hole, at the middle of the widest gap between the rings' vertex v values inside the hole's
+    v range, so no vertex lies on a cut. The cut parts inside the domain (by parity) become edges. The faces are
+    traced left of the rings and of both directions of each cut: arriving on a ring edge at a cut, turn onto it;
+    arriving on a cut, continue on the ring. Every hole is cut, so every face is simple. The 2D generator meshes the
+    tiling, and the hole edges' graded lattice is placed as on the outer edges. The cuts are not 3D features.
+- **IC1 met:** five layouts without holed pieces (the flush fin, the flush fin under a gate, the corner block, the
+  filleted flush fin at s = 0.01 µm, the uncrossed slanted fin) mesh to the same bits as at `be45c2d`. The pinned
+  FNV-1a digests over points, cells and node regions were taken from the old generator. One existing test moved,
+  as intended: Unit 53's FC2 section "an interface piece with a hole" (`generate_complex_interfaces_test.cpp`)
+  pinned the refusal, and now requires that extruded slab with a hole to mesh and certify. The public header's
+  interface rules (`generate.hpp`) no longer list holes as refused.
+- **IC2 met:** the square wire (7,700 nodes) and the 16-sided wire at s = 0.01 µm (23,151) mesh, pass the import
+  checks and carry a valid P4 certificate (`certifies`, flat deviation <= 1, corner deviation <= s). Their volumes
+  sum to the domain's to 1e-12, and their digests are pinned.
+- **IC3 missed (recorded, thresholds unchanged; the hidden case `[.interface_pieces_accuracy]` is `[!shouldfail]`,
+  as Unit 53's FC8).**
+  - **Set-up:** a p-type (1e17) silicon wire through an HfO2 block in oxide, with an ohmic body on the wire's y = 0
+    end and a metal gate (4.4 eV, 0.5 V) on the four faces along the wire; equilibrium Poisson; 200 seeded points.
+  - **Reference:** the swept generator's mesh of the same device, from two rings of trapezoids cut on the
+    diagonals. A grid of cells failed the 2D generator, first on 6 s, then on P4 where internal edges end on an
+    interface. With the gate on the top face only, gate and oxide cells became separate 2D regions; with the gate
+    over the ends too, the gate's edge met the body's at the wire.
+  - **Measured:** holed against swept, potential max 64 mV, rms 12.8 mV (of 0.71 V). The swept mesh against itself
+    at h/2 and s/2 differs by 43 mV max, 13 mV rms, so 1e-6 is far below what two meshes agree to.
+  - **Finding:** the two generators converge to different potentials. At (0.3, 1.0, 0.5) µm, in the HfO2, the
+    holed mesh gives -0.174 / -0.165 V at h, h/2, and the swept -0.206 / -0.233 / -0.246 V at h, h/2, h/4. The gap
+    remains with the HfO2 at the oxide's permittivity, and with no block at all (no holes: the polyhedral path that
+    slice 1 leaves bit-identical). So it is not slice 1's; the contacts select the same faces on both meshes, and
+    both meshes' numbering agrees. Which mesher, or this swept set-up, is off is an open question, outside this
+    unit.
+- **IC4 met:** two wires 2.5 s apart, a wire 2.5 s from the gate's side ("two unrelated interface features within
+  4 s"), two wires touching along an edge ("pinched vertex") and a diamond wire with 30-degree corners (U12) are
+  refused with the same messages as before.
+- **IC5 met:** 200 seeded slabs pierced by 1 to 4 boxes and prisms (4 to 6 sides), 464 holes in all: 200 mesh and
+  certify, none refused; 468 s in Release. The first 20 run in the visible case; all 200 in the hidden
+  `[.interface_pieces_random]`.
+- **IC6 met (recorded):** the square wire takes 7,700 nodes against a reference of 7,515 (the gate alone, plus what
+  the wire alone adds to the empty domain): 1.025, under 1.2. The generator took 1.9 s.
+- **IC7 met:** 12 mutants; 9 caught. These were: hole not inset (0 s); hole orientation reversed; distance
+  ignoring holes (caught once the holed digests were pinned); cut parity shifted; the cut never taken (nested rings);
+  holes not passed to the pair set; the cut at a vertex; the smallest loop taken as outer; only the first hole cut.
+  3 are equivalent: hole loops left out of the side checks and of the sector check (every hole edge is also an edge
+  of the piercing solid's pieces, whose loops carry it), and hole rings left out of the clearances (`distance()`
+  already measures to the holes).
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
