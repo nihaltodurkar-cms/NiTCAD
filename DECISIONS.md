@@ -1908,7 +1908,8 @@ generator's rules; GDS/STEP import.
 | MT7 | 2 | **Edges group and Cylinder,** on edges parallel to a prism's axis (a box is first written as its rectilinear prism): Chamfer (one slanted segment), Fillet (an arc of segments, MQ4), Round vertex (a prism polygon's corner, or a 2D corner in the 2D editor), Taper (drag the edge sideways; the wall angle shows; 26l slanted prisms). Cylinder in the Solid group: a prism whose polygon is a regular polygon (MQ4), drawn by dragging the radius. | Exact as 26l SD6; the generator's refusals shown, not loosened. |
 | MT8 | 3 | **Named parameters.** `[parameters]` holds `name = <length or number>`; a length value anywhere in `[mesh]`, region solids and `[doping]` may be `$name` or `$a + $b`, `$a - 5nm` (MQ1). Pressing N during a drag names the value (a new parameter, or an existing one picked); the model then writes the reference, and dragging a tied dimension edits the parameter's line. The inspector lists the parameters, editable. | Substituted before the build parses values, errors placed on the referring line. |
 | MT9 | 4 | **Doping group:** Region profile (click a solid: a `constant` profile over its box; drag up or down for the level, a log scale), Implant (drag a window on a face, then its peak depth and lateral spread: a `gaussian` profile), Junction (drag where the junction sits: an `erfc` profile's depth). Profiles show as translucent boxes coloured by concentration; each writes one `[doping]` profile by minimal edit. | Uses the existing profile keys only. |
-| MT10 | 4 | **Mesh group:** Max size (drag anywhere: `max_size`; the node count estimate shows), Interface layers (click an interface: `layer`, drag for the count and first thickness), Refine box only if MQ5 finds the generators already take a local size. | |
+| MT10 | 4 | **Mesh group:** Max size (drag anywhere: `max_size`; the node count estimate shows), Interface layers (click an interface: `layer`, drag for the count and first thickness), Refine box (drag a box, then inside it for the size: a new opt-in `[mesh]` key `refine = <lo point>  <hi point>  <size>`, handed to the generators' existing `SizeBox` list, 2D and 3D; MQ5). | No generator change. |
+| MT12 | 2 | **Meshable by construction** (the 3D generator's rules, in units of `interface_resolution` s: feature lines ≥ 6 s, unrelated interfaces ≥ 4 s apart, sectors ≥ 60°, no holed interface piece, no interface ending on a domain edge or corner, pieces wide enough for the 1.5 s inset). (1) **Automatic s:** the modeller computes the largest s the layout allows (the shortest feature over 6, the thinnest gap over 4, the narrowest piece over its inset) and shows it; written as `interface_resolution` unless the deck sets one. (2) **Adjusted before release:** a fillet's or cylinder's segment count drops until each segment is ≥ 6 s; Array, Align, Copy and Inset snap to keep a 4 s margin from unrelated interfaces and from the domain's edges; what cannot be adjusted (a holed piece, a sector under 60°) is shown as the refusal during the drag, naming the rule. (3) **Node estimate:** the expected node count (from s, `max_size` and the feature lines' graded pairs) shows live in the chip and the status bar. | The rules themselves unchanged here; lifting them is Unit 64. |
 | MT11 | — | **Commits:** this proposal, a commit per slice, then ARCHITECTURE (6.14, the deck chapter for `overlap` and `[parameters]`, 11.3) and the records. The owner may stop after any slice. | |
 
 **Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
@@ -1927,6 +1928,7 @@ generator's rules; GDS/STEP import.
 | MC10 | **Interaction:** a FinFET drawn by window messages only (box, Array of fins, Fillet on the fin tops, Extrude a gate over them with `fill`, Contacts, a Gaussian source/drain implant, one named `Lg`) builds and runs its equilibrium (coarse, ≤ 20k nodes). |
 | MC11 | **Mutants:** at least 8 per slice caught (e.g. the fixed camera still zooming on the wheel; `fill` taking a non-background cell; a parameter substituted on the wrong line; the deck line built from stale drag state). |
 | MC12 | **Layering:** models in `app` without Win32 headers; kernels in `mesh` without `app` or `deck`; parameters in `deck`; no new dependency. |
+| MC13 | **Meshable by construction (MT12):** for 500 seeded random layouts drawn with the tools, every layout the modeller accepts builds, and every one it refuses is refused by the build with the same message (no false accepts; false refusals counted and recorded). The automatic s is the largest that passes: s × 1.01 is refused by the build for each layout in a table. The node estimate is within ±30 % of the built mesh's node count on that table (recorded, not a gate, if missed). `refine` boxes build to the same bits as the same `SizeBox` list given to the generator directly. |
 
 **Questions (each with a recommendation; ruled by the standing "choose recommended" rule, 2026-11-11):**
 
@@ -1942,14 +1944,19 @@ generator's rules; GDS/STEP import.
   angle); a cylinder 16 sides; both on the 0.1 nm quantum; where a segment is shorter than the generator's 6 s
   trace, fewer segments and the reason shown. (b) A user-set count. **Recommended (a)** with the count editable in the
   inspector. Ruled (a).
-- **MQ5 — Refine box.** (a) Slice 4 checks whether the 2D and 3D generators take a local size field; if they do,
-  Refine box writes it; if not, the tool is left out and recorded (a mesh unit). (b) Add a size field in this unit.
-  **Recommended (a)**: generator work has its own criteria. Ruled (a).
+- **MQ5 — Refine box.** Checked while proposing: both generators already take `SizeBox` lists
+  (`MeshOptions2D::boxes`, `MeshOptions3D::boxes`), and per-region `region_max_size`, but the deck exposes neither.
+  (a) A new opt-in `[mesh] refine` key mapped to `SizeBox`, so Refine box ships in slice 4 with no generator change.
+  (b) Leave it out. **Recommended (a)**. Ruled (a).
 - **MQ6 — the 2D editor.** (a) Gets MT1–MT3 and the Edges group's corner tools and the overlap rule; the 3D-only
   tools are hidden there. (b) 3D only. **Recommended (a)**: one way of working in both. Ruled (a).
 
-**Risks:** the 3D generator's rules (26l SQ6) refuse many fillets, cylinders and arrays at small sizes, so MC6 and
-MC10 record refusals rather than pass them; the floating bar and live deck line touch every drag path, so MC4 and MC9
+**Risks:** the 3D generator's rules (26l SQ6) refuse some layouts. At the FinFET decks' s = 0.08 nm a 6-segment
+fillet needs r ≥ 23 s ≈ 1.9 nm and a 16-sided cylinder r ≥ 15 s ≈ 1.2 nm (arithmetic, not measured), so sizes are
+rarely the problem; MT12 keeps drawn layouts inside the rules. What stays refused: a nanowire through a gate (a holed
+interface piece), fins or fillets touching the domain's sides, a plane crossing a slanted wall, sectors under 60°.
+The first three are Unit 64; the last stays until measured (Unit 16 U12, the owner's ruling). Every non-right bend
+adds graded pairs along its whole length, so fillets may cost many nodes (MT12's estimate shows it); the floating bar and live deck line touch every drag path, so MC4 and MC9
 are the gates there; `[parameters]` is a deck change, so MC1 and MC7 guard every existing deck.
 
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
