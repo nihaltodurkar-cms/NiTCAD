@@ -265,11 +265,41 @@ TEST_CASE("app window geometry: decks it does not draw say why; a deck without a
         w->execute(Command::tab_geometry);
         GeometryPage& page = w->geometry_page();
         CHECK_FALSE(page.geometry().editable());
-        CHECK((GetWindowLongPtrW(page.control(GeometryPage::c_new_layout), GWL_STYLE) & WS_VISIBLE) != 0);
-        page.commit(GeometryPage::c_new_layout);
+        REQUIRE(page.can_start());
+        // No button: a drag on the empty canvas draws the device, its size shown live; a click alone draws nothing.
+        page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+        const Mouse m{page};
+        m.click(um / 2, um / 2);
+        CHECK(page.start_readout().empty());
+        CHECK_FALSE(page.geometry().editable());
+        m.down(0, 0);
+        m.move(um, um / 2);
+        CHECK(page.start_readout() == "1 × 0.5 µm");
+        m.move(3 * um, um);
+        CHECK(page.start_readout() == "3 × 1 µm");
+        m.up(3 * um, um);
+        CHECK(page.start_readout().empty());
         CHECK(page.geometry().editable());
         CHECK(page.geometry().mesh == geo::MeshKind::layered);
-        CHECK(has(w->deck().text(), "layered = on\n"));
+        CHECK(has(w->deck().text(), "type = generate2d\nlayered = on\ndomain = 0 3um 0 1um\nmax_size = 0.15um\n"));
+        CHECK_FALSE(w->solid_shown());
+    }
+    {
+        // Esc cancels a drag in progress.
+        auto w = window();
+        REQUIRE(w->open_deck(write("empty", "[device]\ntemperature = 300\n")));
+        w->execute(Command::tab_geometry);
+        GeometryPage& page = w->geometry_page();
+        page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+        const Mouse m{page};
+        const std::string before = w->deck().text();
+        m.down(0, 0);
+        m.move(um, um);
+        m.key(VK_ESCAPE);
+        CHECK(page.start_readout().empty());
+        m.up(um, um);
+        CHECK(w->deck().text() == before);
+        CHECK(page.can_start());
     }
     {
         // The tensor example: boxes only; its domain the built mesh's.
@@ -420,7 +450,8 @@ TEST_CASE("app window geometry: a MOSFET drawn on a new layout runs its sweep (G
     w->execute(Command::tab_geometry);
     GeometryPage& page = w->geometry_page();
     REQUIRE_FALSE(page.geometry().editable());
-    page.commit(GeometryPage::c_new_layout);
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    Mouse{page}.drag(0, 0, 2 * um, um);  // the device drawn on the empty canvas: 2 × 1 µm
     REQUIRE(page.geometry().mesh == geo::MeshKind::layered);
     page.set_view(geo::View{200.0, 50.0, 450.0, 96});
     const Mouse m{page};

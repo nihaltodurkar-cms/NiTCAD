@@ -119,12 +119,17 @@ public:
     [[nodiscard]] bool mesh_shown() const noexcept { return mesh_preview_ && !mesh_text_.empty() && mesh_text_ == text_seen_; }
     [[nodiscard]] const MeshOverlay& mesh() const noexcept { return mesh_; }
     [[nodiscard]] std::string banner() const;  // the canvas's foot line drawn last ("" none)
+    // A deck with no mesh: a drag on the canvas draws a new device, no button. A drag makes a 2D one; Ctrl+drag a
+    // 3D one, whose height follows the cursor after the release until a click ends it (Esc cancels).
+    [[nodiscard]] bool can_start() const;
+    // The size being drawn ("2 × 1 µm", "2 × 1 × 0.5 µm"; "" none), shown at the cursor.
+    [[nodiscard]] std::string start_readout() const;
 
     // The inspector's controls' ids (offsets from inspector_id).
     enum Control : int {
         c_heading = 0, c_name_label, c_name, c_material_label, c_material, c_raise, c_lower,
         c_x_label, c_x, c_y_label, c_y, c_w_label, c_w, c_h_label, c_h, c_vertices_label, c_vertices, c_apply,
-        c_kind_label, c_kind, c_draw_label, c_draw, c_hint, c_new_layout, c_new_layout3d, c_count
+        c_kind_label, c_kind, c_draw_label, c_draw, c_hint, c_count
     };
     [[nodiscard]] HWND control(int c) const;
 
@@ -199,6 +204,16 @@ private:
     bool mesh_preview_ = false;
     HWND mesh_button_ = nullptr;
     void locate_problems();
+
+    // A new device being drawn (can_start).
+    enum class Start { none, footprint, height };
+    Start start_ = Start::none;
+    bool start3d_ = false;
+    geo::Pt start_a_{}, start_b_{};
+    double start_y_ = 0;  // the cursor's y when the footprint ended
+    geo::Coord start_h_ = 0;
+    [[nodiscard]] geo::Pt start_point(double x, double y) const;
+    void start_finish();
     void prune_selection();
 };
 

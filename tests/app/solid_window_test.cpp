@@ -333,15 +333,32 @@ TEST_CASE("app window solid: a slanted prism clicked as it is, Shift keeping an 
     CHECK(b->device.regions().size() == 3);
 }
 
-TEST_CASE("app window solid: New 3D layout on a deck with no mesh opens the modeller; a box drawn on it builds", "[app][window][solid]") {
+TEST_CASE("app window solid: Ctrl+drag on a deck with no mesh draws a 3D device, its height after; the modeller opens and a box drawn on it builds", "[app][window][solid]") {
     auto w = window();
     REQUIRE(w->open_deck(write("empty3d", "[device]\ntemperature = 300\n")));
     w->execute(Command::tab_geometry);
     CHECK_FALSE(w->solid_shown());
     GeometryPage& geometry = w->geometry_page();
-    CHECK((GetWindowLongPtrW(geometry.control(GeometryPage::c_new_layout3d), GWL_STYLE) & WS_VISIBLE) != 0);
-    geometry.commit(GeometryPage::c_new_layout3d);
-    CHECK(has(w->deck().text(), "type = generate3d\nlayered = on\ndomain = 0 1um 0 1um 0 1um\n"));
+    REQUIRE(geometry.can_start());
+    // Ctrl+drag the footprint, release, move up for the height (no button held), click: the size shown live.
+    geometry.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    const auto at = [&](double x_um, double y_um) {
+        return MAKELPARAM(static_cast<int>(std::lround(geometry.view().sx(static_cast<geo::Coord>(x_um * um)))),
+                          static_cast<int>(std::lround(geometry.view().sy(static_cast<geo::Coord>(y_um * um)))));
+    };
+    const auto send = [&](UINT m, WPARAM k, LPARAM p) { SendMessageW(geometry.canvas(), m, k, p); };
+    send(WM_LBUTTONDOWN, MK_LBUTTON | MK_CONTROL, at(0, 0));
+    send(WM_MOUSEMOVE, MK_LBUTTON | MK_CONTROL, at(1, 1));
+    CHECK(geometry.start_readout() == "1 × 1 µm");
+    send(WM_LBUTTONUP, MK_CONTROL, at(1, 1));
+    CHECK_FALSE(w->solid_shown());  // the height is still to come
+    send(WM_MOUSEMOVE, 0, at(1, 1.5));
+    CHECK(geometry.start_readout() == "1 × 1 × 0.5 µm");
+    send(WM_MOUSEMOVE, 0, at(1, 2));
+    CHECK(geometry.start_readout() == "1 × 1 × 1 µm");
+    send(WM_LBUTTONDOWN, MK_LBUTTON, at(1, 2));
+    send(WM_LBUTTONUP, 0, at(1, 2));
+    CHECK(has(w->deck().text(), "type = generate3d\nlayered = on\ndomain = 0 1um 0 1um 0 1um\npatch body = 0 0 0  1um 1um 0\n"));
     REQUIRE(w->solid_shown());
     CHECK(IsWindowVisible(w->solid_page().hwnd()) == IsWindowVisible(w->hwnd()));
     SolidPage& page = w->solid_page();
