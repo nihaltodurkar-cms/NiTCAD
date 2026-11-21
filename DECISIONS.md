@@ -1921,6 +1921,34 @@ oblique domains (layered domains are boxes); pinched pieces (two loops meeting a
 measurements found bisector nodes made a right-angle corner worse), so IC2 and IC3 are the gates; `pair_set` with
 holes is new triangulation code, so IC5's random layouts guard it.
 
+**Slice 0 results (2026-11-21; IP1; `be45c2d`):** tests only, `tests/mesh/interface_pieces_test.cpp` (ctest
+`mesh.interface_pieces`, 4 cases, 25 assertions, 7.2 s Release); the generator unchanged. Fixtures are layered 3D
+layouts (`layered_partition3d`) in a 1 x 2 x 1 µm oxide domain, s = 0.02 µm unless named.
+- **Holes: confirmed.** A square wire (0.2 µm) and a 16-sided wire (radius 0.2 µm, s = 0.01 µm so its traces clear
+  6 s) through a gate: the gate's faces are pieces with the wire as a hole, refused "an interface piece has holes".
+- **Domain edges and corners: the record was wrong.** A fin flush with the domain's x = 0 face, the same fin under a
+  gate flush with the top and both x faces, and a block in the domain's corner touching three faces all **mesh
+  today**. A filleted flush fin (radius 0.2 µm, four segments of 0.078 µm) meshes at s = 0.01 µm and is refused at
+  0.02 µm by the 6 s trace rule (a sizing rule, kept). The reason: an axis-aligned piece in a box domain never has
+  an edge on a domain edge or a vertex at a domain corner (its plane would have to hold the edge); where it reaches
+  one it crosses it, which Unit 53 handles. The refusal "an interface ends on a domain edge" is reached only by a
+  slanted wall ending on the edge (pinned, a wall from (z, x) = (1, 0) to (0.4, 0.2)); with the faces at 90° such a
+  wall leaves a wedge of at most 45° on one side, so the kept 60-degree rule (U12) refuses it if this rule did not.
+  A domain corner is reached only with an edge (26l's slanted walls are all parallel to one axis), so "a domain
+  corner" is not reached on its own. **IP3 (slice 2) therefore has no target while U12 stands: dropped**
+  (recommended; ruled by the standing rule of 2026-11-11; dropping a slice loosens nothing). Reviving it needs the
+  owner's word on U12 for sectors under 60°.
+- **Folds: mechanism confirmed, scope corrected.** 26l SD6's slanted FinFET is refused "two interfaces within 4 s".
+  Its touching, not exactly coplanar wall facets are parallel to 1e-15 (the rule's tolerance 1e-12): 8 pairs of one
+  region pair (a wall split into pieces of its own pair, a 180° bend) and 6 of different pairs (fin | oxide against
+  fin | gate where the gate's bottom crosses, a 180° junction). IP4's "the same two regions on the same sides" is
+  too narrow: slice 3 takes both kinds.
+- **IC7:** 10 mutants of the rules the fixtures reach (hole check off; parallel tolerance 0 and 1e-17; touching
+  parallel pieces skipped; coplanar neighbours not skipped; domain-edge rule off and inverted; 6 s rule at 3 s and
+  off; the 4 s rule at 0): all 10 caught.
+- **IC1:** the generator is unchanged; `mesh.generate_complex_interfaces`, `mesh.layered3d` and
+  `mesh.layered3d_slanted` pass. Full suites and Debug not run (owner's word needed).
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
