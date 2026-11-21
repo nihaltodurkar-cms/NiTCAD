@@ -2076,7 +2076,14 @@ layouts (`layered_partition3d`) in a 1 x 2 x 1 µm oxide domain, s = 0.02 µm un
       neither changes an outcome, though both are needed for the bound to be rigorous.
 - **Recorded, outside the unit:** a corner at an ulp angle (the mutants above) aborts the generator on a contract
   instead of being refused with a message. Slice 3 never forms one; any rule that does would need a guard.
-- **Runs:** targeted Release only, `-j 6`, test shards at most 6 at once.
+- **Runs:** targeted Release, `-j 6`, test shards at most 6 at once.
+- **Full Release suite (owner's word, 2026-11-21; at `d79bdb9`, `ctest --preset release -j 6`):** 278 of 279
+  passed in 825 s (1 skipped: the PARDISO MOSFET case, as always). The one failure was slice 1's, unseen then (no
+  full suite): `app_window.solid_check_window` used a box punching a hole in the oxide's interface plane as an
+  invalid deck. The hole meshes now, so the deck is refused by the next rule ("an interface feature line is shorter
+  than 6 s", the box's 0.1 µm sides) with the marker on the box's side (z = 0.45 µm, not 0.4). Still one
+  diagnostic naming the interface: the row's name, comment and expected z were updated, and it passes. Debug not
+  run.
 
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
