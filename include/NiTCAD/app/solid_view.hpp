@@ -61,9 +61,17 @@ struct Preview {
 [[nodiscard]] render::FieldScene frame_scene(const Model& m, const ViewState& v);
 // What the live check found (slice 3, SD5): the problems' markers (red, over everything) and the mesh preview's
 // surface edges (pairs of points, µm).
+// A see-through volume drawn over the model (slice 4: a doping profile's or a refine box's extent).
+struct Volume {
+    Box3 box;
+    render::Rgba color;
+};
+// A profile's colour (MT9): donors blue, acceptors red, deeper with the level (log, 1e14 to 1e21 cm⁻³).
+[[nodiscard]] render::Rgba doping_color(bool donor, double peak_cm3, float alpha = 0.30f);
 struct Overlay {
     std::vector<Marker> markers;
     std::vector<V3> mesh;
+    std::vector<Volume> volumes;
 };
 [[nodiscard]] render::FieldScene solid_scene(const Model& m, const ViewState& v, const Selection& s, const Preview& p = {},
                                            const Overlay& o = {});

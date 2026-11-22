@@ -15,6 +15,7 @@ namespace {
 using Words = std::span<const std::string_view>;
 
 constexpr std::array<std::string_view, 2> on_off{"on", "off"};
+constexpr std::array<std::string_view, 2> overlap_rules{"replace", "fill"};
 constexpr std::array<std::string_view, 5> mesh_types{"tensor", "generate2d", "generate3d", "extrude3d", "file"};
 constexpr std::array<std::string_view, 9> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas",
                                                     "sic_4h",  "algaas",         "sio2",      "insulator"};
@@ -81,12 +82,13 @@ constexpr std::array<KeyInfo, 28> mesh_keys{{
     {"path", 0, false, "<file>", "file: a mesh file", {}, {}, "file"},
 }};
 
-constexpr std::array<KeyInfo, 7> region_keys{{
+constexpr std::array<KeyInfo, 8> region_keys{{
     {"material", 0, false, "silicon", "the region's material (algaas takes its Al fraction)", materials, {}, {}},
     {"box", 0, true, "<lo hi> per dimension", "tensor meshes: the region's box", {}, {}, {}},
     {"polygon", 0, true, "<x y>, ...", "generate2d: the region's polygon", {}, {}, {}},
     {"prism", 0, true, "<axis> <from> <to>, <u v>, ...", "layered generate3d: a polygon across the axis, extruded from..to", {}, {}, {}},
     {"seed", 0, true, "<x y z>", "generate3d with planes: a point inside the region", {}, {}, {}},
+    {"overlap", 0, false, "replace", "layered meshes: the region's shapes replace what they cover, or fill only empty space", overlap_rules, {}, {}},
     {"extrude", 0, true, "<cells> <t_lo>:<t_hi>", "extrude3d: cells filled in the sections between two stations", {}, {}, {}},
     {"band_to_band.direct_gap", 0, false, "off", "direct-gap band-to-band tunnelling", on_off, {}, {}},
 }};

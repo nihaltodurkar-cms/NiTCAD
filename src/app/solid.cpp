@@ -6,10 +6,14 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <numbers>
+#include <ranges>
 #include <set>
 
 #include "deck_text.hpp"
+#include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/syntax.hpp"
+#include "NiTCAD/mesh/generate.hpp"
 
 namespace NiTCAD::app::solid {
 
@@ -19,12 +23,32 @@ using namespace deck_text;
 using geo::format_length;
 using geo::parse_length;
 
-std::optional<std::vector<Coord>> lengths(std::string_view value, std::size_t n) {
-    const auto w = words(value);
+using Params = std::vector<deck::Parameter>;
+
+// One coordinate: a value, or a reference resolved by `params` (Unit 26m MT8); its reference ("" for a value) appended
+// to `refs`.
+std::optional<Coord> coord(std::string_view w, const Params& params, std::vector<std::string>& refs) {
+    if (w.find('$') == std::string_view::npos) {
+        refs.emplace_back();
+        return parse_length(w);
+    }
+    const auto t = deck::substitute(w, params);
+    if (!t) return std::nullopt;
+    refs.emplace_back(w);
+    return parse_length(*t);
+}
+
+// No reference among them: none kept (Solid::refs empty).
+void tidy(std::vector<std::string>& refs) {
+    if (std::ranges::all_of(refs, [](const std::string& r) { return r.empty(); })) refs.clear();
+}
+
+std::optional<std::vector<Coord>> lengths(std::string_view value, std::size_t n, const Params& params, std::vector<std::string>& refs) {
+    const auto w = deck::value_words(value);
     if (w.size() != n) return std::nullopt;
     std::vector<Coord> out;
     for (const auto t : w) {
-        const auto v = parse_length(t);
+        const auto v = coord(t, params, refs);
         if (!v) return std::nullopt;
         out.push_back(*v);
     }
@@ -32,29 +56,42 @@ std::optional<std::vector<Coord>> lengths(std::string_view value, std::size_t n)
 }
 
 // A region box or the domain: x0 x1 y0 y1 z0 z1.
-std::optional<Box3> parse_box3(std::string_view value) {
-    const auto c = lengths(value, 6);
+std::optional<Box3> parse_box3(std::string_view value, const Params& params, std::vector<std::string>& refs) {
+    const auto c = lengths(value, 6, params, refs);
     if (!c || (*c)[0] > (*c)[1] || (*c)[2] > (*c)[3] || (*c)[4] > (*c)[5]) return std::nullopt;
+    tidy(refs);
     return Box3{{(*c)[0], (*c)[2], (*c)[4]}, {(*c)[1], (*c)[3], (*c)[5]}};
 }
 
-// A patch box: x0 y0 z0 x1 y1 z1.
-std::optional<Box3> parse_patch(std::string_view value) {
-    const auto c = lengths(value, 6);
+std::optional<Box3> parse_box3(std::string_view value, const Params& params) {
+    std::vector<std::string> refs;
+    return parse_box3(value, params, refs);
+}
+
+// A patch box: x0 y0 z0 x1 y1 z1 (its references read, not kept: a patch is written as values).
+std::optional<Box3> parse_patch(std::string_view value, const Params& params) {
+    std::vector<std::string> refs;
+    const auto c = lengths(value, 6, params, refs);
     if (!c || (*c)[0] > (*c)[3] || (*c)[1] > (*c)[4] || (*c)[2] > (*c)[5]) return std::nullopt;
     return Box3{{(*c)[0], (*c)[1], (*c)[2]}, {(*c)[3], (*c)[4], (*c)[5]}};
 }
 
-std::optional<std::vector<Pt>> parse_points(std::string_view value) {
-    const auto w = words(value);
+std::optional<std::vector<Pt>> parse_points(std::string_view value, const Params& params, std::vector<std::string>& refs) {
+    const auto w = deck::value_words(value);
     if (w.size() < 6 || w.size() % 2 != 0) return std::nullopt;
     std::vector<Pt> out;
     for (std::size_t k = 0; k < w.size(); k += 2) {
-        const auto u = parse_length(w[k]), v = parse_length(w[k + 1]);
+        const auto u = coord(w[k], params, refs);
+        const auto v = coord(w[k + 1], params, refs);
         if (!u || !v) return std::nullopt;
         out.push_back({*u, *v});
     }
     return out;
+}
+
+std::optional<std::vector<Pt>> parse_points(std::string_view value) {
+    std::vector<std::string> refs;
+    return parse_points(value, {}, refs);
 }
 
 std::optional<int> axis_of(std::string_view a) {
@@ -64,29 +101,34 @@ std::optional<int> axis_of(std::string_view a) {
     return std::nullopt;
 }
 
-std::optional<Solid> parse_solid(const deck::Entry& e) {
+std::optional<Solid> parse_solid(const deck::Entry& e, const Params& params) {
     if (e.key == "box") {
-        const auto b = parse_box3(e.value);
+        std::vector<std::string> refs;
+        const auto b = parse_box3(e.value, params, refs);
         if (!b) return std::nullopt;
-        return Solid{SolidKind::box, *b, 2, 0, 0, {}};
+        Solid s{SolidKind::box, *b, 2, 0, 0, {}, {}};
+        s.refs = std::move(refs);
+        return s;
     }
     if (e.key == "prism") {
         // <axis> <from> <to>, u v, u v, ...
         const std::string_view text = e.value;
         const std::size_t comma = text.find(',');
         if (comma == std::string_view::npos) return std::nullopt;
-        const auto head = words(text.substr(0, comma));
+        const auto head = deck::value_words(text.substr(0, comma));
         if (head.size() != 3) return std::nullopt;
         const auto axis = axis_of(head[0]);
-        const auto from = parse_length(head[1]), to = parse_length(head[2]);
-        auto p = parse_points(text.substr(comma + 1));
-        if (!axis || !from || !to || !p) return std::nullopt;
         Solid s;
+        const auto from = coord(head[1], params, s.refs);
+        const auto to = coord(head[2], params, s.refs);
+        auto p = parse_points(text.substr(comma + 1), params, s.refs);
+        if (!axis || !from || !to || !p) return std::nullopt;
         s.kind = SolidKind::prism;
         s.axis = *axis;
         s.from = *from;
         s.to = *to;
         s.polygon = std::move(*p);
+        tidy(s.refs);
         return s;
     }
     return std::nullopt;
@@ -96,9 +138,31 @@ bool is_solid_key(std::string_view k) { return k == "box" || k == "prism"; }
 
 constexpr const char* axis_name[] = {"x", "y", "z"};
 
-std::string box_text(const Box3& b) {  // x0 x1 y0 y1 z0 z1
-    return format_length(b.lo.x) + " " + format_length(b.hi.x) + " " + format_length(b.lo.y) + " " + format_length(b.hi.y) + " " +
-           format_length(b.lo.z) + " " + format_length(b.hi.z);
+// The model's parameters as the deck layer resolves them (for deck::substitute).
+Params deck_params(const Model& m) {
+    Params out;
+    for (const Param& p : m.parameters) out.push_back({p.name, p.text, p.length ? static_cast<double>(p.value) * geo::quantum_cm : p.number, p.length, 0});
+    return out;
+}
+
+// What a reference gives, in quanta; none if it does not resolve or is not a length.
+std::optional<Coord> resolved(std::string_view ref, const Params& params) {
+    const auto t = deck::substitute(ref, params);
+    if (!t) return std::nullopt;
+    return parse_length(*t);
+}
+
+// A coordinate as written: its reference when it still gives the value, else the value.
+std::string coord_text(Coord v, const std::vector<std::string>& refs, std::size_t k, const Params& params) {
+    if (k < refs.size() && !refs[k].empty() && resolved(refs[k], params) == v) return refs[k];
+    return format_length(v);
+}
+
+std::string box_text(const Box3& b, const std::vector<std::string>& refs = {}, const Params& params = {}) {  // x0 x1 y0 y1 z0 z1
+    const Coord c[6] = {b.lo.x, b.hi.x, b.lo.y, b.hi.y, b.lo.z, b.hi.z};
+    std::string out;
+    for (std::size_t k = 0; k < 6; ++k) out += (k ? " " : "") + coord_text(c[k], refs, k, params);
+    return out;
 }
 
 std::string patch_text(const Box3& b) {  // x0 y0 z0  x1 y1 z1
@@ -106,10 +170,13 @@ std::string patch_text(const Box3& b) {  // x0 y0 z0  x1 y1 z1
            format_length(b.hi.y) + " " + format_length(b.hi.z);
 }
 
-std::string solid_line(const Solid& s) {
-    if (s.kind == SolidKind::box) return "box = " + box_text(s.box);
-    std::string out = std::string("prism = ") + axis_name[s.axis] + " " + format_length(s.from) + " " + format_length(s.to);
-    for (const Pt& p : s.polygon) out += ", " + format_length(p.x) + " " + format_length(p.y);
+std::string solid_line(const Solid& s, const Params& params = {}) {
+    if (s.kind == SolidKind::box) return "box = " + box_text(s.box, s.refs, params);
+    std::string out = std::string("prism = ") + axis_name[s.axis] + " " + coord_text(s.from, s.refs, 0, params) + " " +
+                      coord_text(s.to, s.refs, 1, params);
+    for (std::size_t j = 0; j < s.polygon.size(); ++j) {
+        out += ", " + coord_text(s.polygon[j].x, s.refs, 2 + 2 * j, params) + " " + coord_text(s.polygon[j].y, s.refs, 3 + 2 * j, params);
+    }
     return out;
 }
 
@@ -216,6 +283,23 @@ std::expected<Model, std::string> read_model(std::string_view text) {
     };
     const auto at_line = [](const deck::Entry& e, std::string what) { return "line " + std::to_string(e.line) + ": " + what; };
     if (!mesh) return refuse("the deck has no [mesh] section");
+    // Unit 26m MT8: the parameters, each kept with its expression as written.
+    const auto resolved_params = deck::parameters(*d);
+    if (!resolved_params) return refuse(resolved_params.error().message);
+    const Params& params = *resolved_params;
+    for (const auto& s : d->sections) {
+        if (s.kind != "parameters") continue;
+        for (std::size_t k = 0; k < s.entries.size(); ++k) {
+            const auto it = std::ranges::find(params, s.entries[k].key, &deck::Parameter::name);
+            Param p{s.entries[k].key, std::string(trim(s.entries[k].value)), it->text, it->length, 0, it->length ? 0.0 : it->value};
+            if (it->length) {
+                const auto q = parse_length(it->text);
+                if (!q) return refuse(at_line(s.entries[k], "parameter '" + p.name + "' is not a length the modeller can draw"));
+                p.value = *q;
+            }
+            m.parameters.push_back(std::move(p));
+        }
+    }
     const deck::Entry* type = find_entry(*mesh, "type");
     const std::string kind = type ? std::string(trim(type->value)) : std::string("tensor");
     if (kind == "generate3d") {
@@ -244,11 +328,11 @@ std::expected<Model, std::string> read_model(std::string_view text) {
     for (const auto& e : mesh->entries) {
         if (e.key.starts_with("patch ")) {
             const auto w = words(e.key);
-            const auto b = parse_patch(e.value);
+            const auto b = parse_patch(e.value, params);
             if (w.size() != 2 || !b) return refuse(at_line(e, "a patch box the modeller cannot read"));
             patches[std::string(w[1])] = *b;
         } else if (m.mesh == MeshKind::layered && e.key == "domain") {
-            const auto b = parse_box3(e.value);
+            const auto b = parse_box3(e.value, params, m.domain_refs);
             if (!b) return refuse(at_line(e, "a domain the modeller cannot read"));
             m.domain = *b;
             domain = true;
@@ -297,8 +381,9 @@ std::expected<Model, std::string> read_model(std::string_view text) {
         Region r{s.name, {}, {}, region_index++};
         for (const auto& e : s.entries) {
             if (e.key == "material") r.material = std::string(trim(e.value));
+            if (e.key == "overlap") r.fill = trim(e.value) == "fill";
             if (m.mesh == MeshKind::layered && is_solid_key(e.key)) {
-                auto solid = parse_solid(e);
+                auto solid = parse_solid(e, params);
                 if (!solid) return refuse(at_line(e, "a solid the modeller cannot read"));
                 r.solids.push_back(std::move(*solid));
             } else if (m.mesh == MeshKind::extruded && e.key == "extrude") {
@@ -368,6 +453,29 @@ std::expected<std::string, std::string> write_model(std::string_view text, const
     const auto d = deck::parse(text);
     if (!d) return std::unexpected(d.error().message);
     Rewrite w(text);
+    // Unit 26m MT8: a line kept when, read with the model's parameters, it gives the model's solid.
+    const Params mp = deck_params(m);
+    // [parameters]: a changed expression replaced in place, a new parameter added after the last; a new section
+    // before the first.
+    const auto param_line = [](const Param& p) { return p.name + " = " + p.expr; };
+    const auto ps = std::ranges::find(d->sections, std::string_view("parameters"), &deck::Section::kind);
+    if (ps != d->sections.end()) {
+        SectionEdit e;
+        for (const Param& p : m.parameters) {
+            const auto at = std::ranges::find(ps->entries, p.name, &deck::Entry::key);
+            if (at == ps->entries.end()) {
+                e.after.emplace(ps->entries.empty() ? -1 : static_cast<int>(ps->entries.size()) - 1, param_line(p));
+            } else if (std::string(trim(at->value)) != p.expr) {
+                e.replace[static_cast<std::size_t>(at - ps->entries.begin())] = param_line(p);
+            }
+        }
+        w.change(*ps, w.rewrite(*ps, e));
+    } else if (!m.parameters.empty()) {
+        std::vector<std::string> lines{"[parameters]"};
+        for (const Param& p : m.parameters) lines.push_back(param_line(p));
+        lines.emplace_back("");
+        w.insert(d->sections.empty() ? w.size() : d->sections.front().line - 1, std::move(lines));
+    }
     std::vector<const deck::Section*> regions, contacts;
     const deck::Section* mesh = nullptr;
     for (const auto& s : d->sections) {
@@ -388,7 +496,8 @@ std::expected<std::string, std::string> write_model(std::string_view text, const
         if (r.origin < 0 || r.origin >= static_cast<int>(regions.size())) {
             std::vector<std::string> out{"", "[region " + r.name + "]"};
             if (!r.material.empty()) out.push_back("material = " + r.material);
-            for (const Solid& s : r.solids) out.push_back(solid_line(s));
+            if (r.fill) out.emplace_back("overlap = fill");
+            for (const Solid& s : r.solids) out.push_back(solid_line(s, mp));
             return out;
         }
         const deck::Section& s = *regions[static_cast<std::size_t>(r.origin)];
@@ -397,26 +506,33 @@ std::expected<std::string, std::string> write_model(std::string_view text, const
         std::size_t solid = 0;
         int last_solid = -1;
         const int last_entry = s.entries.empty() ? -1 : static_cast<int>(s.entries.size()) - 1;
-        bool material = false;
+        bool material = false, overlap = false;
+        int material_at = -1;
         for (std::size_t k = 0; k < s.entries.size(); ++k) {
             const auto& en = s.entries[k];
             if (en.key == "material") {
                 material = true;
+                material_at = static_cast<int>(k);
                 if (std::string(trim(en.value)) != r.material) {
                     e.replace[k] = r.material.empty() ? std::nullopt : std::optional<std::string>("material = " + r.material);
                 }
+            } else if (en.key == "overlap") {
+                overlap = true;
+                const bool says_fill = trim(en.value) == "fill";
+                if (says_fill != r.fill) e.replace[k] = r.fill ? std::optional<std::string>("overlap = fill") : std::nullopt;
             } else if (solid_entry(en.key)) {
                 last_solid = static_cast<int>(k);
                 if (solid >= r.solids.size()) {
                     e.replace[k] = std::nullopt;
-                } else if (en.key == "extrude" || parse_solid(en) != r.solids[solid]) {
-                    e.replace[k] = solid_line(r.solids[solid]);
+                } else if (en.key == "extrude" || parse_solid(en, mp) != r.solids[solid]) {
+                    e.replace[k] = solid_line(r.solids[solid], mp);
                 }
                 ++solid;
             }
         }
         if (!material && !r.material.empty()) e.after.emplace(-1, "material = " + r.material);
-        for (; solid < r.solids.size(); ++solid) e.after.emplace(last_solid >= 0 ? last_solid : last_entry, solid_line(r.solids[solid]));
+        if (!overlap && r.fill) e.after.emplace(material ? material_at : -1, "overlap = fill");
+        for (; solid < r.solids.size(); ++solid) e.after.emplace(last_solid >= 0 ? last_solid : last_entry, solid_line(r.solids[solid], mp));
         return w.rewrite(s, e);
     };
     for (std::size_t k = 0; k < std::max(regions.size(), m.regions.size()); ++k) {
@@ -489,9 +605,11 @@ std::expected<std::string, std::string> write_model(std::string_view text, const
             }
         }
         if (!layered) e.after.emplace(type_entry, "layered = on");
-        const std::string domain_line = "domain = " + box_text(m.domain);
+        const std::string domain_line = "domain = " + box_text(m.domain, m.domain_refs, mp);
         if (domain_entry >= 0) {
-            if (parse_box3(mesh->entries[static_cast<std::size_t>(domain_entry)].value) != m.domain) e.replace[static_cast<std::size_t>(domain_entry)] = domain_line;
+            std::vector<std::string> was_refs;
+            const auto was = parse_box3(mesh->entries[static_cast<std::size_t>(domain_entry)].value, mp, was_refs);
+            if (was != m.domain || was_refs != m.domain_refs) e.replace[static_cast<std::size_t>(domain_entry)] = domain_line;
         } else {
             e.after.emplace(type_entry, domain_line);
         }
@@ -506,7 +624,7 @@ std::expected<std::string, std::string> write_model(std::string_view text, const
             }
             const std::string line = "patch " + pname + " = " + patch_text(c.box);
             if (const auto it = patch_entries.find(pname); it != patch_entries.end()) {
-                if (!used.contains(pname) && parse_patch(mesh->entries[it->second].value) != c.box) e.replace[it->second] = line;
+                if (!used.contains(pname) && parse_patch(mesh->entries[it->second].value, mp) != c.box) e.replace[it->second] = line;
             } else {
                 e.after.emplace(last_patch >= 0 ? last_patch : type_entry, line);
             }
@@ -590,6 +708,7 @@ mesh::LayeredGeometry3D to_layered(const Model& m) {
         for (const Solid& s : m.regions[r].solids) {
             mesh::LayeredSolid v;
             v.region = static_cast<std::int32_t>(r);
+            v.fill = m.regions[r].fill;
             if (s.kind == SolidKind::box) {
                 v.kind = mesh::LayeredSolid::Kind::box;
                 v.lo = point(s.box.lo);
@@ -824,6 +943,404 @@ bool mirror_solid(Model& m, SolidRef s, int axis) {
     return true;
 }
 
+
+// --- Unit 26m slice 1 (MT4, MT5) ---
+
+bool set_overlap(Model& m, int region, bool fill) {
+    if (!valid_region(m, region)) return false;
+    Region& r = m.regions[static_cast<std::size_t>(region)];
+    if (r.solids.empty() || r.fill == fill) return false;
+    r.fill = fill;
+    return true;
+}
+
+namespace {
+
+Coord floor_half(Coord v) noexcept { return v >= 0 ? v / 2 : -((-v + 1) / 2); }
+
+double turn_of(const std::vector<Pt>& p) {
+    double a = 0.0;
+    for (std::size_t k = 0; k < p.size(); ++k) {
+        const Pt& u = p[k];
+        const Pt& w = p[(k + 1) % p.size()];
+        a += static_cast<double>(u.x) * static_cast<double>(w.y) - static_cast<double>(w.x) * static_cast<double>(u.y);
+    }
+    return a;
+}
+
+// `s` under a map of the quanta's lattice onto itself (axes permuted, signs flipped, shifted); a prism's polygon kept
+// in its orientation.
+template <class Map>
+Solid mapped(const Solid& s, Map&& map) {
+    Solid t = s;
+    if (s.kind == SolidKind::box) {
+        t.box = normalized(map(s.box.lo), map(s.box.hi));
+        return t;
+    }
+    const P3 a0 = map(from_uv(s.axis, s.polygon[0], s.from)), a1 = map(from_uv(s.axis, s.polygon[0], s.to));
+    int axis = 0;
+    while (axis < 2 && a0[axis] == a1[axis]) ++axis;
+    t.axis = axis;
+    t.from = std::min(a0[axis], a1[axis]);
+    t.to = std::max(a0[axis], a1[axis]);
+    t.polygon.clear();
+    for (const Pt& uv : s.polygon) t.polygon.push_back(uv_of(axis, map(from_uv(s.axis, uv, s.from))));
+    if ((turn_of(t.polygon) > 0) != (turn_of(s.polygon) > 0)) std::ranges::reverse(t.polygon);
+    return t;
+}
+
+}  // namespace
+
+bool mirror_solid_at(Model& m, SolidRef s, int axis, Coord twice) {
+    if (!valid(m, s) || axis < 0 || axis > 2) return false;
+    return replace(at(m, s), mapped(at(m, s), [&](P3 p) {
+                       p[axis] = twice - p[axis];
+                       return p;
+                   }));
+}
+
+bool rotate_solid(Model& m, SolidRef s, int axis) {
+    if (!valid(m, s) || axis < 0 || axis > 2) return false;
+    const Box3 b = at(m, s).bounds();
+    const int u = (axis + 1) % 3, v = (axis + 2) % 3;
+    const Coord cu2 = b.lo[u] + b.hi[u], cv2 = b.lo[v] + b.hi[v];
+    const Coord su = floor_half(cu2 + cv2), sv = floor_half(cv2 - cu2);  // u' = cu + cv - v, v' = cv - cu + u
+    return replace(at(m, s), mapped(at(m, s), [&](P3 p) {
+                       const Coord pu = p[u], pv = p[v];
+                       p[u] = su - pv;
+                       p[v] = sv + pu;
+                       return p;
+                   }));
+}
+
+int array_solid(Model& m, SolidRef s, P3 pitch, int count) {
+    if (!valid(m, s) || count < 2 || count > 100 || pitch == P3{}) return -1;
+    const Model before = m;
+    const bool fill = m.regions[static_cast<std::size_t>(s.region)].fill;
+    int first = -1;
+    for (int k = 1; k < count; ++k) {
+        const int r = duplicate_solid(m, s, {k * pitch.x, k * pitch.y, k * pitch.z});
+        if (r < 0) {
+            m = before;
+            return -1;
+        }
+        m.regions[static_cast<std::size_t>(r)].fill = fill;
+        if (first < 0) first = r;
+    }
+    return first;
+}
+
+bool align_solids(Model& m, const std::vector<SolidRef>& picked, int face, Coord to) {
+    if (face < 0 || face > 5 || picked.empty()) return false;
+    std::vector<SolidRef> solids;  // each once
+    for (const SolidRef s : picked) {
+        if (!valid(m, s)) return false;
+        if (std::ranges::find(solids, s) == solids.end()) solids.push_back(s);
+    }
+    const int axis = face / 2;
+    const Model before = m;
+    bool moved = false;
+    for (const SolidRef s : solids) {
+        const Box3 b = at(m, s).bounds();
+        P3 d{};
+        d[axis] = to - (face % 2 == 0 ? b.lo[axis] : b.hi[axis]);
+        if (d == P3{}) continue;
+        if (!move_solid(m, s, d)) {
+            m = before;
+            return false;
+        }
+        moved = true;
+    }
+    return moved;
+}
+
+// --- Unit 26m slice 2 (MT6, MT7, MT12) ---
+
+std::optional<EdgeCorner> edge_corner(const Solid& s, int edge) {
+    const auto list = s.edges();
+    if (edge < 0 || edge >= static_cast<int>(list.size())) return std::nullopt;
+    if (s.kind == SolidKind::prism) {
+        if (edge % 3 != 2) return std::nullopt;  // a cap's edge
+        return EdgeCorner{s, edge / 3};
+    }
+    const auto [i, j] = list[static_cast<std::size_t>(edge)];
+    const int bit = i ^ j, axis = bit == 1 ? 0 : bit == 2 ? 1 : 2, u = (axis + 1) % 3, v = (axis + 2) % 3;
+    const Box3& b = s.box;
+    Solid p{SolidKind::prism, {}, axis, b.lo[axis], b.hi[axis],
+            {{b.lo[u], b.lo[v]}, {b.hi[u], b.lo[v]}, {b.hi[u], b.hi[v]}, {b.lo[u], b.hi[v]}}};
+    const bool hu = (i >> u) & 1, hv = (i >> v) & 1;
+    return EdgeCorner{std::move(p), hv ? (hu ? 2 : 3) : (hu ? 1 : 0)};
+}
+
+namespace {
+
+template <class Cut>
+bool cut_edge(Model& m, SolidRef s, int edge, Cut&& cut) {
+    if (!valid(m, s)) return false;
+    auto ec = edge_corner(at(m, s), edge);
+    if (!ec) return false;
+    auto poly = cut(ec->prism.polygon, ec->corner);
+    if (!poly) return false;
+    ec->prism.polygon = std::move(*poly);
+    return replace(at(m, s), std::move(ec->prism));
+}
+
+}  // namespace
+
+bool chamfer_edge(Model& m, SolidRef s, int edge, Coord d) {
+    return cut_edge(m, s, edge, [&](const std::vector<Pt>& p, int k) { return geo::chamfer_corner(p, k, d); });
+}
+
+bool fillet_edge(Model& m, SolidRef s, int edge, Coord r, int segments) {
+    return cut_edge(m, s, edge, [&](const std::vector<Pt>& p, int k) { return geo::fillet_corner(p, k, r, segments); });
+}
+
+bool fillet_vertex(Model& m, SolidRef s, int k, Coord r, int segments) {
+    if (!valid(m, s) || at(m, s).kind != SolidKind::prism) return false;
+    const int n = static_cast<int>(at(m, s).polygon.size());
+    if (k < 0 || k >= n) return false;
+    return fillet_edge(m, s, 3 * k + 2, r, segments);
+}
+
+bool taper_edge(Model& m, SolidRef s, int edge, Pt delta) {
+    if (!valid(m, s) || delta == Pt{}) return false;
+    auto ec = edge_corner(at(m, s), edge);
+    if (!ec) return false;
+    Pt& p = ec->prism.polygon[static_cast<std::size_t>(ec->corner)];
+    p = {p.x + delta.x, p.y + delta.y};
+    return replace(at(m, s), std::move(ec->prism));
+}
+
+int add_cylinder(Model& m, int axis, Coord from, Coord to, Pt centre, Coord r, int sides, std::string material) {
+    if (r <= 0 || sides < 3 || sides > 360 || axis < 0 || axis > 2) return -1;
+    return add_prism(m, axis, std::min(from, to), std::max(from, to), geo::regular_polygon(centre, r, sides), std::move(material));
+}
+
+std::optional<Normal> face_normal(const Solid& s, int face) {
+    if (s.kind == SolidKind::box) {
+        if (face < 0 || face >= 6) return std::nullopt;
+        return Normal{face / 2, face % 2 ? 1 : -1};
+    }
+    if (face == 0 || face == 1) return Normal{s.axis, face == 1 ? 1 : -1};
+    const std::size_t n = s.polygon.size(), k = static_cast<std::size_t>(face - 2);
+    if (face < 2 || k >= n) return std::nullopt;
+    const Pt a = s.polygon[k], b = s.polygon[(k + 1) % n];
+    const int o = twice_area(s.polygon) > 0 ? 1 : -1;  // counter-clockwise: the outward normal is (dv, -du)
+    if (a.y == b.y) return Normal{(s.axis + 2) % 3, (b.x > a.x ? -1 : 1) * o};
+    if (a.x == b.x) return Normal{(s.axis + 1) % 3, (b.y > a.y ? 1 : -1) * o};
+    return std::nullopt;
+}
+
+std::optional<Solid> face_solid(const Solid& s, int face, Coord margin, Coord depth) {
+    const auto n = face_normal(s, face);
+    if (!n || margin < 0 || depth == 0) return std::nullopt;
+    Box3 f;  // the face, flat across n->axis
+    if (s.kind == SolidKind::box) {
+        f = s.box;
+    } else if (face <= 1) {
+        const Box3 b = s.bounds();
+        const Pt lo = uv_of(s.axis, b.lo), hi = uv_of(s.axis, b.hi);
+        const bool rectangle = s.polygon.size() == 4 && std::ranges::all_of(s.polygon, [&](Pt p) {
+            return (p.x == lo.x || p.x == hi.x) && (p.y == lo.y || p.y == hi.y);
+        });
+        if (!rectangle) {
+            if (margin != 0) return std::nullopt;
+            const Coord c = face == 0 ? s.from : s.to, e = c + n->sign * depth;
+            Solid t{SolidKind::prism, {}, s.axis, std::min(c, e), std::max(c, e), s.polygon};
+            if (!solid_ok(t)) return std::nullopt;
+            return t;
+        }
+        f = b;
+    } else {
+        const std::size_t k = static_cast<std::size_t>(face - 2);
+        const Pt a = s.polygon[k], b = s.polygon[(k + 1) % s.polygon.size()];
+        f = normalized(from_uv(s.axis, a, s.from), from_uv(s.axis, b, s.to));
+    }
+    const int ax = n->axis;
+    const Coord c = n->sign > 0 ? f.hi[ax] : f.lo[ax], e = c + n->sign * depth;
+    f.lo[ax] = std::min(c, e);
+    f.hi[ax] = std::max(c, e);
+    for (const int o : {(ax + 1) % 3, (ax + 2) % 3}) {
+        f.lo[o] += margin;
+        f.hi[o] -= margin;
+    }
+    if (!box_ok(f)) return std::nullopt;
+    return Solid{SolidKind::box, f, 2, 0, 0, {}};
+}
+
+int inset_face(Model& m, SolidRef s, int face, Coord margin, Coord depth, std::string material) {
+    if (!valid(m, s)) return -1;
+    auto t = face_solid(at(m, s), face, margin, depth);
+    if (!t) return -1;
+    Region& own = m.regions[static_cast<std::size_t>(s.region)];
+    if (material == own.material) {  // its own material: joins its region, so no interface forms between them
+        own.solids.push_back(std::move(*t));
+        return s.region;
+    }
+    return add_region(m, std::move(*t), std::move(material));
+}
+
+int extrude_face(Model& m, SolidRef s, int face, Coord depth, std::string material) {
+    if (depth <= 0) return -1;
+    return inset_face(m, s, face, 0, depth, std::move(material));
+}
+
+std::expected<double, std::string> automatic_resolution(const Model& m, double max_size) {
+    const auto complex = mesh::layered_partition3d(to_layered(m));
+    if (!complex) return std::unexpected(complex.error().message);
+    mesh::MeshOptions3D o;
+    o.max_size = max_size;
+    const auto s = mesh::largest_meshable_resolution(*complex, o);
+    if (!s) return std::unexpected(s.error().message);
+    return *s;
+}
+
+std::optional<Extent> extent(const Model& m) {
+    const auto complex = mesh::layered_partition3d(to_layered(m));
+    if (!complex) return std::nullopt;
+    const auto& g = *complex;
+    std::vector<std::vector<int>> owners(g.facets.size());  // the regions of the volumes each facet bounds
+    std::map<std::pair<std::size_t, std::size_t>, std::vector<std::pair<std::array<double, 3>, std::pair<int, int>>>> edges;
+    Extent e;
+    for (const auto& v : g.volumes) {
+        for (const std::size_t f : v.facets) owners[f].push_back(v.region);
+    }
+    for (std::size_t f = 0; f < g.facets.size(); ++f) {
+        const auto& vs = g.facets[f].vertices;
+        std::array<double, 3> n{};  // Newell's normal: twice the area along it
+        for (std::size_t i = 0; i < vs.size(); ++i) {
+            const auto& a = g.vertices[vs[i]];
+            const auto& b = g.vertices[vs[(i + 1) % vs.size()]];
+            n[0] += (a[1] - b[1]) * (a[2] + b[2]);
+            n[1] += (a[2] - b[2]) * (a[0] + b[0]);
+            n[2] += (a[0] - b[0]) * (a[1] + b[1]);
+        }
+        const double area = 0.5 * std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        const bool interface = owners[f].size() == 2 && owners[f][0] != owners[f][1];
+        if (interface) e.interface_area += area;
+        if (!(area > 0.0) || (!interface && owners[f].size() != 1)) continue;
+        for (double& c : n) c /= 2.0 * area;
+        for (std::size_t i = 0; i < vs.size(); ++i) {
+            const std::size_t a = vs[i], b = vs[(i + 1) % vs.size()];
+            auto& on = edges[{std::min(a, b), std::max(a, b)}];
+            on.push_back({n, interface ? std::pair<int, int>(std::minmax(owners[f][0], owners[f][1])) : std::pair<int, int>{-1, -1}});
+        }
+    }
+    // A feature line: an edge of an interface where its facets turn (a bend, or the boundary) or two region pairs meet.
+    for (const auto& [ab, on] : edges) {
+        const bool any = std::ranges::any_of(on, [](const auto& o) { return o.second.first >= 0; });
+        bool feature = false;
+        for (std::size_t i = 0; any && i < on.size() && !feature; ++i) {
+            for (std::size_t j = i + 1; j < on.size() && !feature; ++j) {
+                const auto& p = on[i].first;
+                const auto& q = on[j].first;
+                const double cx = p[1] * q[2] - p[2] * q[1], cy = p[2] * q[0] - p[0] * q[2], cz = p[0] * q[1] - p[1] * q[0];
+                feature = cx * cx + cy * cy + cz * cz > 1e-12 || (on[i].second != on[j].second && on[i].second.first >= 0 && on[j].second.first >= 0);
+            }
+        }
+        if (!feature) continue;
+        const auto& a = g.vertices[ab.first];
+        const auto& b = g.vertices[ab.second];
+        e.feature_length += std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+    }
+    const auto report = mesh::check_complex(g);
+    if (!report) return std::nullopt;
+    for (const double v : report->volume) e.volume += v;
+    return e;
+}
+
+double node_estimate(const Extent& e, double h, double s) {
+    // Least squares on the slice 2 table (7 meshes of tool_deck layouts, 7k-15k nodes): within ±10 % there (in-sample).
+    constexpr double a = 2.65, b = 1.12, c = 13.3;
+    if (!(h > 0.0)) return 0.0;
+    const double hp = s > 0.0 ? std::min(h, 4.0 * s) : h;
+    return a * e.volume / (h * h * h) + b * e.interface_area / (hp * hp) + c * e.feature_length / hp;
+}
+
+std::optional<double> mesh_length(std::string_view text, std::string_view key) {
+    const auto d = deck::parse(text);
+    if (!d) return std::nullopt;
+    const deck::Section* mesh = nullptr;  // the last, as read_model, write_model and set_mesh_length take it
+    for (const auto& s : d->sections) {
+        if (s.kind == "mesh") mesh = &s;
+    }
+    if (!mesh) return std::nullopt;
+    const deck::Entry* e = find_entry(*mesh, key);
+    if (!e) return std::nullopt;
+    const auto q = geo::parse_length(trim(e->value));
+    if (!q) return std::nullopt;
+    return static_cast<double>(*q) / (per_um * 1e4);
+}
+
+std::expected<std::string, std::string> set_mesh_length(std::string_view text, std::string_view key, Coord q) {
+    const auto d = deck::parse(text);
+    if (!d) return std::unexpected(d.error().message);
+    const deck::Section* mesh = nullptr;
+    for (const auto& s : d->sections) {
+        if (s.kind == "mesh") mesh = &s;
+    }
+    if (!mesh) return std::unexpected(std::string("the deck has no [mesh] section"));
+    Lines l = split(text);
+    const std::string line = std::string(key) + " = " + geo::format_length(q);
+    const deck::Entry* e = find_entry(*mesh, key);
+    int at = 0;
+    if (e) {
+        const int first = e->line - 1, last = entry_last(l, first);
+        l.eol[static_cast<std::size_t>(first)] = l.eol[static_cast<std::size_t>(last)];  // the entry's own end (none at EOF)
+        l.body.erase(l.body.begin() + first + 1, l.body.begin() + last + 1);
+        l.eol.erase(l.eol.begin() + first + 1, l.eol.begin() + last + 1);
+        l.body[static_cast<std::size_t>(first)] = line;
+    } else {
+        at = section_last(l, *mesh) + 1;
+        l.body.insert(l.body.begin() + at, line);
+        l.eol.insert(l.eol.begin() + at, l.nl);
+        if (at > 0 && l.eol[static_cast<std::size_t>(at - 1)].empty()) l.eol[static_cast<std::size_t>(at - 1)] = l.nl;
+    }
+    std::string out;
+    for (std::size_t k = 0; k < l.body.size(); ++k) out += l.body[k] + l.eol[k];
+    return out;
+}
+
+Coord keep_clear(const Model& m, const std::vector<Solid>& moving, const std::vector<SolidRef>& skip, int axis, Coord delta,
+                 Coord margin) {
+    if (margin <= 0 || axis < 0 || axis > 2 || moving.empty()) return delta;
+    std::vector<std::pair<Coord, Coord>> pairs;  // (a moving face's coordinate, a plane it must keep clear of)
+    for (const Solid& mv : moving) {
+        const Box3 mb = mv.bounds();
+        std::vector<Coord> planes{m.domain.lo[axis], m.domain.hi[axis]};
+        for (std::size_t r = 0; r < m.regions.size(); ++r) {
+            for (std::size_t k = 0; k < m.regions[r].solids.size(); ++k) {
+                if (std::ranges::find(skip, SolidRef{static_cast<int>(r), static_cast<int>(k)}) != skip.end()) continue;
+                const Box3 b = m.regions[r].solids[k].bounds();
+                bool near = true;
+                for (const int o : {(axis + 1) % 3, (axis + 2) % 3}) near = near && b.lo[o] - margin <= mb.hi[o] && mb.lo[o] <= b.hi[o] + margin;
+                if (near) {
+                    planes.push_back(b.lo[axis]);
+                    planes.push_back(b.hi[axis]);
+                }
+            }
+        }
+        for (const Coord f : {mb.lo[axis], mb.hi[axis]}) {
+            for (const Coord p : planes) pairs.emplace_back(f, p);
+        }
+    }
+    const auto clear = [&](Coord d) {
+        return std::ranges::none_of(pairs, [&](const auto& fp) {
+            const Coord gap = std::abs(fp.first + d - fp.second);
+            return gap > 0 && gap < margin;
+        });
+    };
+    if (clear(delta)) return delta;
+    std::optional<Coord> best;
+    for (const auto& [f, p] : pairs) {
+        for (const Coord d : {p - f, p - f - margin, p - f + margin}) {
+            if (std::abs(d - delta) > 2 * margin || !clear(d)) continue;
+            if (!best || std::abs(d - delta) < std::abs(*best - delta) || (std::abs(d - delta) == std::abs(*best - delta) && d < *best)) best = d;
+        }
+    }
+    return best.value_or(delta);
+}
+
 bool selects_boundary(const Box3& d, const Box3& b) noexcept {
     for (int a = 0; a < 3; ++a) {
         if (b.lo[a] > b.hi[a] || b.lo[a] < d.lo[a] || b.hi[a] > d.hi[a]) return false;
@@ -941,6 +1458,7 @@ bool inside(const std::vector<Pt>& poly, Pt p) {
 }  // namespace
 
 Snap snap(const Model& m, const WorkPlane& plane, P3 raw, Coord tolerance, std::optional<SolidRef> skip, Coord grid) {
+    const auto on_grid = [&](Coord c) { return round_to(static_cast<double>(c) / static_cast<double>(grid)) * grid; };
     std::vector<Solid> solids;
     const auto as_box = [](const Box3& b) { return Solid{SolidKind::box, b, 2, 0, 0, {}}; };
     solids.push_back(as_box(m.domain));
@@ -999,6 +1517,10 @@ Snap snap(const Model& m, const WorkPlane& plane, P3 raw, Coord tolerance, std::
                 t = std::clamp(t / len2, 0.0, 1.0);
                 P3 q;
                 for (int k = 0; k < 3; ++k) q[k] = round_to(static_cast<double>(a[k]) + t * static_cast<double>(b[k] - a[k]));
+                // Along the edge on the grid too (Unit 26m slice 4): a pixel's place leaves slivers of a quantum.
+                for (int k = 0; k < 3; ++k) {
+                    if (grid > 0 && a[k] != b[k]) q[k] = std::clamp(on_grid(q[k]), std::min(a[k], b[k]), std::max(a[k], b[k]));
+                }
                 offer(q);
             });
         })) {
@@ -1010,7 +1532,13 @@ Snap snap(const Model& m, const WorkPlane& plane, P3 raw, Coord tolerance, std::
                 if (a == plane.normal && c == plane.offset) return;
                 P3 q = raw;
                 q[a] = c;
-                if (in_face(q)) offer(q);
+                // In the face's plane on the grid too (slice 4), where that stays in the face.
+                P3 g = q;
+                for (int k = 0; k < 3; ++k) {
+                    if (grid > 0 && k != a) g[k] = on_grid(g[k]);
+                }
+                if (in_face(g)) offer(g);
+                else if (in_face(q)) offer(q);
             };
             for (const Solid& s : solids) {
                 if (s.kind == SolidKind::box) {
@@ -1159,18 +1687,456 @@ Problem locate_problem(const Model& m, std::string_view text, int line, std::str
 
 
 int region_at(const Model& m, P3 p) {
-    for (std::size_t r = m.regions.size(); r-- > 0;) {
-        for (const Solid& s : m.regions[r].solids) {
+    const auto holds = [&](const Region& reg) {
+        return std::ranges::any_of(reg.solids, [&](const Solid& s) {
             if (s.kind == SolidKind::box) {
-                if (p.x > s.box.lo.x && p.x < s.box.hi.x && p.y > s.box.lo.y && p.y < s.box.hi.y && p.z > s.box.lo.z && p.z < s.box.hi.z) {
-                    return static_cast<int>(r);
-                }
-            } else if (p[s.axis] > s.from && p[s.axis] < s.to && inside(s.polygon, uv_of(s.axis, p))) {
-                return static_cast<int>(r);
+                return p.x > s.box.lo.x && p.x < s.box.hi.x && p.y > s.box.lo.y && p.y < s.box.hi.y && p.z > s.box.lo.z && p.z < s.box.hi.z;
+            }
+            return p[s.axis] > s.from && p[s.axis] < s.to && inside(s.polygon, uv_of(s.axis, p));
+        });
+    };
+    for (const int r : std::views::reverse(paint_order(m))) {
+        if (holds(m.regions[static_cast<std::size_t>(r)])) return r;
+    }
+    return m.background();
+}
+
+std::vector<int> paint_order(const Model& m) {
+    std::vector<int> order;
+    for (std::size_t r = m.regions.size(); r-- > 0;) {
+        if (m.regions[r].fill && !m.regions[r].solids.empty()) order.push_back(static_cast<int>(r));
+    }
+    for (std::size_t r = 0; r < m.regions.size(); ++r) {
+        if (!m.regions[r].fill && !m.regions[r].solids.empty()) order.push_back(static_cast<int>(r));
+    }
+    return order;
+}
+
+// --- parameters (Unit 26m MT8) -----------------------------------------------------------------------------------
+
+Coord* slot(Solid& s, int k) {
+    if (k < 0) return nullptr;
+    if (s.kind == SolidKind::box) {
+        Coord* const c[6] = {&s.box.lo.x, &s.box.hi.x, &s.box.lo.y, &s.box.hi.y, &s.box.lo.z, &s.box.hi.z};
+        return k < 6 ? c[k] : nullptr;
+    }
+    if (k == 0) return &s.from;
+    if (k == 1) return &s.to;
+    const auto j = static_cast<std::size_t>((k - 2) / 2);
+    if (j >= s.polygon.size()) return nullptr;
+    return (k - 2) % 2 == 0 ? &s.polygon[j].x : &s.polygon[j].y;
+}
+
+int slot_count(const Solid& s) { return s.kind == SolidKind::box ? 6 : 2 + 2 * static_cast<int>(s.polygon.size()); }
+
+namespace {
+
+Coord* box_slot(Box3& b, int k) {
+    Coord* const c[6] = {&b.lo.x, &b.hi.x, &b.lo.y, &b.hi.y, &b.lo.z, &b.hi.z};
+    return k >= 0 && k < 6 ? c[k] : nullptr;
+}
+
+bool param_name(std::string_view n) {
+    if (n.empty() || !(std::isalpha(static_cast<unsigned char>(n.front())) || n.front() == '_')) return false;
+    return std::ranges::all_of(n, [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; });
+}
+
+// A tied coordinate: where it is, and its reference.
+struct Tie {
+    Coord* at = nullptr;
+    std::string* ref = nullptr;
+};
+
+std::vector<Tie> ties(Model& m) {
+    std::vector<Tie> out;
+    for (Region& r : m.regions) {
+        for (Solid& s : r.solids) {
+            for (std::size_t k = 0; k < s.refs.size(); ++k) {
+                if (Coord* c = slot(s, static_cast<int>(k)); c && !s.refs[k].empty()) out.push_back({c, &s.refs[k]});
             }
         }
     }
-    return m.background();
+    for (std::size_t k = 0; k < m.domain_refs.size(); ++k) {
+        if (Coord* c = box_slot(m.domain, static_cast<int>(k)); c && !m.domain_refs[k].empty()) out.push_back({c, &m.domain_refs[k]});
+    }
+    return out;
+}
+
+// Every parameter resolved again from its expression, then every tied coordinate; the solids and domain checked.
+std::expected<void, std::string> resolve_all(Model& m) {
+    std::vector<deck::Entry> entries;
+    for (std::size_t k = 0; k < m.parameters.size(); ++k) entries.push_back({m.parameters[k].name, m.parameters[k].expr, static_cast<int>(k) + 1});
+    const auto r = deck::resolve_parameters(entries, "[parameters]");
+    if (!r) return std::unexpected(r.error().message);
+    for (Param& p : m.parameters) {
+        const auto it = std::ranges::find(*r, p.name, &deck::Parameter::name);
+        p.text = it->text;
+        p.length = it->length;
+        p.value = 0;
+        p.number = 0;
+        if (p.length) {
+            const auto q = parse_length(it->text);
+            if (!q) return std::unexpected("parameter '" + p.name + "' is not a length the modeller can draw");
+            p.value = *q;
+        } else {
+            p.number = it->value;
+        }
+    }
+    const Params dp = deck_params(m);
+    for (const Tie& t : ties(m)) {
+        const auto v = resolved(*t.ref, dp);
+        if (!v) return std::unexpected("'" + *t.ref + "' does not give a length");
+        *t.at = *v;
+    }
+    for (const Region& reg : m.regions) {
+        for (const Solid& s : reg.solids) {
+            if (!solid_ok(s)) return std::unexpected(std::string("a tied solid would not be valid (a face past its opposite)"));
+        }
+    }
+    if (!box_ok(m.domain)) return std::unexpected(std::string("the tied domain would not be valid"));
+    return {};
+}
+
+Param* find_param(Model& m, std::string_view name) {
+    const auto it = std::ranges::find(m.parameters, name, &Param::name);
+    return it == m.parameters.end() ? nullptr : &*it;
+}
+
+// A lone reference `$p`: p; else none.
+std::optional<std::string_view> lone(std::string_view ref) {
+    ref = trim(ref);
+    if (ref.size() < 2 || ref.front() != '$' || !param_name(ref.substr(1))) return std::nullopt;
+    return ref.substr(1);
+}
+
+// A sum's last parameter and its sign (`... + $q`, `... - $q`; a leading `$q` is +).
+std::optional<std::pair<std::string_view, int>> last_term(std::string_view ref) {
+    const std::size_t at = ref.rfind('$');
+    if (at == std::string_view::npos) return std::nullopt;
+    std::size_t end = at + 1;
+    while (end < ref.size() && (std::isalnum(static_cast<unsigned char>(ref[end])) || ref[end] == '_')) ++end;
+    std::size_t k = at;
+    while (k > 0 && (ref[k - 1] == ' ' || ref[k - 1] == '\t')) --k;
+    const int sign = k > 0 && ref[k - 1] == '-' ? -1 : 1;
+    return std::pair{ref.substr(at + 1, end - at - 1), sign};
+}
+
+// A parameter a drag may set: a length written as a value.
+bool settable(const Param* p) { return p && p->length && parse_length(p->expr).has_value(); }
+
+// A length for a parameter's line: always with a unit (a bare 0 would be a number, which no sum takes).
+std::string length_text(Coord v) {
+    std::string s = format_length(v);
+    if (!s.ends_with("nm") && !s.ends_with("um") && !s.ends_with("cm")) s += "nm";
+    return s;
+}
+
+}  // namespace
+
+std::expected<void, std::string> set_parameter(Model& m, std::string_view name, std::string expr) {
+    if (!param_name(name)) return std::unexpected("'" + std::string(name) + "' is not a parameter name (a letter or _, then letters, digits, _)");
+    Model t = m;
+    if (Param* p = find_param(t, name)) {
+        p->expr = std::move(expr);
+    } else {
+        t.parameters.push_back({std::string(name), std::move(expr), {}, false, 0, 0});
+    }
+    if (auto r = resolve_all(t); !r) return r;
+    m = std::move(t);
+    return {};
+}
+
+void tie_edits(const Model& before, Model& after) {
+    if (before.parameters != after.parameters) return;  // the parameters themselves edited: nothing to follow
+    Model t = after;
+    struct Moved {
+        Coord* at;
+        std::string* ref;
+        Coord want;
+    };
+    std::vector<Moved> moved;
+    const auto collect = [&](const std::vector<std::string>& was_refs, std::vector<std::string>& refs, auto&& was_at, auto&& at, int n) {
+        if (was_refs != refs) return;
+        bool edited = false;  // any coordinate of it moved: its tied ones are all held where the edit put them
+        for (int k = 0; k < n; ++k) edited = edited || *at(k) != *was_at(k);
+        if (!edited) return;
+        for (const bool changed : {true, false}) {  // the moved ones first: theirs win a parameter both set
+            for (int k = 0; k < n && k < static_cast<int>(refs.size()); ++k) {
+                if (refs[static_cast<std::size_t>(k)].empty()) continue;
+                Coord* now = at(k);
+                if ((*now != *was_at(k)) == changed) moved.push_back({now, &refs[static_cast<std::size_t>(k)], *now});
+            }
+        }
+    };
+    for (std::size_t i = 0; i < t.regions.size() && i < before.regions.size(); ++i) {
+        for (std::size_t j = 0; j < t.regions[i].solids.size() && j < before.regions[i].solids.size(); ++j) {
+            Solid& a = t.regions[i].solids[j];
+            Solid b = before.regions[i].solids[j];
+            if (slot_count(a) != slot_count(b) || a.kind != b.kind) continue;
+            collect(b.refs, a.refs, [&](int k) { return slot(b, k); }, [&](int k) { return slot(a, k); }, slot_count(a));
+        }
+    }
+    Box3 was_domain = before.domain;
+    collect(before.domain_refs, t.domain_refs, [&](int k) { return box_slot(was_domain, k); }, [&](int k) { return box_slot(t.domain, k); }, 6);
+    if (moved.empty()) return;
+
+    std::map<std::string, Coord, std::less<>> set;  // the parameters set, by name
+    const auto assign = [&](std::string_view name, Coord v) {
+        Param* p = find_param(t, name);
+        if (!settable(p)) return false;
+        if (const auto it = set.find(name); it != set.end()) return it->second == v;
+        set.emplace(std::string(name), v);
+        p->expr = length_text(v);
+        return true;
+    };
+    // Lone references first: each sets its parameter to where its coordinate went.
+    for (Moved& c : moved) {
+        if (const auto n = lone(*c.ref); n && !assign(*n, c.want)) c.ref->clear();
+    }
+    bool ok = static_cast<bool>(resolve_all(t));
+    // Then sums still off: the last parameter takes the rest.
+    if (ok) {
+        const Params dp = deck_params(t);
+        for (Moved& c : moved) {
+            if (c.ref->empty() || lone(*c.ref)) continue;
+            const auto got = resolved(*c.ref, dp);
+            if (got == c.want) continue;
+            const auto q = last_term(*c.ref);
+            const Param* p = q ? find_param(t, q->first) : nullptr;
+            if (!got || !settable(p) || !assign(q->first, p->value + q->second * (c.want - *got))) c.ref->clear();
+        }
+        ok = static_cast<bool>(resolve_all(t));
+    }
+    if (!ok) {
+        // Nothing resolves as set: every moved tie broken, the parameters as they were, the edit's values kept.
+        t = after;
+        moved.clear();
+        for (std::size_t i = 0; i < t.regions.size() && i < before.regions.size(); ++i) {
+            for (std::size_t j = 0; j < t.regions[i].solids.size() && j < before.regions[i].solids.size(); ++j) {
+                Solid& a = t.regions[i].solids[j];
+                Solid b = before.regions[i].solids[j];
+                if (slot_count(a) != slot_count(b) || a.kind != b.kind) continue;
+                collect(b.refs, a.refs, [&](int k) { return slot(b, k); }, [&](int k) { return slot(a, k); }, slot_count(a));
+            }
+        }
+        collect(before.domain_refs, t.domain_refs, [&](int k) { return box_slot(was_domain, k); }, [&](int k) { return box_slot(t.domain, k); }, 6);
+        for (Moved& c : moved) c.ref->clear();
+        after = std::move(t);
+        return;
+    }
+    // A moved coordinate its tie does not give: the tie broken, the edit's value kept.
+    for (Moved& c : moved) {
+        if (*c.at != c.want) {
+            c.ref->clear();
+            *c.at = c.want;
+        }
+    }
+    after = std::move(t);
+}
+
+bool name_extent(Model& m, SolidRef s, int near, int far, std::string_view name) {
+    if (!m.editable() || !valid(m, s) || !param_name(name) || near == far) return false;
+    Model t = m;
+    Solid& solid = t.regions[static_cast<std::size_t>(s.region)].solids[static_cast<std::size_t>(s.solid)];
+    Coord* a = slot(solid, near);
+    Coord* b = slot(solid, far);
+    if (!a || !b) return false;
+    solid.refs.resize(static_cast<std::size_t>(slot_count(solid)));
+    const std::string near_text = solid.refs[static_cast<std::size_t>(near)].empty() ? format_length(*a) : solid.refs[static_cast<std::size_t>(near)];
+    const Param* p = find_param(t, name);
+    if (p && !p->length) return false;
+    const bool down = far < near;  // the low face (a box's lo, a prism's from) lies below its opposite: near - $name
+    if (!p) t.parameters.push_back({std::string(name), length_text(down ? *a - *b : *b - *a), {}, false, 0, 0});
+    solid.refs[static_cast<std::size_t>(far)] = near_text + (down ? " - $" : " + $") + std::string(name);
+    if (!resolve_all(t)) return false;
+    m = std::move(t);
+    return true;
+}
+
+// --- doping and mesh tools (Unit 26m slice 4: MT9, MT10) ----------------------------------------------------------
+
+namespace {
+
+double cm(Coord q) { return static_cast<double>(q) / 1e8; }  // correctly rounded (q * 1e-8 is not: 7000 gives 7.000000000000001e-05)
+
+// `line` added as the last entry of the deck's `kind` section; a new section (before the first contact or analysis
+// section, else at the end) when it has none. Every other line kept byte for byte.
+std::expected<std::string, std::string> append_entry(std::string_view text, std::string_view kind, const std::string& line) {
+    const auto d = deck::parse(text);
+    if (!d) return std::unexpected(d.error().message);
+    Lines l = split(text);
+    const deck::Section* section = nullptr;
+    for (const auto& s : d->sections) {
+        if (s.kind == kind) section = &s;
+    }
+    if (section) {
+        const int at = section_last(l, *section) + 1;
+        l.body.insert(l.body.begin() + at, line);
+        l.eol.insert(l.eol.begin() + at, l.nl);
+        if (at > 0 && l.eol[static_cast<std::size_t>(at - 1)].empty()) l.eol[static_cast<std::size_t>(at - 1)] = l.nl;
+    } else {
+        static const std::set<std::string_view> later{"contact", "thermal_contact", "equilibrium", "sweep", "transient",
+                                                      "small_signal", "trace", "output", "adapt"};
+        int at = static_cast<int>(l.body.size());
+        for (const auto& s : d->sections) {
+            if (later.contains(s.kind)) {
+                at = s.line - 1;
+                break;
+            }
+        }
+        const std::vector<std::string> block{"[" + std::string(kind) + "]", line, ""};
+        if (at > 0 && l.eol[static_cast<std::size_t>(at - 1)].empty()) l.eol[static_cast<std::size_t>(at - 1)] = l.nl;
+        for (std::size_t k = 0; k < block.size(); ++k) {
+            l.body.insert(l.body.begin() + at + static_cast<int>(k), block[k]);
+            l.eol.insert(l.eol.begin() + at + static_cast<int>(k), l.nl);
+        }
+    }
+    std::string out;
+    for (std::size_t k = 0; k < l.body.size(); ++k) out += l.body[k] + l.eol[k];
+    return out;
+}
+
+// erfc⁻¹(y) for 0 < y < 2, by Newton's method on erfc from a rational start (to the last bits).
+double erfc_inverse(double y) {
+    double x = y < 1.0 ? std::sqrt(-std::log(y / 2.0)) : -std::sqrt(-std::log(1.0 - y / 2.0));
+    for (int k = 0; k < 60; ++k) {
+        const double f = std::erfc(x) - y;
+        const double step = f / (-2.0 / std::sqrt(std::numbers::pi) * std::exp(-x * x));
+        x -= step;
+        if (std::abs(step) <= 1e-16 * std::max(1.0, std::abs(x))) break;
+    }
+    return x;
+}
+
+}  // namespace
+
+std::vector<device::DopingProfile> profiles(std::string_view text) {
+    std::vector<device::DopingProfile> out;
+    const auto d = deck::parse(text);
+    if (!d) return out;
+    const auto params = deck::parameters(*d);
+    for (const auto& s : d->sections) {
+        if (s.kind != "doping") continue;
+        for (const auto& e : s.entries) {
+            if (e.key != "profile") continue;
+            const auto v = params ? deck::substitute(e.value, *params) : std::expected<std::string, std::string>(e.value);
+            if (!v) continue;
+            if (auto p = deck::parse_profile(*v)) out.push_back(*p);
+        }
+    }
+    return out;
+}
+
+std::expected<std::string, std::string> add_profile(std::string_view text, const device::DopingProfile& p) {
+    return append_entry(text, "doping", "profile = " + deck::profile_text(p));
+}
+
+device::DopingProfile region_profile(const Model& m, SolidRef s, device::Dopant dopant, double peak) {
+    device::DopingProfile p{.dopant = dopant, .peak_cm3 = peak, .shape = device::DepthShape::constant};
+    const Box3 b = m.regions[static_cast<std::size_t>(s.region)].solids[static_cast<std::size_t>(s.solid)].bounds();
+    // The depth axis (unbounded: the deck's windows are on the other two) the one the solid spans most of the domain
+    // along, z on a tie: exact when it spans the domain there.
+    double best = -1.0;
+    for (const int a : {2, 1, 0}) {
+        const double span = static_cast<double>(b.hi[a] - b.lo[a]) / static_cast<double>(std::max<Coord>(1, m.domain.hi[a] - m.domain.lo[a]));
+        if (span > best + 1e-12) {
+            best = span;
+            p.axis = a;
+        }
+    }
+    for (int a = 0; a < 3; ++a) {
+        if (a == p.axis) continue;
+        p.lo[static_cast<std::size_t>(a)] = cm(b.lo[a]);
+        p.hi[static_cast<std::size_t>(a)] = cm(b.hi[a]);
+    }
+    return p;
+}
+
+device::DopingProfile implant_profile(Normal face, Coord at_face, const Box3& window, Coord depth, Coord lateral, device::Dopant dopant,
+                                      double peak) {
+    device::DopingProfile p{.dopant = dopant, .peak_cm3 = peak, .shape = device::DepthShape::gaussian, .axis = face.axis};
+    p.center = cm(at_face - face.sign * depth);  // into the solid: against the face's outward normal
+    p.width = cm(depth) / 2.0;
+    p.lateral = cm(lateral);
+    for (int a = 0; a < 3; ++a) {
+        if (a == face.axis) continue;
+        p.lo[static_cast<std::size_t>(a)] = cm(window.lo[a]);
+        p.hi[static_cast<std::size_t>(a)] = cm(window.hi[a]);
+    }
+    return p;
+}
+
+std::expected<device::DopingProfile, std::string> junction_profile(const std::vector<device::DopingProfile>& existing, Normal face,
+                                                                   Coord at_face, const Box3& window, Coord depth,
+                                                                   device::Dopant dopant, double peak) {
+    if (face.sign > 0) {
+        return std::unexpected(std::string("a junction diffuses from a face looking down an axis (-x, -y or -z): the erfc profile falls along its axis"));
+    }
+    if (depth <= 0) return std::unexpected(std::string("the junction lies inside the solid: drag into it"));
+    device::DopingProfile p{.dopant = dopant, .peak_cm3 = peak, .shape = device::DepthShape::erfc, .axis = face.axis};
+    for (int a = 0; a < 3; ++a) {
+        if (a == face.axis) continue;
+        p.lo[static_cast<std::size_t>(a)] = cm(window.lo[a]);
+        p.hi[static_cast<std::size_t>(a)] = cm(window.hi[a]);
+    }
+    // The junction's point: the window's centre at the dragged depth; the background there the other dopant's net.
+    mesh::Point x{};
+    for (int a = 0; a < 3; ++a) x[static_cast<std::size_t>(a)] = 0.5 * (cm(window.lo[a]) + cm(window.hi[a]));
+    x[static_cast<std::size_t>(face.axis)] = cm(at_face + depth);
+    double background = 0.0;
+    for (const auto& q : existing) background += (q.dopant == dopant ? -1.0 : 1.0) * device::evaluate(q, x);
+    if (!(background > 0.0)) return std::unexpected(std::string("no opposite doping at that depth for a junction to meet"));
+    if (!(background < peak)) return std::unexpected(std::string("the opposite doping there is above the level: raise the level"));
+    // peak/2 erfc((xj - c)/w) = background, with w half the depth: c = xj - w erfc⁻¹(2 background / peak).
+    p.width = cm(depth) / 2.0;
+    p.center = x[static_cast<std::size_t>(face.axis)] - p.width * erfc_inverse(2.0 * background / peak);
+    return p;
+}
+
+
+Box3 profile_extent(const Box3& domain, const device::DopingProfile& p) {
+    const auto q = [](double c) { return static_cast<Coord>(std::llround(c * 1e8)); };
+    Box3 b = domain;
+    for (int a = 0; a < 3; ++a) {
+        const auto i = static_cast<std::size_t>(a);
+        double lo = -std::numeric_limits<double>::infinity(), hi = std::numeric_limits<double>::infinity();
+        if (a != p.axis) {
+            lo = p.lo[i] - 2.0 * p.lateral;
+            hi = p.hi[i] + 2.0 * p.lateral;
+        } else if (p.shape == device::DepthShape::gaussian) {
+            lo = p.center - 2.0 * p.width;
+            hi = p.center + 2.0 * p.width;
+        } else if (p.shape == device::DepthShape::erfc) {
+            hi = p.center + 2.0 * p.width;
+        }
+        if (std::isfinite(lo)) b.lo[a] = std::clamp(q(lo), domain.lo[a], domain.hi[a]);
+        if (std::isfinite(hi)) b.hi[a] = std::clamp(q(hi), domain.lo[a], domain.hi[a]);
+        b.lo[a] = std::min(b.lo[a], b.hi[a]);
+    }
+    return b;
+}
+std::vector<SizeBox3> size_boxes(std::string_view text) {
+    std::vector<SizeBox3> out;
+    const auto d = deck::parse(text);
+    if (!d) return out;
+    for (const auto& s : d->sections) {
+        if (s.kind != "mesh") continue;
+        for (const auto& e : s.entries) {
+            if (e.key != "box") continue;
+            std::vector<std::string> refs;
+            const auto c = lengths(e.value, 7, {}, refs);
+            if (!c) continue;
+            out.push_back({normalized({(*c)[0], (*c)[1], (*c)[2]}, {(*c)[3], (*c)[4], (*c)[5]}), (*c)[6]});
+        }
+    }
+    return out;
+}
+
+std::expected<std::string, std::string> add_size_box(std::string_view text, const SizeBox3& b) {
+    if (b.size <= 0 || !(b.box.lo.x < b.box.hi.x && b.box.lo.y < b.box.hi.y && b.box.lo.z < b.box.hi.z)) {
+        return std::unexpected(std::string("a refine box needs a volume and a size"));
+    }
+    return append_entry(text, "mesh", "box = " + patch_text(b.box) + "  " + format_length(b.size));
 }
 
 }  // namespace NiTCAD::app::solid

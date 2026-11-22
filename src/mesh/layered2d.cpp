@@ -2,7 +2,8 @@
 //
 // The overlay: every shape's x and y breakpoints (cut to the domain) make a grid of cells; each cell takes the
 // region of the last shape covering it (an even-odd scan of the shape's vertical edges per row, exact: only
-// comparisons of input coordinates), else the background. Same-region cells sharing an edge form parts; each part's
+// comparisons of input coordinates), else the background; with `fill` shapes (Unit 26m MT4), the first in
+// paint_order's order. Same-region cells sharing an edge form parts; each part's
 // boundary is traced with the part on its left (counter-clockwise). A part whose boundary touches itself at a grid
 // vertex (two outgoing edges there) or has more than one loop (a hole) is cut along the vertical breakpoint line
 // through that vertex or the hole's leftmost line, and its pieces are traced again: each cut strictly divides the
@@ -31,6 +32,20 @@ namespace {
 
 std::unexpected<base::Error> invalid(std::string message, std::optional<std::size_t> index = std::nullopt) {
     return std::unexpected(base::Error{base::ErrorCode::invalid_input, std::move(message), base::ErrorContext{.index = index, .value = std::nullopt}});
+}
+
+// The order a point asks the shapes in, the first holding it taking it (Unit 26m MT4): the replacing shapes top
+// first, then the filling ones bottom first. With no `fill` shape, top first as before.
+std::vector<std::size_t> paint_order(const LayeredGeometry2D& g) {
+    std::vector<std::size_t> order;
+    order.reserve(g.shapes.size());
+    for (std::size_t s = g.shapes.size(); s-- > 0;) {
+        if (!g.shapes[s].fill) order.push_back(s);
+    }
+    for (std::size_t s = 0; s < g.shapes.size(); ++s) {
+        if (g.shapes[s].fill) order.push_back(s);
+    }
+    return order;
 }
 
 // --- slanted edges (Unit 26k slice 4, GD10): the layers as a planar arrangement -------------------------------------
@@ -271,6 +286,7 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
 
     // The region on each half-edge's left: -2 outside the domain.
     constexpr std::int32_t outside = -2;
+    const std::vector<std::size_t> order = paint_order(g);  // MT4
     std::vector<std::int32_t> left(2 * edges.size(), outside);
     for (std::size_t e = 0; e < edges.size(); ++e) {
         const Point& u = pts[edges[e].u];
@@ -317,7 +333,8 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
             }
             done = {true, true};
         }
-        for (std::size_t s = g.shapes.size(); s-- > 0 && !(done[0] && done[1]);) {
+        for (const std::size_t s : order) {
+            if (done[0] && done[1]) break;
             std::optional<std::size_t> own;
             for (const std::size_t i : edges[e].src) {
                 if (orig[i].shape == static_cast<std::int32_t>(s)) own = i;
@@ -727,7 +744,12 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
     std::vector<Run> runs;                       // every row's runs, in order along it, neighbours of other owners
     std::vector<std::size_t> row_at(ny + 1, 0);  // row j's runs: [row_at[j], row_at[j + 1])
     std::vector<std::pair<std::size_t, std::size_t>> gaps, rest, changed;
-    std::vector<std::size_t> cross, active, by_lo(g.shapes.size());  // `active`: the row's shapes, top first
+    std::vector<std::size_t> cross, active, by_lo(g.shapes.size());  // `active`: the row's shapes, in paint order (MT4: top first with no `fill`)
+    std::vector<std::size_t> rank(g.shapes.size());
+    {
+        const std::vector<std::size_t> order = paint_order(g);
+        for (std::size_t k = 0; k < order.size(); ++k) rank[order[k]] = k;
+    }
     for (std::size_t s = 0; s < by_lo.size(); ++s) by_lo[s] = s;
     std::ranges::sort(by_lo, [&](std::size_t x, std::size_t y) { return rows[x].lo < rows[y].lo; });
     std::size_t entering = 0;
@@ -736,7 +758,7 @@ std::expected<Geometry2D, base::Error> layered_partition2d(const LayeredGeometry
         std::erase_if(active, [&](std::size_t s) { return rows[s].hi <= j; });
         for (; entering < by_lo.size() && rows[by_lo[entering]].lo <= j; ++entering) {
             const std::size_t s = by_lo[entering];
-            if (rows[s].hi > j) active.insert(std::ranges::upper_bound(active, s, std::greater<>{}), s);
+            if (rows[s].hi > j) active.insert(std::ranges::upper_bound(active, rank[s], std::less<>{}, [&](std::size_t t) { return rank[t]; }), s);
         }
         changed.clear();
         if (j == 0) changed.emplace_back(0, nx);

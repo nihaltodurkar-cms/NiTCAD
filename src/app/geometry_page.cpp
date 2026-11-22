@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include "NiTCAD/app/deck_vocabulary.hpp"
+#include "NiTCAD/app/solid.hpp"
 #include "win32.hpp"
 
 // Last: they bring objbase.h's `interface` macro.
@@ -26,9 +27,7 @@ using namespace geo;
 
 constexpr const wchar_t* canvas_class = L"NiTCADGeometryCanvas";
 constexpr const wchar_t* panel_class = L"NiTCADGeometryPanel";
-constexpr int id_strip = 1, id_canvas = 2, id_tool_first = 10, id_fit = 20, id_mesh = 21;
-constexpr std::array<const wchar_t*, 6> tool_texts{L"Select (V)", L"Rectangle (R)", L"Polygon (P)", L"Contact (C)",
-                                                   L"Pan (H)", L"Measure (M)"};
+constexpr int id_strip = 1, id_canvas = 2, id_bar = 100;
 
 template <class T>
 void release(T*& p) {
@@ -169,15 +168,9 @@ GeometryPage::GeometryPage(HWND parent, Host& host, int id, int inspector_id, bo
                              nullptr);
     SetWindowLongPtrW(strip_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     SetWindowLongPtrW(strip_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(panel_proc));
-    for (std::size_t k = 0; k < tool_texts.size(); ++k) {
-        tool_buttons_.push_back(make(L"BUTTON", tool_texts[k], WS_TABSTOP | BS_AUTORADIOBUTTON | BS_PUSHLIKE | (k == 0 ? WS_GROUP : 0),
-                                     strip_, id_tool_first + static_cast<int>(k)));
-    }
-    tool_buttons_.push_back(make(L"BUTTON", L"Fit (F)", WS_TABSTOP | WS_GROUP | BS_PUSHBUTTON, strip_, id_fit));
-    mesh_button_ = make(L"BUTTON", L"Mesh preview", WS_TABSTOP | BS_AUTOCHECKBOX | BS_PUSHLIKE, strip_, id_mesh);
-    tool_buttons_.push_back(mesh_button_);
-    canvas_ = CreateWindowExW(0, canvas_class, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, panel_,
+    canvas_ = CreateWindowExW(0, canvas_class, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, 0, 0, 10, 10, panel_,
                               reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_canvas)), GetModuleHandleW(nullptr), this);
+    bar_ = std::make_unique<ModellerBar>(strip_, panel_, id_bar, false, panel_proc, this);
 
     // The Geometry section, in the inspector's place.
     inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL, 0, 0, 10, 10,
@@ -212,6 +205,7 @@ GeometryPage::GeometryPage(HWND parent, Host& host, int id, int inspector_id, bo
     add(c_kind, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST);
     add(c_draw_label, L"STATIC", L"Draw with", SS_LEFT);
     add(c_draw, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST);
+    add(c_overlap, L"BUTTON", L"Fills only empty space (overlap = fill)", WS_TABSTOP | BS_AUTOCHECKBOX);
     for (const int c : {c_material, c_draw}) {
         for (const std::string& m : choices_of("region", "material")) {
             SendMessageW(control(c), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(wide(m).c_str()));
@@ -251,7 +245,7 @@ void GeometryPage::set_dpi(int dpi, HFONT font, HFONT bold) {
     font_ = font;
     bold_ = bold;
     view_.dpi = dpi;
-    for (HWND h : tool_buttons_) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    bar_->set_font(font, dpi);
     for (HWND h : controls_) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     SendMessageW(control(c_heading), WM_SETFONT, reinterpret_cast<WPARAM>(bold), TRUE);
     release(text_);
@@ -266,14 +260,11 @@ void GeometryPage::layout() {
     GetClientRect(panel_, &r);
     const int pad = MulDiv(4, dpi_, 96), bh = MulDiv(24, dpi_, 96);
     MoveWindow(strip_, 0, 0, r.right, bh + 2 * pad, TRUE);
-    int x = pad;
-    for (std::size_t k = 0; k < tool_buttons_.size(); ++k) {
-        // The tools, Fit, then Mesh preview.
-        const int w = MulDiv(k < tool_texts.size() ? 92 : k == tool_texts.size() ? 64 : 108, dpi_, 96);
-        MoveWindow(tool_buttons_[k], x, pad, w, bh, TRUE);
-        x += w + (k + 1 == tool_texts.size() ? 3 * pad : pad / 2);
-    }
+    bar_->layout_strip(r.right, pad, bh);
+    canvas_top_ = bh + 2 * pad;
     MoveWindow(canvas_, 0, bh + 2 * pad, r.right, std::max<int>(1, r.bottom - bh - 2 * pad), TRUE);
+    bar_->raise();
+    place_bar();
     if (target_) {
         RECT c{};
         GetClientRect(canvas_, &c);
@@ -310,6 +301,7 @@ void GeometryPage::layout_inspector() {
         MoveWindow(control(c_lower), pad + w / 2 + 2, y, w - w / 2 - 2, row - 4, TRUE);
         y += row;
     }
+    line(c_overlap);
     pair(c_x_label, c_x);
     pair(c_y_label, c_y);
     pair(c_w_label, c_w);
@@ -410,7 +402,7 @@ void GeometryPage::set_mesh(const std::string& text, MeshOverlay mesh) {
 
 void GeometryPage::set_mesh_preview(bool on) {
     mesh_preview_ = on;
-    if (mesh_button_) SendMessageW(mesh_button_, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+    bar_->set_mesh(on);
     invalidate();
 }
 
@@ -531,18 +523,304 @@ void GeometryPage::set_view(const geo::View& v) {
 void GeometryPage::set_tool(Tool t) {
     cancel();
     tool_ = t;
+    mode_ = modeller::Mode::none;
     update_tool_buttons();
     invalidate();
 }
 
 void GeometryPage::update_tool_buttons() {
-    for (std::size_t k = 0; k < tool_texts.size(); ++k) {
-        SendMessageW(tool_buttons_[k], BM_SETCHECK, static_cast<int>(k) == static_cast<int>(tool_) ? BST_CHECKED : BST_UNCHECKED, 0);
+    // A tool armed by its key opens a group that holds it (Pan and Measure are in none: the group stays).
+    const auto in = [&](modeller::Group g) {
+        return std::ranges::any_of(modeller::tools_for(g, false), [&](const modeller::ToolEntry& e) {
+            return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_);
+        });
+    };
+    if (!in(bar_->group())) {
+        for (int g = 0; g < modeller::group_count; ++g) {
+            if (in(static_cast<modeller::Group>(g))) {
+                bar_->set_group(static_cast<modeller::Group>(g));
+                break;
+            }
+        }
     }
+    bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
+    bar_->set_measure(tool_ == Tool::measure);
+}
+
+// --- Unit 26m slice 0: the camera lock, the floating bar, the deck line and the chip (MT1-MT3) ---------------------
+
+void GeometryPage::set_camera_fixed(bool fixed) {
+    camera_fixed_ = fixed;
+    bar_->set_camera_fixed(fixed);
+    if (fixed && drag_ == Drag::pan) cancel();
+}
+
+void GeometryPage::set_group(modeller::Group g) {
+    bar_->set_group(g);
+    if (mode_ != modeller::Mode::none && modeller::group_of(mode_) != g) mode_ = modeller::Mode::none;
+    const auto list = modeller::tools_for(g, false);
+    const bool has = std::ranges::any_of(list, [&](const modeller::ToolEntry& e) { return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_); });
+    if (!has && !list.empty() && list.front().action == modeller::Action::tool) {
+        set_tool(static_cast<Tool>(list.front().tool));
+    } else {
+        bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
+    }
+    place_bar();
+}
+
+
+// --- Unit 26m slice 1: the overlap rule and the Transform modes (MT4, MT5) -----------------------------------------
+
+void GeometryPage::set_mode(modeller::Mode m) {
+    if (tool_ != Tool::select) set_tool(Tool::select);
+    cancel();
+    mode_ = m;
+    array_count_ = 3;
+    if (m != modeller::Mode::none && bar_->group() != modeller::group_of(m)) bar_->set_group(modeller::group_of(m));
+    bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
+    place_bar();
+    invalidate();
+}
+
+bool GeometryPage::toggle_overlap() {
+    std::vector<int> regions;
+    for (const ShapeRef s : selection_) {
+        if (s.shape >= 0 && std::ranges::find(regions, s.region) == regions.end()) regions.push_back(s.region);
+    }
+    if (regions.empty()) {
+        host_.geometry_status("Pick a shape: its region then fills only empty space, or replaces again.");
+        return false;
+    }
+    Geometry next = g_;
+    // One rule for them all: fill unless every one fills already.
+    const bool fill = !std::ranges::all_of(regions, [&](int r) { return g_.regions[static_cast<std::size_t>(r)].fill; });
+    bool any = false;
+    for (const int r : regions) any = set_overlap(next, r, fill) || any;
+    if (!any) {
+        host_.geometry_status("A tensor deck's regions only replace (overlap is for layered meshes).");
+        return false;
+    }
+    if (!commit_model(std::move(next))) return false;
+    update_inspector();
+    return true;
+}
+
+bool GeometryPage::transform_click(const Hit& hit, Pt at, bool shift, bool ctrl) {
+    const bool on_shape = (hit.kind == HitKind::shape || hit.kind == HitKind::edge || hit.kind == HitKind::vertex || hit.kind == HitKind::handle) &&
+                          hit.shape.shape >= 0;
+    Geometry next = g_;
+    if (mode_ == modeller::Mode::mirror) {
+        if (!on_shape) {
+            host_.geometry_status("Mirror: click a shape.");
+            return false;
+        }
+        const Rect b = g_.regions[static_cast<std::size_t>(hit.shape.region)].shapes[static_cast<std::size_t>(hit.shape.shape)].bounds();
+        bool ok = false;
+        if (shift) {
+            ok = rotate_shape(next, hit.shape);
+        } else if (hit.kind == HitKind::handle && hit.index % 2 == 1) {
+            // A side's handle (1 bottom, 3 right, 5 top, 7 left): across that side.
+            const int h = hit.index;
+            ok = h == 1 || h == 5 ? mirror_shape_at(next, hit.shape, false, 2 * (h == 1 ? b.lo.y : b.hi.y))
+                                  : mirror_shape_at(next, hit.shape, true, 2 * (h == 3 ? b.hi.x : b.lo.x));
+        } else {
+            ok = ctrl ? mirror_shape_at(next, hit.shape, false, b.lo.y + b.hi.y) : mirror_shape_at(next, hit.shape, true, b.lo.x + b.hi.x);
+        }
+        if (!ok) {
+            host_.geometry_status("That mirror leaves the shape outside the limits.");
+            return false;
+        }
+        selection_ = {hit.shape};
+        contact_ = -1;
+        const bool done = commit_model(std::move(next));  // false too when nothing changes
+        update_inspector();
+        return done;
+    }
+    // Align: the side of the clicked shape's bounds (or the domain's) nearest the click; the other picked shapes'
+    // same sides go to its line.
+    const Rect b = on_shape ? g_.regions[static_cast<std::size_t>(hit.shape.region)].shapes[static_cast<std::size_t>(hit.shape.shape)].bounds()
+                            : g_.domain;
+    const std::array<Coord, 4> gap{std::abs(at.x - b.lo.x), std::abs(at.x - b.hi.x), std::abs(at.y - b.lo.y), std::abs(at.y - b.hi.y)};
+    const int side = static_cast<int>(std::ranges::min_element(gap) - gap.begin());
+    const Coord line = side == 0 ? b.lo.x : side == 1 ? b.hi.x : side == 2 ? b.lo.y : b.hi.y;
+    std::vector<ShapeRef> others;
+    for (const ShapeRef s : selection_) {
+        if (s.shape >= 0 && !(on_shape && s == hit.shape)) others.push_back(s);
+    }
+    if (others.empty()) {
+        host_.geometry_status("Align: pick the shapes to move first (Ctrl+click), then click near the side to align them to.");
+        return false;
+    }
+    if (align_shapes(next, others, side, line) && commit_model(std::move(next))) {
+        update_inspector();
+        return true;
+    }
+    host_.geometry_status("Align: nothing moves (the sides are there already).");
+    return false;
+}
+std::optional<modeller::Box> GeometryPage::selection_bounds() const {
+    std::optional<Rect> all;
+    const auto add = [&](Rect r) {
+        if (!all) all = r;
+        else all = Rect{{std::min(all->lo.x, r.lo.x), std::min(all->lo.y, r.lo.y)}, {std::max(all->hi.x, r.hi.x), std::max(all->hi.y, r.hi.y)}};
+    };
+    for (const ShapeRef s : selection_) {
+        if (s.region < 0 || s.region >= static_cast<int>(g_.regions.size())) continue;
+        const auto& shapes = g_.regions[static_cast<std::size_t>(s.region)].shapes;
+        if (s.shape >= 0 && s.shape < static_cast<int>(shapes.size())) add(shapes[static_cast<std::size_t>(s.shape)].bounds());
+        else if (s.shape < 0) add(g_.domain);
+    }
+    if (contact_ >= 0 && contact_ < static_cast<int>(g_.contacts.size())) {
+        const Contact& c = g_.contacts[static_cast<std::size_t>(contact_)];
+        add(normalized(c.a, c.b));
+    }
+    if (!all) return std::nullopt;
+    return modeller::Box{view_.sx(all->lo.x), view_.sy(all->hi.y), view_.sx(all->hi.x), view_.sy(all->lo.y)};
+}
+
+void GeometryPage::place_bar() {
+    RECT c{};
+    GetClientRect(canvas_, &c);
+    const double top = canvas_top_, ruler = ruler_px();
+    const modeller::Box viewport{ruler, top + ruler, static_cast<double>(c.right), top + c.bottom};
+    std::optional<modeller::Box> s = selection_bounds();
+    if (s) *s = {s->left, s->top + top, s->right, s->bottom + top};
+    bar_->place(viewport, s);
+}
+
+modeller::Placement GeometryPage::bar_placement() const {
+    modeller::Placement p = bar_->placement();
+    p.bar.top -= canvas_top_;
+    p.bar.bottom -= canvas_top_;
+    return p;
+}
+
+std::string GeometryPage::fresh_contact() const {
+    for (int n = 1;; ++n) {
+        std::string name = "contact_" + std::to_string(n);
+        // Not a contact's name, nor a patch's left in the deck (a renamed contact keeps its patch).
+        if (std::ranges::none_of(g_.contacts, [&](const Contact& c) { return c.name == name; }) &&
+            text_seen_.find("patch " + name + " ") == std::string::npos) {
+            return name;
+        }
+    }
+}
+
+std::optional<Geometry> GeometryPage::pending() const {
+    switch (drag_) {
+    case Drag::corner:
+    case Drag::move:
+    case Drag::array:
+    case Drag::handle:
+    case Drag::vertex:
+    case Drag::domain:
+    case Drag::contact_end: return g_;
+    case Drag::rectangle: {
+        Geometry next = g_;
+        if (add_box(next, normalized(anchor_, at_), material_) < 0) return std::nullopt;
+        return next;
+    }
+    case Drag::contact: {
+        Geometry next = g_;
+        if (add_contact(next, fresh_contact(), "ohmic", anchor_, at_) < 0) return std::nullopt;
+        return next;
+    }
+    default: return std::nullopt;
+    }
+}
+
+std::string GeometryPage::chip_value() const {
+    using modeller::chip_length;
+    const auto offset = [](Coord dx, Coord dy) {
+        std::string out;
+        if (dx != 0) out = "\xCE\x94x " + chip_length(dx);
+        if (dy != 0) out += (out.empty() ? "" : ", ") + std::string("\xCE\x94y ") + chip_length(dy);
+        return out.empty() ? std::string("\xCE\x94 0 \xC2\xB5m") : out;
+    };
+    std::string v;
+    switch (drag_) {
+    case Drag::move:
+    case Drag::vertex:
+    case Drag::contact_end: v = offset(drag_d_.x, drag_d_.y); break;
+    case Drag::array: v = offset(drag_d_.x, drag_d_.y) + std::format(" × {} (wheel)", array_count_); break;
+    case Drag::handle:
+    case Drag::domain: {
+        Rect r = g_.domain;
+        if (drag_ == Drag::handle && selection_.size() == 1 && selection_[0].shape >= 0) {
+            r = g_.regions[static_cast<std::size_t>(selection_[0].region)].shapes[static_cast<std::size_t>(selection_[0].shape)].bounds();
+        }
+        v = chip_length(r.hi.x - r.lo.x) + " \xC3\x97 " + chip_length(r.hi.y - r.lo.y);
+        break;
+    }
+    case Drag::rectangle: {
+        const Rect r = normalized(anchor_, at_);
+        v = chip_length(r.hi.x - r.lo.x) + " \xC3\x97 " + chip_length(r.hi.y - r.lo.y);
+        break;
+    }
+    case Drag::contact: v = chip_length(std::abs(at_.x - anchor_.x) + std::abs(at_.y - anchor_.y)); break;
+    case Drag::corner:
+        v = (mode_ == modeller::Mode::chamfer ? "cut " : "radius ") + chip_length(corner_r_);
+        if (mode_ != modeller::Mode::chamfer && corner_r_ > 0) v += corner_chords_ > 0 ? std::format(", {} chords", corner_chords_) : std::string(", chords under 6 s");
+        break;
+    case Drag::measure: {
+        const double dx = static_cast<double>(at_.x - anchor_.x), dy = static_cast<double>(at_.y - anchor_.y);
+        v = std::format("{:.6g} \xC2\xB5m", std::sqrt(dx * dx + dy * dy) / static_cast<double>(per_um));
+        break;
+    }
+    default: return {};
+    }
+    if (!entry_.empty()) v += "   [" + entry_.text() + (entry_.value() ? "]" : "?]");
+    return v;
+}
+
+void GeometryPage::after_drag_step(double x, double y) {
+    if (const auto next = pending()) {
+        auto out = write_geometry(text_seen_, *next);
+        live_line_ = out ? modeller::deck_line(text_seen_, *out) : out.error();
+        host_.geometry_status(live_line_);
+    } else {
+        live_line_.clear();
+    }
+    const int off = MulDiv(16, dpi_, 96);
+    bar_->chip(static_cast<int>(x) + off, static_cast<int>(y) + canvas_top_ + off, chip_value());
+}
+
+void GeometryPage::end_drag_ui() {
+    entry_.clear();
+    typed_axis_ = -1;
+    live_line_.clear();
+    bar_->chip(0, 0, "");
+}
+
+Coord GeometryPage::typed_or(Coord dragged) const {
+    const auto v = entry_.value();
+    if (!v) return dragged;
+    return *v >= 0 && dragged < 0 ? -*v : *v;
+}
+
+bool GeometryPage::on_char(wchar_t c) {
+    if (drag_ != Drag::move && drag_ != Drag::rectangle && drag_ != Drag::array && drag_ != Drag::corner) return false;
+    if (c == L'\b') {
+        if (!entry_.backspace()) return true;
+    } else if (!entry_.type(c)) {
+        return false;
+    }
+    if (typed_axis_ < 0) {
+        const Pt d = drag_ == Drag::move || drag_ == Drag::array ? drag_d_ : Pt{at_.x - anchor_.x, at_.y - anchor_.y};
+        typed_axis_ = std::abs(d.y) > std::abs(d.x) ? 1 : 0;
+    }
+    on_move(last_x_, last_y_, false);
+    return true;
 }
 
 void GeometryPage::cancel() {
     if (drag_ != Drag::none && drag_ != Drag::measure) g_ = drag_ == Drag::rubber || drag_ == Drag::pan ? g_ : g_start_;
+    if (copy_from_) {
+        g_ = *copy_from_;
+        selection_ = copy_sel_;
+        copy_from_.reset();
+    }
+    end_drag_ui();
     drag_ = Drag::none;
     start_ = Start::none;
     polygon_.clear();
@@ -614,7 +892,7 @@ void GeometryPage::update_inspector() {
         SendMessageW(control(c), CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(wide(t).c_str()));
     };
     show({c_name_label, c_name, c_material_label, c_material, c_raise, c_lower, c_x_label, c_x, c_y_label, c_y, c_w_label,
-          c_w, c_h_label, c_h, c_vertices_label, c_vertices, c_apply, c_kind_label, c_kind},
+          c_w, c_h_label, c_h, c_vertices_label, c_vertices, c_apply, c_kind_label, c_kind, c_overlap},
          false);
     show({c_draw_label, c_draw}, g_.editable());
     const auto xywh = [&](Rect r, bool contact) {
@@ -654,6 +932,8 @@ void GeometryPage::update_inspector() {
             hint = std::format("Region {}, layer {} of {}: {}", r.name, s.region + 1, g_.regions.size(),
                                sh.kind == ShapeKind::box ? "a rectangle" : std::format("a polygon of {} vertices", sh.points.size()));
             show({c_raise, c_lower}, true);
+            show({c_overlap}, g_.mesh != MeshKind::tensor);  // MT4
+            SendMessageW(control(c_overlap), BM_SETCHECK, r.fill ? BST_CHECKED : BST_UNCHECKED, 0);
             if (sh.kind == ShapeKind::box) {
                 xywh(normalized(sh.points[0], sh.points[1]), false);
             } else {
@@ -699,6 +979,7 @@ bool GeometryPage::commit(int c) {
         const ShapeRef s = selection_[0];
         if (c == c_name) ok = rename_region(next, s.region, text(c_name));
         else if (c == c_material) ok = geo::set_material(next, s.region, choice(c_material));
+        else if (c == c_overlap) ok = set_overlap(next, s.region, SendMessageW(control(c_overlap), BM_GETCHECK, 0, 0) == BST_CHECKED);
         else if (c == c_raise && raise_region(next, s.region)) {
             ok = true;
             selection_ = {{s.region + 1, s.shape}};
@@ -773,9 +1054,13 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
         SetCapture(canvas_);
     };
     if (space_ || tool_ == Tool::pan) {
-        begin(Drag::pan);
+        // MT1: the Pan tool and Space+drag move the view only while the camera is free.
+        if (!camera_fixed_) begin(Drag::pan);
         return;
     }
+    entry_.clear();
+    typed_axis_ = -1;
+    drag_d_ = {};
     switch (tool_) {
     case Tool::rectangle:
         anchor_ = at_ = snapped(x, y, false);
@@ -824,6 +1109,58 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
         }
     }
     const Hit hit = hit_test(g_, view_, x, y, one);
+    // MT5: Mirror and Align act on a click.
+    if ((mode_ == modeller::Mode::mirror || mode_ == modeller::Mode::align) && (hit.kind != HitKind::contact && hit.kind != HitKind::contact_end)) {
+        transform_click(hit, view_.model(x, y), shift, ctrl);
+        invalidate();
+        return;
+    }
+    // Unit 26m slice 2 (MQ6): Chamfer and Round vertex drag in from a picked shape's corner (a polygon's vertex, a box's
+    // corner handle); a press on a shape picks it, so its corners show.
+    if (mode_ == modeller::Mode::chamfer || mode_ == modeller::Mode::round) {
+        int corner = -1;
+        if (hit.kind == HitKind::vertex && hit.shape.shape >= 0) corner = hit.index;
+        else if (hit.kind == HitKind::handle && hit.shape.shape >= 0 && hit.index % 2 == 0) corner = hit.index / 2;
+        if (corner >= 0) {
+            corner_shape_ = hit.shape;
+            drag_index_ = corner;
+            corner_r_ = 0;
+            corner_chords_ = 0;
+            anchor_ = view_.model(x, y);
+            begin(Drag::corner);
+            return;
+        }
+        if ((hit.kind == HitKind::shape || hit.kind == HitKind::edge) && hit.shape.shape >= 0) {
+            selection_ = {hit.shape};
+            contact_ = -1;
+            update_inspector();
+            invalidate();
+            host_.geometry_status("Now drag in from one of its corners.");
+            return;
+        }
+    }
+    // MT2: what is picked opens its group.
+    {
+        modeller::Picked k = modeller::Picked::nothing;
+        if (hit.kind == HitKind::vertex || hit.kind == HitKind::edge) k = hit.shape.shape >= 0 ? modeller::Picked::edge : k;
+        else if (hit.kind == HitKind::contact || hit.kind == HitKind::contact_end) k = modeller::Picked::contact;
+        else if (hit.kind == HitKind::handle || (hit.kind == HitKind::shape && hit.shape.shape >= 0)) k = modeller::Picked::solid;
+        const modeller::Group g = modeller::group_for(k);
+        if (g != bar_->group()) {
+            bar_->set_group(g);
+            bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
+        }
+    }
+    // MT1, MQ3: empty background (or a region's background) pans a free camera; Shift keeps the rubber band.
+    const bool background = hit.kind == HitKind::none || ((hit.kind == HitKind::shape || hit.kind == HitKind::edge) && hit.shape.shape < 0);
+    if (modeller::navigation(camera_fixed_, false, {modeller::Button::left, background, shift, true, false}) == modeller::Nav::pan) {
+        contact_ = -1;
+        if (!ctrl) selection_ = hit.kind == HitKind::none ? std::vector<ShapeRef>{} : std::vector<ShapeRef>{hit.shape};
+        update_inspector();
+        begin(Drag::pan);
+        invalidate();
+        return;
+    }
     switch (hit.kind) {
     case HitKind::handle:
         drag_index_ = hit.index;
@@ -878,8 +1215,33 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
         update_inspector();
         invalidate();
         if (s.shape >= 0 && std::ranges::find(selection_, s) != selection_.end()) {
+            if (mode_ == modeller::Mode::array) {
+                // MT5: the drag is the pitch, the wheel the count; one region per copy on release.
+                selection_ = {s};
+                update_inspector();
+                anchor_ = snapped(x, y, false, s);
+                begin(Drag::array);
+                return;
+            }
             anchor_ = snapped(x, y, false, selection_.size() == 1 ? std::optional(s) : std::nullopt);
             begin(Drag::move);
+            if (mode_ == modeller::Mode::copy || GetKeyState(VK_MENU) < 0) {
+                // MT5: a copy of each picked shape is dragged (its region's rule kept); the originals stay.
+                copy_from_ = g_;
+                copy_sel_ = selection_;
+                Geometry with = g_;
+                std::vector<ShapeRef> copies;
+                for (const ShapeRef c : selection_) {
+                    if (c.shape < 0) continue;
+                    const int r = duplicate_shape(with, c, 0, 0);
+                    if (r < 0) continue;
+                    with.regions[static_cast<std::size_t>(r)].fill = with.regions[static_cast<std::size_t>(c.region)].fill;
+                    copies.push_back({r, 0});
+                }
+                g_ = with;
+                g_start_ = with;
+                selection_ = copies;
+            }
         }
         return;
     }
@@ -926,10 +1288,18 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         view_.origin_x += dx;
         view_.origin_y += dy;
         break;
+    case Drag::array:
     case Drag::move: {
         const Pt p = snapped(x, y, shift, one);
         g_ = g_start_;
-        for (const ShapeRef s : selection_) move_shape(g_, s, p.x - anchor_.x, p.y - anchor_.y);
+        drag_d_ = {p.x - anchor_.x, p.y - anchor_.y};
+        if (typed_axis_ == 0) drag_d_.x = typed_or(drag_d_.x);
+        if (typed_axis_ == 1) drag_d_.y = typed_or(drag_d_.y);
+        if (drag_ == Drag::array) {
+            if (one && (drag_d_.x != 0 || drag_d_.y != 0)) array_shape(g_, *one, drag_d_.x, drag_d_.y, array_count_);
+            break;
+        }
+        for (const ShapeRef s : selection_) move_shape(g_, s, drag_d_.x, drag_d_.y);
         break;
     }
     case Drag::handle: {
@@ -944,6 +1314,7 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         if (!one) break;
         const Pt p = snapped(x, y, shift, one);
         g_ = g_start_;
+        drag_d_ = {p.x - anchor_.x, p.y - anchor_.y};
         set_vertex(g_, *one, drag_index_, p, !alone_);
         break;
     }
@@ -960,6 +1331,7 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         const Rect& d = g_.domain;
         if (c.a.x == c.b.x) p = {c.a.x, std::clamp(p.y, d.lo.y, d.hi.y)};
         else p = {std::clamp(p.x, d.lo.x, d.hi.x), c.a.y};
+        drag_d_ = {p.x - anchor_.x, p.y - anchor_.y};
         (drag_index_ == 0 ? c.a : c.b) = p;
         set_contact(g_, contact_, c.a, c.b);
         break;
@@ -978,6 +1350,30 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         break;
     }
     case Drag::rectangle:
+        at_ = snapped(x, y, shift);
+        if (typed_axis_ == 0) at_.x = anchor_.x + typed_or(at_.x - anchor_.x);
+        if (typed_axis_ == 1) at_.y = anchor_.y + typed_or(at_.y - anchor_.y);
+        break;
+    case Drag::corner: {
+        const Coord step = grid_step(view_);
+        const double len = std::hypot(static_cast<double>(raw.x - anchor_.x), static_cast<double>(raw.y - anchor_.y));
+        corner_r_ = std::max<Coord>(0, typed_or(static_cast<Coord>(std::llround(len / static_cast<double>(step))) * step));
+        g_ = g_start_;
+        corner_chords_ = 0;
+        if (corner_r_ > 0) {
+            if (mode_ == modeller::Mode::chamfer) {
+                chamfer_shape(g_, corner_shape_, drag_index_, corner_r_);
+            } else {
+                // MQ4, MT12 (2): 15° a chord, fewer while one is under the generator's 6 s.
+                const auto& sh = g_.regions[static_cast<std::size_t>(corner_shape_.region)].shapes[static_cast<std::size_t>(corner_shape_.shape)];
+                const auto s = solid::mesh_length(text_seen_, "interface_resolution");
+                const double six_s = s ? 6.0 * *s * static_cast<double>(per_um) * 1e4 : 0.0;
+                corner_chords_ = arc_segments(corner_turn(sh.outline(), drag_index_), static_cast<double>(corner_r_), six_s);
+                if (corner_chords_ > 0) fillet_shape(g_, corner_shape_, drag_index_, corner_r_, corner_chords_);
+            }
+        }
+        break;
+    }
     case Drag::measure: at_ = snapped(x, y, shift); break;
     }
     invalidate();
@@ -1003,17 +1399,23 @@ void GeometryPage::on_up(double x, double y, bool shift) {
     if (start_ == Start::height) return;  // the click's own release
     on_move(x, y, shift);
     const Drag d = drag_;
+    end_drag_ui();
     drag_ = Drag::none;
     if (GetCapture() == canvas_) ReleaseCapture();
     switch (d) {
+    case Drag::corner:
     case Drag::move:
+    case Drag::array:
     case Drag::handle:
     case Drag::vertex:
     case Drag::domain:
     case Drag::contact_end: {
         Geometry next = g_;
-        g_ = g_start_;
-        if (!(next == g_start_)) commit_model(std::move(next));
+        const bool moved = !(next == g_start_);
+        g_ = copy_from_ ? *copy_from_ : g_start_;
+        if (copy_from_ && !moved) selection_ = copy_sel_;  // a copy not moved is no copy
+        copy_from_.reset();
+        if (moved) commit_model(std::move(next));
         break;
     }
     case Drag::rubber: {
@@ -1067,7 +1469,13 @@ void GeometryPage::on_up(double x, double y, bool shift) {
 
 bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
     if (ctrl) return false;
+    // MT3: while a drag takes a typed value, letters and digits are its (WM_CHAR), not the tools' keys.
+    if ((drag_ == Drag::move || drag_ == Drag::rectangle || drag_ == Drag::array || drag_ == Drag::corner) && ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') ||
+                                                          (key >= VK_NUMPAD0 && key <= VK_DIVIDE) || key == VK_OEM_PERIOD || key == VK_OEM_MINUS || key == VK_BACK)) {
+        return true;
+    }
     switch (key) {
+    case 'L': set_camera_fixed(!camera_fixed_); return true;
     case 'V': set_tool(Tool::select); return true;
     case 'R': set_tool(Tool::rectangle); return true;
     case 'P': set_tool(Tool::polygon); return true;
@@ -1086,6 +1494,10 @@ bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
         cancel();
         return true;
     case VK_RETURN: {
+        if (drag_ != Drag::none && drag_ != Drag::pan && drag_ != Drag::rubber) {  // MT3: Enter applies the drag as it stands
+            on_up(last_x_, last_y_, false);
+            return true;
+        }
         if (tool_ != Tool::polygon || polygon_.size() < 3) return true;
         std::vector<Pt> p = polygon_;
         polygon_.clear();
@@ -1266,9 +1678,12 @@ double GeometryPage::render() {
             }
             return path;
         };
-        for (std::size_t r = 0; r < g_.regions.size(); ++r) {
+        for (const int ri : geo::paint_order(g_)) {  // MT4: as the build layers them
+            const auto r = static_cast<std::size_t>(ri);
             const D2D1_COLOR_F fill = material_fill(g_.regions[r].material);
-            for (const Shape& s : g_.regions[r].shapes) {
+            const std::size_t n = g_.regions[r].shapes.size();
+            for (std::size_t k = 0; k < n; ++k) {
+                const Shape& s = g_.regions[r].shapes[g_.regions[r].fill ? n - 1 - k : k];
                 if (s.kind == ShapeKind::box) {
                     const Rect q = normalized(s.points[0], s.points[1]);
                     const D2D1_RECT_F rr = D2D1::RectF(sx(q.lo.x), sy(q.hi.y), sx(q.hi.x), sy(q.lo.y));
@@ -1433,6 +1848,7 @@ double GeometryPage::render() {
     const HRESULT hr = target_->EndDraw();
     if (hr == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) release_target();
     ValidateRect(canvas_, nullptr);
+    place_bar();
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -1446,19 +1862,25 @@ LRESULT CALLBACK GeometryPage::panel_proc(HWND hwnd, UINT message, WPARAM w, LPA
             return 0;
         }
         if (message == WM_COMMAND && HIWORD(w) == BN_CLICKED) {
-            const int id = LOWORD(w);
-            if (id >= id_tool_first && id < id_tool_first + static_cast<int>(tool_texts.size())) {
-                self->set_tool(static_cast<Tool>(id - id_tool_first));
-                SetFocus(self->canvas_);
-                return 0;
-            }
-            if (id == id_fit) {
-                self->fit();
-                SetFocus(self->canvas_);
-                return 0;
-            }
-            if (id == id_mesh) {
-                self->set_mesh_preview(SendMessageW(self->mesh_button_, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            if (const auto c = self->bar_->command(LOWORD(w))) {
+                using Kind = ModellerBar::Command::Kind;
+                switch (c->kind) {
+                case Kind::group: self->set_group(static_cast<modeller::Group>(c->index)); break;
+                case Kind::tool: self->set_tool(static_cast<Tool>(c->index)); break;
+                case Kind::duplicate: self->duplicate(); break;
+                case Kind::mode: self->set_mode(static_cast<modeller::Mode>(c->index)); break;
+                case Kind::overlap: self->toggle_overlap(); break;
+                case Kind::corner:
+                    switch (c->index) {
+                    case ModellerBar::camera: self->set_camera_fixed(!self->camera_fixed_); break;
+                    case ModellerBar::reset:
+                    case ModellerBar::fit: self->fit(); break;
+                    case ModellerBar::measure: self->set_tool(self->tool_ == Tool::measure ? Tool::select : Tool::measure); break;
+                    case ModellerBar::mesh: self->set_mesh_preview(!self->mesh_preview_); break;
+                    default: break;
+                    }
+                    break;
+                }
                 SetFocus(self->canvas_);
                 return 0;
             }
@@ -1477,7 +1899,7 @@ LRESULT CALLBACK GeometryPage::inspector_proc(HWND hwnd, UINT message, WPARAM w,
         if (message == WM_COMMAND) {
             const int c = LOWORD(w) - self->inspector_id_;
             const int code = HIWORD(w);
-            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply)) ||
+            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_overlap)) ||
                 (code == CBN_SELCHANGE && (c == c_material || c == c_kind || c == c_draw))) {
                 self->commit(c);
                 return 0;
@@ -1520,7 +1942,10 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         return 0;
     case WM_LBUTTONDOWN: on_down(x, y, shift, ctrl, false); return 0;
     case WM_LBUTTONDBLCLK: on_down(x, y, shift, ctrl, true); return 0;
-    case WM_MOUSEMOVE: on_move(x, y, shift); return 0;
+    case WM_MOUSEMOVE:
+        on_move(x, y, shift);
+        after_drag_step(x, y);
+        return 0;
     case WM_LBUTTONUP:
         if (start_ != Start::none || (drag_ != Drag::none && drag_ != Drag::pan)) on_up(x, y, shift);
         else if (drag_ == Drag::pan) {
@@ -1530,6 +1955,7 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         return 0;
     case WM_MBUTTONDOWN:
         SetFocus(canvas_);
+        if (modeller::navigation(camera_fixed_, false, {modeller::Button::middle}) == modeller::Nav::none) return 0;
         last_x_ = x;
         last_y_ = y;
         drag_ = Drag::pan;
@@ -1542,6 +1968,13 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         }
         return 0;
     case WM_MOUSEWHEEL: {
+        if (drag_ == Drag::array) {  // MT5: the wheel sets the count, whatever the camera
+            array_count_ = std::clamp(array_count_ + (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 1 : -1), 2, 100);
+            on_move(last_x_, last_y_, false);
+            after_drag_step(last_x_, last_y_);
+            return 0;
+        }
+        if (!modeller::wheel_zooms(camera_fixed_)) return 0;
         POINT p{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
         ScreenToClient(canvas_, &p);
         const double f = std::pow(1.2, GET_WHEEL_DELTA_WPARAM(w) / 120.0);
@@ -1563,7 +1996,9 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
     case WM_KEYUP:
         if (w == VK_SPACE) space_ = false;
         return 0;
-    case WM_CHAR: return 0;
+    case WM_CHAR:
+        if (on_char(static_cast<wchar_t>(w))) after_drag_step(last_x_, last_y_);
+        return 0;
     case WM_SETCURSOR:
         if (LOWORD(l) == HTCLIENT) {
             SetCursor(LoadCursorW(nullptr, tool_ == Tool::select ? IDC_ARROW : tool_ == Tool::pan || space_ ? IDC_SIZEALL : IDC_CROSS));

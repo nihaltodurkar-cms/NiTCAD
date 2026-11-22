@@ -1,7 +1,7 @@
 // Layered 3D solids resolved into a polyhedral complex (Unit 26l, SD1-SD2; complex.hpp).
 //
 // The solids' coordinates on each axis (and the patch boxes') make a grid. Each cell goes to the topmost solid covering
-// its centre: the solids are painted top first, each row's unpainted cells found by a skip list, so every cell is
+// its centre: the solids are painted top first (`fill` ones after, bottom first: Unit 26m MT4), each row's unpainted cells found by a skip list, so every cell is
 // painted once. Cells of one region merge into blocks (runs along x, then y, then z), and each block is a volume. On
 // each grid plane the faces of the blocks on its two sides are overlaid: every overlay cell knows the block below and
 // above it (and, on the domain's boundary, its patch), and cells alike merge into rectangular facets. Each facet's
@@ -31,6 +31,20 @@ namespace {
 
 std::unexpected<base::Error> invalid(std::string message, std::optional<std::size_t> index = std::nullopt) {
     return std::unexpected(base::Error{base::ErrorCode::invalid_input, std::move(message), base::ErrorContext{.index = index, .value = std::nullopt}});
+}
+
+// The order a cell asks the solids in, the first holding it taking it (Unit 26m MT4): the replacing solids top
+// first, then the filling ones bottom first. With no `fill` solid, top first as before.
+std::vector<std::size_t> paint_order(const LayeredGeometry3D& g) {
+    std::vector<std::size_t> order;
+    order.reserve(g.solids.size());
+    for (std::size_t s = g.solids.size(); s-- > 0;) {
+        if (!g.solids[s].fill) order.push_back(s);
+    }
+    for (std::size_t s = 0; s < g.solids.size(); ++s) {
+        if (g.solids[s].fill) order.push_back(s);
+    }
+    return order;
 }
 
 using Idx = std::array<int, 3>;
@@ -200,7 +214,7 @@ std::expected<PolyhedralGeometry, base::Error> slanted_partition(const LayeredGe
     detail::ArrangementLabels how;
     how.pins = pins;
     how.label = [&](const std::vector<std::size_t>& hold, const Point& at) -> std::int32_t {
-        std::vector<int> top(ns, -1);
+        std::vector<int> top(ns, -1), first_fill(ns, -1);  // the top replacing solid, the bottom filling one (MT4)
         std::array<int, 2> cap{-1, -1};
         for (const std::size_t i : hold) {
             const Entry& e = entries[i];
@@ -208,13 +222,17 @@ std::expected<PolyhedralGeometry, base::Error> slanted_partition(const LayeredGe
                 if (cap[static_cast<std::size_t>(e.end)] < 0 || e.patch < cap[static_cast<std::size_t>(e.end)]) cap[static_cast<std::size_t>(e.end)] = e.patch;
                 continue;
             }
+            const bool fill = g.solids[static_cast<std::size_t>(e.solid)].fill;
             for (std::size_t k = 0; k < ns; ++k) {
-                if (e.slabs[k] != 0 && e.solid > top[k]) top[k] = e.solid;
+                if (e.slabs[k] == 0) continue;
+                if (!fill && e.solid > top[k]) top[k] = e.solid;
+                if (fill && (first_fill[k] < 0 || e.solid < first_fill[k])) first_fill[k] = e.solid;
             }
         }
         std::vector<std::int32_t> sig(ns + 2);
         for (std::size_t k = 0; k < ns; ++k) {
-            const std::int32_t r = top[k] >= 0 ? g.solids[static_cast<std::size_t>(top[k])].region : g.background;
+            const int s = top[k] >= 0 ? top[k] : first_fill[k];
+            const std::int32_t r = s >= 0 ? g.solids[static_cast<std::size_t>(s)].region : g.background;
             if (r < 0) {
                 if (!uncovered) uncovered = std::pair{at, k};
                 return -1;
@@ -432,11 +450,13 @@ std::expected<PolyhedralGeometry, base::Error> layered_partition3d(const Layered
     std::vector<std::vector<Run>> rows(static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz));
     const auto row_of = [&](int j, int k) -> std::vector<Run>& { return rows[static_cast<std::size_t>(k) * static_cast<std::size_t>(ny) + static_cast<std::size_t>(j)]; };
     std::vector<Span> spans, open, next;
+    const std::vector<std::size_t> order = paint_order(g);
     for (int k = 0; k < nz; ++k) {
         for (int j = 0; j < ny; ++j) {
             std::vector<Run>& row = row_of(j, k);
             open = {{0, nx}};  // the parts not yet painted
-            for (std::size_t s = g.solids.size(); s-- > 0 && !open.empty();) {
+            for (std::size_t n = 0; n < order.size() && !open.empty(); ++n) {
+                const std::size_t s = order[n];
                 spans.clear();
                 cover(s, j, k, spans);
                 for (const Span& c : spans) {

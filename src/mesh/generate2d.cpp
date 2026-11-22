@@ -1444,7 +1444,13 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
         return r.has_value();
     };
     for (const std::size_t i : hilbert_order(gen.nodes)) {
-        const int v = tri.insert(gen.nodes[i]);
+        const int at = tri.locate(gen.nodes[i], tri.last_triangle());
+        for (const int w : tri.triangle(at).v) {  // two placed nodes at one point: refused (insert's precondition)
+            if (tri.point(w)[0] == gen.nodes[i][0] && tri.point(w)[1] == gen.nodes[i][1]) {
+                return std::unexpected(base::Error{ErrorCode::degenerate_mesh, "two generated nodes coincide at " + where(gen.nodes[i]), std::nullopt});
+            }
+        }
+        const int v = tri.insert(gen.nodes[i], tri.cavity(gen.nodes[i], at));
         if (static_cast<std::size_t>(v) >= signed_vertex.size()) signed_vertex.resize(static_cast<std::size_t>(v) + 1, 0);
         signed_vertex[static_cast<std::size_t>(v)] = gen.signed_node[i];
         if (!record(v, gen.kind[i], gen.nodes[i], gen.hint[i])) {
@@ -1533,6 +1539,15 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
         return false;
     };
 
+    // A point that is already a vertex of the triangle it lies in (insert's precondition forbids it): a segment or a
+    // triangle too small to split in floating point, e.g. two copies of one layout vertex an ulp apart. Refused, not
+    // inserted (Unit 26m MC13: such a pair set once ended in the triangulation's contract).
+    const auto coincides = [&](const Point& p, int t) {
+        for (const int v : tri.triangle(t).v) {
+            if (tri.point(v)[0] == p[0] && tri.point(v)[1] == p[1]) return true;
+        }
+        return false;
+    };
     const auto split = [&](std::size_t k) -> std::optional<base::Error> {
         Segment sg = segments[k];
         const Point& pa = tri.point(sg.a);
@@ -1552,6 +1567,10 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
         if (node_cap()) return base::Error{ErrorCode::resource_exhausted, "max_nodes reached", std::nullopt};
         const std::size_t before = tri.triangle_slots();
         const int start = tri.locate(m, tri.last_triangle());
+        if (coincides(m, start)) {
+            return base::Error{ErrorCode::degenerate_mesh, "a boundary segment too short to split (its ends within rounding) at " + where(m),
+                               std::nullopt};
+        }
         const auto cav = tri.cavity(m, start);
         const int v = tri.insert(m, cav);
         if (!record(v, NodeKind::boundary, m, sg.region)) {
@@ -1636,6 +1655,10 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
             continue;
         }
         const int start = tri.locate(cc, t);
+        if (coincides(cc, start)) {
+            return std::unexpected(base::Error{ErrorCode::degenerate_mesh,
+                                               "a triangle too small to refine (its circumcentre on a vertex) at " + where(cc), std::nullopt});
+        }
         const auto cav = tri.cavity(cc, start);
         // Ruppert: a candidate that encroaches boundary segments is not inserted; those segments
         // are split instead (whether or not an existing vertex encroaches them), and the triangle

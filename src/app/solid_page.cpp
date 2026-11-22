@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <format>
+#include <numbers>
 #include <sstream>
 
 #include "NiTCAD/app/deck_vocabulary.hpp"
@@ -23,8 +24,7 @@ using namespace solid;
 
 constexpr const wchar_t* canvas_class = L"NiTCADSolidCanvas";
 constexpr const wchar_t* panel_class = L"NiTCADSolidPanel";
-constexpr int id_strip = 1, id_canvas = 2, id_tool_first = 10, id_fit = 20, id_mesh = 21;
-constexpr std::array<const wchar_t*, 6> tool_texts{L"Select (V)", L"Box (B)", L"Prism (P)", L"Contact (C)", L"Pan (H)", L"Measure (M)"};
+constexpr int id_strip = 1, id_canvas = 2, id_bar = 100;
 constexpr std::array<const char*, 3> plane_names{"YZ (normal x)", "ZX (normal y)", "XY (normal z)"};
 
 HWND make(const wchar_t* cls, const wchar_t* text, DWORD style, HWND parent, int id, DWORD ex = 0) {
@@ -94,15 +94,10 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
                              reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_strip)), GetModuleHandleW(nullptr), nullptr);
     SetWindowLongPtrW(strip_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     SetWindowLongPtrW(strip_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(panel_proc));
-    for (std::size_t k = 0; k < tool_texts.size(); ++k) {
-        tool_buttons_.push_back(make(L"BUTTON", tool_texts[k], WS_TABSTOP | BS_AUTORADIOBUTTON | BS_PUSHLIKE | (k == 0 ? WS_GROUP : 0), strip_,
-                                     id_tool_first + static_cast<int>(k)));
-    }
-    tool_buttons_.push_back(make(L"BUTTON", L"Fit (F)", WS_TABSTOP | WS_GROUP | BS_PUSHBUTTON, strip_, id_fit));
-    mesh_button_ = make(L"BUTTON", L"Mesh", WS_TABSTOP | BS_AUTOCHECKBOX | BS_PUSHLIKE, strip_, id_mesh);
-    tool_buttons_.push_back(mesh_button_);
-    canvas_ = CreateWindowExW(0, canvas_class, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, panel_,
+    canvas_ = CreateWindowExW(0, canvas_class, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, 0, 0, 10, 10, panel_,
                               reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_canvas)), GetModuleHandleW(nullptr), this);
+    bar_ = std::make_unique<ModellerBar>(strip_, panel_, id_bar, true, panel_proc, this);
+    start_camera_ = v_.camera;
 
     inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL, 0, 0, 10, 10, parent,
                                  reinterpret_cast<HMENU>(static_cast<INT_PTR>(inspector_id - 1)), GetModuleHandleW(nullptr), nullptr);
@@ -149,6 +144,11 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
     add(c_cut, L"EDIT", L"", edit, WS_EX_CLIENTEDGE);
     add(c_translucent, L"BUTTON", L"Translucent (T)", WS_TABSTOP | BS_AUTOCHECKBOX);
     add(c_convert, L"BUTTON", L"Convert to layered generate3d", WS_TABSTOP | BS_PUSHBUTTON);
+    add(c_overlap, L"BUTTON", L"Fills only empty space (overlap = fill)", WS_TABSTOP | BS_AUTOCHECKBOX);
+    add(c_resolution, L"BUTTON", L"Use the largest interface_resolution", WS_TABSTOP | BS_PUSHBUTTON);  // MT12
+    add(c_params_label, L"STATIC", L"Parameters (name = value; $name in solids)", SS_LEFT);  // MT8
+    add(c_params, L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, WS_EX_CLIENTEDGE);
+    add(c_params_apply, L"BUTTON", L"Apply parameters", WS_TABSTOP | BS_PUSHBUTTON);
     for (const int c : {c_material, c_draw}) {
         for (const std::string& mat : choices_of("region", "material")) SendMessageW(control(c), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(win32::widen(mat).c_str()));
     }
@@ -178,7 +178,7 @@ HWND SolidPage::control(int c) const { return c >= 0 && c < c_count ? controls_[
 void SolidPage::set_dpi(int dpi, HFONT font, HFONT bold) {
     dpi_ = dpi;
     v_.dpi = dpi;
-    for (HWND h : tool_buttons_) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    bar_->set_font(font, dpi);
     for (HWND h : controls_) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     SendMessageW(control(c_heading), WM_SETFONT, reinterpret_cast<WPARAM>(bold), TRUE);
     layout();
@@ -190,13 +190,11 @@ void SolidPage::layout() {
     GetClientRect(panel_, &r);
     const int pad = MulDiv(4, dpi_, 96), bh = MulDiv(24, dpi_, 96);
     MoveWindow(strip_, 0, 0, r.right, bh + 2 * pad, TRUE);
-    int x = pad;
-    for (std::size_t k = 0; k < tool_buttons_.size(); ++k) {
-        const int w = MulDiv(k < tool_texts.size() ? 92 : 64, dpi_, 96);
-        MoveWindow(tool_buttons_[k], x, pad, w, bh, TRUE);
-        x += w + (k + 1 == tool_texts.size() ? 3 * pad : pad / 2);
-    }
-    MoveWindow(canvas_, 0, bh + 2 * pad, r.right, std::max<int>(1, r.bottom - bh - 2 * pad), TRUE);
+    bar_->layout_strip(r.right, pad, bh);
+    canvas_top_ = bh + 2 * pad;
+    MoveWindow(canvas_, 0, canvas_top_, r.right, std::max<int>(1, r.bottom - canvas_top_), TRUE);
+    bar_->raise();
+    place_bar();
     invalidate();
 }
 
@@ -227,6 +225,7 @@ void SolidPage::layout_inspector() {
         MoveWindow(control(c_lower), pad + w / 2 + 2, y, w - w / 2 - 2, row - 4, TRUE);
         y += row;
     }
+    line(c_overlap);
     for (int k = 0; k < 6; ++k) pair(c_x0_label + 2 * k, c_x0 + 2 * k);
     pair(c_axis_label, c_axis, MulDiv(80, dpi_, 96));
     pair(c_from_label, c_from);
@@ -236,6 +235,10 @@ void SolidPage::layout_inspector() {
     line(c_apply);
     pair(c_kind_label, c_kind, MulDiv(160, dpi_, 96));
     line(c_convert);
+    line(c_resolution);
+    line(c_params_label);
+    line(c_params, MulDiv(80, dpi_, 96));
+    line(c_params_apply);
     y += pad;
     pair(c_draw_label, c_draw, MulDiv(200, dpi_, 96));
     pair(c_plane_label, c_plane, MulDiv(90, dpi_, 96));
@@ -257,6 +260,7 @@ void SolidPage::reload(bool fit_view) {
     if (text != text_seen_) history_.clear();  // edited elsewhere (or a new deck): the page's undo starts again
     const bool first = text_seen_.empty();
     text_seen_ = text;
+    read_mesh_keys();
     auto m = read_model(text);
     if (!m) {
         m_ = {};
@@ -288,6 +292,7 @@ void SolidPage::prune_selection() {
 void SolidPage::apply_text(const std::string& text) {
     host_.solid_edited(text);
     text_seen_ = text;
+    read_mesh_keys();
     if (auto m = read_model(text)) {
         m_ = std::move(*m);
         message_ = m_.mesh == MeshKind::unsupported ? m_.why : std::string();
@@ -298,8 +303,43 @@ void SolidPage::apply_text(const std::string& text) {
     invalidate();
 }
 
+std::string SolidPage::parameters_text() const {
+    std::string out;
+    for (const solid::Param& p : m_.parameters) out += (out.empty() ? "" : "\r\n") + p.name + " = " + p.expr;
+    return out;
+}
+
+bool SolidPage::apply_parameters(const std::string& lines) {
+    if (!m_.editable()) return false;
+    Model next = m_;
+    std::istringstream in(lines);
+    for (std::string line; std::getline(in, line);) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto eq = line.find('=');
+        const auto trim = [](std::string s) {
+            const auto a = s.find_first_not_of(" \t"), b = s.find_last_not_of(" \t");
+            return a == std::string::npos ? std::string{} : s.substr(a, b - a + 1);
+        };
+        if (trim(line).empty()) continue;
+        if (eq == std::string::npos) {
+            host_.solid_status("Parameters: '" + line + "' is not name = value");
+            return false;
+        }
+        const std::string name = trim(line.substr(0, eq)), expr = trim(line.substr(eq + 1));
+        const auto it = std::ranges::find(next.parameters, name, &solid::Param::name);
+        if (it != next.parameters.end() && it->expr == expr) continue;
+        if (const auto r = solid::set_parameter(next, name, expr); !r) {
+            host_.solid_status("Parameters: " + r.error());
+            return false;
+        }
+    }
+    return commit_model(std::move(next));
+}
+
 bool SolidPage::commit_model(Model next) {
     const std::string text = host_.solid_deck();
+    // MT8: a coordinate the edit moved that a parameter ties edits the parameter (every tied face following).
+    if (const auto was = read_model(text); was && was->parameters == next.parameters) tie_edits(*was, next);
     auto out = write_model(text, next);
     if (!out) {
         host_.solid_status(out.error());
@@ -427,25 +467,653 @@ void SolidPage::set_section(Section s) {
 void SolidPage::set_tool(Tool t) {
     cancel();
     tool_ = t;
+    mode_ = modeller::Mode::none;
     update_tool_buttons();
     invalidate();
 }
 
 void SolidPage::update_tool_buttons() {
-    for (std::size_t k = 0; k < tool_texts.size(); ++k) {
-        SendMessageW(tool_buttons_[k], BM_SETCHECK, static_cast<int>(k) == static_cast<int>(tool_) ? BST_CHECKED : BST_UNCHECKED, 0);
+    // A tool armed by its key opens a group that holds it (Pan and Measure are in none: the group stays).
+    const auto in = [&](modeller::Group g) {
+        return std::ranges::any_of(modeller::tools_for(g, true), [&](const modeller::ToolEntry& e) {
+            return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_);
+        });
+    };
+    if (!in(bar_->group())) {
+        for (int g = 0; g < modeller::group_count; ++g) {
+            if (in(static_cast<modeller::Group>(g))) {
+                bar_->set_group(static_cast<modeller::Group>(g));
+                break;
+            }
+        }
+    }
+    bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
+    bar_->set_measure(tool_ == Tool::measure);
+}
+
+// --- Unit 26m slice 0: the camera lock, the floating bar, the deck line and the chip (MT1-MT3) ---------------------
+
+void SolidPage::set_camera_fixed(bool fixed) {
+    camera_fixed_ = fixed;
+    bar_->set_camera_fixed(fixed);
+    if (fixed && (drag_ == Drag::orbit || drag_ == Drag::pan)) cancel();
+}
+
+void SolidPage::reset_view() {
+    v_.camera = start_camera_;
+    invalidate();
+}
+
+void SolidPage::set_group(modeller::Group g) {
+    bar_->set_group(g);
+    if (mode_ != modeller::Mode::none && modeller::group_of(mode_) != g) mode_ = modeller::Mode::none;
+    const auto list = modeller::tools_for(g, true);
+    const bool has = std::ranges::any_of(list, [&](const modeller::ToolEntry& e) { return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_); });
+    if (!has && !list.empty() && list.front().action == modeller::Action::tool) {
+        set_tool(static_cast<Tool>(list.front().tool));
+    } else {
+        bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
+    }
+    place_bar();
+}
+
+
+// --- Unit 26m slice 1: the overlap rule and the Transform modes (MT4, MT5) -----------------------------------------
+
+void SolidPage::set_mode(modeller::Mode m) {
+    if (tool_ != Tool::select) set_tool(Tool::select);
+    cancel();
+    mode_ = m;
+    array_count_ = 3;
+    if (m != modeller::Mode::none && bar_->group() != modeller::group_of(m)) bar_->set_group(modeller::group_of(m));
+    bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
+    place_bar();
+    invalidate();
+}
+
+bool SolidPage::toggle_overlap() {
+    std::vector<int> regions;
+    for (const SolidRef s : sel_.solids) {
+        if (s.solid >= 0 && std::ranges::find(regions, s.region) == regions.end()) regions.push_back(s.region);
+    }
+    if (regions.empty()) {
+        host_.solid_status("Pick a solid: its region then fills only empty space, or replaces again.");
+        return false;
+    }
+    Model next = m_;
+    // One rule for them all: fill unless every one fills already.
+    const bool fill = !std::ranges::all_of(regions, [&](int r) { return m_.regions[static_cast<std::size_t>(r)].fill; });
+    bool any = false;
+    for (const int r : regions) any = set_overlap(next, r, fill) || any;
+    if (!any || !commit_model(std::move(next))) return false;
+    update_inspector();
+    return true;
+}
+
+int SolidPage::view_axis() const {
+    // The axis whose unit step moves least on the screen runs most nearly along the view.
+    const Box3 b = m_.domain;
+    const V3 c{0.5 * (um_of(b.lo)[0] + um_of(b.hi)[0]), 0.5 * (um_of(b.lo)[1] + um_of(b.hi)[1]), 0.5 * (um_of(b.lo)[2] + um_of(b.hi)[2])};
+    const auto p0 = screen_of_um(c);
+    int best = 2;
+    double shortest = std::numeric_limits<double>::infinity();
+    for (int a = 0; a < 3; ++a) {
+        V3 q = c;
+        q[static_cast<std::size_t>(a)] += 1.0;
+        const auto p1 = screen_of_um(q);
+        const double d = std::hypot(p1[0] - p0[0], p1[1] - p0[1]);
+        if (d < shortest) {
+            shortest = d;
+            best = a;
+        }
+    }
+    return best;
+}
+
+bool SolidPage::transform_click(const Pick& p, bool shift, bool ctrl) {
+    const bool on_solid = (p.kind == PickKind::face || (p.kind == PickKind::handle && p.handle == HandleKind::face)) && p.solid.solid >= 0;
+    const Solid* target = on_solid ? solid_at(m_, p.solid) : nullptr;
+    // The plane of the face clicked: its axis, its coordinate and whether it is the solid's far side on that axis.
+    int axis = -1;
+    Coord at = 0;
+    bool far_side = false;
+    if (target) {
+        axis = face_axis(*target, p.index);
+        if (axis >= 0) {
+            at = quanta_of(p.at)[axis];
+            const Box3 b = target->bounds();
+            far_side = 2 * at >= b.lo[axis] + b.hi[axis];
+        }
+    } else if (p.domain_face >= 0) {
+        axis = p.domain_face / 2;
+        far_side = p.domain_face % 2 == 1;
+        at = far_side ? m_.domain.hi[axis] : m_.domain.lo[axis];
+    }
+    Model next = m_;
+    bool ok = false;
+    if (mode_ == modeller::Mode::mirror) {
+        if (!target) {
+            host_.solid_status("Mirror: click a face of a solid.");
+            return false;
+        }
+        if (shift) {
+            ok = rotate_solid(next, p.solid, view_axis());
+        } else if (axis < 0) {
+            host_.solid_status("Mirror: a slanted face has no plane on the lattice; click another face.");
+            return false;
+        } else {
+            const Box3 b = target->bounds();
+            ok = mirror_solid_at(next, p.solid, axis, ctrl ? 2 * at : b.lo[axis] + b.hi[axis]);
+        }
+        if (!ok) {
+            host_.solid_status("That mirror leaves the solid invalid.");
+            return false;
+        }
+        sel_ = {{p.solid}, -1};
+        const bool done = commit_model(std::move(next));  // false too when nothing changes (a box about its centre)
+        update_inspector();
+        return done;
+    }
+    // Align: the picked solids other than the one clicked.
+    if (axis < 0) {
+        host_.solid_status("Align: click a face (of a solid or the domain) whose plane the others' faces go to.");
+        return false;
+    }
+    std::vector<SolidRef> others;
+    for (const SolidRef s : sel_.solids) {
+        if (s.solid >= 0 && !(on_solid && s == p.solid)) others.push_back(s);
+    }
+    if (others.empty()) {
+        host_.solid_status("Align: pick the solids to move first (Shift+click), then click the face to align them to.");
+        return false;
+    }
+    ok = align_solids(next, others, 2 * axis + (far_side ? 1 : 0), at);
+    if (ok && commit_model(std::move(next))) {
+        update_inspector();
+        return true;
+    }
+    host_.solid_status("Align: nothing moves (the faces are there already), or a solid would leave the limits.");
+    return false;
+}
+// --- Unit 26m slice 2: the Faces and Edges modes, Cylinder, meshable by construction (MT6, MT7, MT12) --------------
+
+void SolidPage::begin_drag(Drag d) {
+    drag_ = d;
+    button_ = true;
+    m_start_ = m_;
+    SetCapture(canvas_);
+}
+
+void SolidPage::read_mesh_keys() {
+    const auto s = mesh_length(text_seen_, "interface_resolution");
+    res_q_ = s ? static_cast<Coord>(std::llround(*s * static_cast<double>(per_um) * 1e4)) : 0;
+    max_size_ = mesh_length(text_seen_, "max_size").value_or(0.0);
+    profiles_ = solid::profiles(text_seen_);  // slice 4: drawn each frame, read once per deck
+    size_boxes_ = solid::size_boxes(text_seen_);
+}
+
+Coord SolidPage::gap_up(Coord v) const {
+    const Coord g = 4 * res_q_;
+    return v != 0 && std::abs(v) < g ? (v < 0 ? -g : g) : v;
+}
+
+std::expected<double, std::string> SolidPage::automatic_resolution() const {
+    if (!m_.editable()) return std::unexpected(std::string("the deck is not a layered 3D one"));
+    if (!(max_size_ > 0.0)) return std::unexpected(std::string("the deck has no max_size"));
+    return solid::automatic_resolution(m_, max_size_);
+}
+
+bool SolidPage::use_automatic_resolution() {
+    const auto s = automatic_resolution();
+    if (!s) {
+        host_.solid_status("No interface_resolution passes the rules: " + s.error());
+        return false;
+    }
+    if (std::isinf(*s)) {
+        host_.solid_status("The layout has no interfaces: any interface_resolution goes.");
+        return false;
+    }
+    const Coord q = static_cast<Coord>(std::floor(*s * static_cast<double>(per_um) * 1e4));
+    if (q <= 0) return false;
+    const std::string text = host_.solid_deck();
+    const auto out = set_mesh_length(text, "interface_resolution", q);
+    const auto e = extent(m_);
+    const std::string about = e ? std::format("; about {:.0f} nodes (MT12 estimate)", node_estimate(*e, max_size_, static_cast<double>(q) * 1e-8)) : std::string();
+    host_.solid_status("interface_resolution = " + geo::format_length(q) + ", the largest the layout's rules allow" + about);
+    if (!out || *out == text) return false;
+    history_.record(text);
+    apply_text(*out);
+    update_inspector();
+    return true;
+}
+
+// The edge cut of size r on the model the drag started from (unchanged when refused); chords_ the fillet's chords.
+Model SolidPage::cut_model(Coord r) {
+    Model next = m_start_;
+    chords_ = 0;
+    const Solid* s = solid_at(m_start_, ref_);
+    if (!s || r <= 0) return next;
+    const auto ec = edge_corner(*s, edge_);
+    if (!ec) return next;
+    if (mode_ == modeller::Mode::chamfer) {
+        chamfer_edge(next, ref_, edge_, r);
+        return next;
+    }
+    // MQ4, MT12 (2): ⌈θ / 15°⌉ chords, fewer while one is under the generator's 6 s.
+    const double turn = geo::corner_turn(ec->prism.polygon, ec->corner);
+    chords_ = geo::arc_segments(turn, static_cast<double>(r), 6.0 * static_cast<double>(res_q_));
+    if (chords_ > 0) fillet_edge(next, ref_, edge_, r, chords_);
+    return next;
+}
+
+bool SolidPage::tool_press(const Pick& p, double x, double y) {
+    using modeller::Mode;
+    if (mode_ == Mode::none || modeller::group_of(mode_) == modeller::Group::transform) return false;
+    if (const auto g = modeller::group_of(mode_); g == modeller::Group::doping || g == modeller::Group::mesh) return doping_press(p, x, y);
+    const bool on_face = (p.kind == PickKind::face || (p.kind == PickKind::handle && p.handle == HandleKind::face)) && p.solid.solid >= 0;
+    if (mode_ == Mode::inset || mode_ == Mode::extrude) {
+        if (!on_face) return false;
+        const Solid* s = solid_at(m_, p.solid);
+        const auto n = s ? face_normal(*s, p.index) : std::nullopt;
+        if (!n) {
+            host_.solid_status("A slanted face takes no inset or extrusion; press another face.");
+            return true;
+        }
+        ref_ = p.solid;
+        index_ = p.index;
+        normal_ = *n;
+        origin_ = p.at;  // a face's hit point, or a handle's own place on the face (pick sets it)
+        sel_ = {{p.solid}, -1};
+        update_inspector();
+        if (mode_ == Mode::extrude) {
+            start_s_ = along_axis(m_, v_, x, y, origin_, n->axis);
+            begin_drag(Drag::extrude);
+        } else {
+            const auto q = on_plane(m_, v_, x, y, n->axis, origin_[static_cast<std::size_t>(n->axis)]);
+            if (!q) return true;
+            start_p_ = *q;
+            margin_ = 0;
+            begin_drag(Drag::inset);
+        }
+        return true;
+    }
+    // The Edges modes: an edge along a solid's axis (Round vertex: a prism's vertex handle); a press on a solid picks it,
+    // so its edges can be picked, and moves nothing.
+    const bool on_edge = p.kind == PickKind::edge && p.solid.solid >= 0 && mode_ != Mode::round;
+    const bool on_vertex = p.kind == PickKind::handle && p.handle == HandleKind::vertex && mode_ == Mode::round;
+    if (!on_edge && !on_vertex) {
+        if (p.kind == PickKind::face && p.solid.solid >= 0) {
+            sel_ = {{p.solid}, -1};
+            update_inspector();
+            invalidate();
+            host_.solid_status(mode_ == Mode::round ? "Now drag in from one of its vertex handles." : "Now drag in from one of its edges along its axis.");
+            return true;
+        }
+        return false;
+    }
+    const Solid* s = solid_at(m_, p.solid);
+    if (!s) return true;
+    edge_ = on_vertex ? 3 * p.index + 2 : p.index;
+    const auto ec = edge_corner(*s, edge_);
+    if (!ec) {
+        host_.solid_status("That edge is a cap's: chamfers, fillets and tapers take edges along a solid's axis.");
+        return true;
+    }
+    ref_ = p.solid;
+    axis_ = ec->prism.axis;
+    origin_ = um_of(from_uv(axis_, ec->prism.polygon[static_cast<std::size_t>(ec->corner)], quanta_of(p.at)[axis_]));
+    const auto q = on_plane(m_, v_, x, y, axis_, origin_[static_cast<std::size_t>(axis_)]);
+    if (!q) return true;
+    start_p_ = *q;
+    chords_ = 0;
+    begin_drag(mode_ == Mode::taper ? Drag::taper : Drag::cut);
+    return true;
+}
+
+void SolidPage::finish_inset() {
+    Model done = m_;
+    const bool changed = !(done == m_start_);
+    m_ = m_start_;
+    drag_ = Drag::none;
+    button_ = false;
+    end_drag_ui();
+    if (GetCapture() == canvas_) ReleaseCapture();
+    if (changed) commit_model(std::move(done));
+    else host_.solid_status("The inset is not taken (it needs a depth, and a margin that leaves it a size).");
+    update_inspector();
+    invalidate();
+}
+
+std::optional<modeller::Box> SolidPage::selection_bounds() const {
+    std::vector<Box3> boxes;
+    for (const SolidRef s : sel_.solids) {
+        if (const Solid* sol = solid_at(m_, s)) boxes.push_back(sol->bounds());
+        else if (s.region >= 0) boxes.push_back(m_.domain);  // a region's background
+    }
+    if (sel_.contact >= 0 && sel_.contact < static_cast<int>(m_.contacts.size())) boxes.push_back(m_.contacts[static_cast<std::size_t>(sel_.contact)].box);
+    if (boxes.empty()) return std::nullopt;
+    modeller::Box out{1e300, 1e300, -1e300, -1e300};
+    for (const Box3& b : boxes) {
+        for (int k = 0; k < 8; ++k) {
+            const P3 c{k & 1 ? b.hi.x : b.lo.x, k & 2 ? b.hi.y : b.lo.y, k & 4 ? b.hi.z : b.lo.z};
+            const auto p = screen_of(c);
+            out.left = std::min(out.left, p[0]);
+            out.right = std::max(out.right, p[0]);
+            out.top = std::min(out.top, p[1]);
+            out.bottom = std::max(out.bottom, p[1]);
+        }
+    }
+    return out;
+}
+
+void SolidPage::place_bar() {
+    RECT c{};
+    GetClientRect(canvas_, &c);
+    const double top = canvas_top_;
+    const modeller::Box viewport{0.0, top, static_cast<double>(c.right), top + c.bottom};
+    std::optional<modeller::Box> s = selection_bounds();
+    if (s) *s = {s->left, s->top + top, s->right, s->bottom + top};
+    bar_->place(viewport, s);
+}
+
+modeller::Placement SolidPage::bar_placement() const {
+    modeller::Placement p = bar_->placement();
+    p.bar.top -= canvas_top_;
+    p.bar.bottom -= canvas_top_;
+    return p;
+}
+
+// The model the drag would write now (the in-progress model, or it with the solid or contact being drawn).
+std::optional<Model> SolidPage::pending() const {
+    switch (drag_) {
+    case Drag::move:
+    case Drag::array:
+    case Drag::axis:
+    case Drag::plane:
+    case Drag::face:
+    case Drag::cut:
+    case Drag::taper:
+    case Drag::extrude:
+    case Drag::inset:
+    case Drag::inset_depth:
+    case Drag::vertex:
+    case Drag::contact_move: return m_;
+    case Drag::radius: {
+        if (preview_.solids.empty()) return std::nullopt;
+        Model next = m_;
+        const Solid& s = preview_.solids.front();
+        if (add_prism(next, s.axis, s.from, s.to, s.polygon, material_) < 0) return std::nullopt;
+        return next;
+    }
+    case Drag::base: {
+        // As released now: the height one grid step (on_up).
+        Model next = m_;
+        Box3 b = normalized(a_, b_);
+        b.hi[v_.plane.normal] = b.lo[v_.plane.normal] + grid();
+        if (add_box(next, b, material_) < 0) return std::nullopt;
+        return next;
+    }
+    case Drag::height: {
+        if (preview_.solids.empty()) return std::nullopt;
+        Model next = m_;
+        const Solid& s = preview_.solids.front();
+        const int r = s.kind == SolidKind::box ? add_box(next, s.box, material_) : add_prism(next, s.axis, s.from, s.to, s.polygon, material_);
+        if (r < 0) return std::nullopt;
+        return next;
+    }
+    case Drag::contact: {
+        Model next = m_;
+        if (add_contact(next, fresh_contact(m_), "ohmic", normalized(a_, b_)) < 0) return std::nullopt;
+        return next;
+    }
+    default: return std::nullopt;
+    }
+}
+
+std::string SolidPage::chip_value() const {
+    using modeller::chip_length;
+    const char* names[] = {"x", "y", "z"};
+    const auto offset = [&](P3 d) {
+        std::string out;
+        for (int a = 0; a < 3; ++a) {
+            if (d[a] == 0) continue;
+            if (!out.empty()) out += ", ";
+            out += std::format("\xCE\x94{} {}", names[a], chip_length(d[a]));
+        }
+        return out.empty() ? std::string("\xCE\x94 0 \xC2\xB5m") : out;
+    };
+    std::string v;
+    switch (drag_) {
+    case Drag::axis:
+    case Drag::move:
+    case Drag::plane:
+    case Drag::vertex:
+    case Drag::contact_move: v = offset(drag_d_); break;
+    case Drag::face:
+        v = "push " + chip_length(drag_s_);
+        if (naming_ >= 0) v += ", named $" + naming_name_ + (naming_ == 0 ? " (new; N: next)" : " (N: next)");
+        break;
+    case Drag::array: v = offset(drag_d_) + std::format(" × {} (wheel)", array_count_); break;
+    case Drag::base:
+    case Drag::contact: {
+        const Box3 b = normalized(a_, b_);
+        std::string out;
+        for (int a = 0; a < 3; ++a) {
+            if (b.hi[a] == b.lo[a]) continue;
+            if (!out.empty()) out += " \xC3\x97 ";
+            out += chip_length(b.hi[a] - b.lo[a]);
+        }
+        v = out.empty() ? "0 \xC2\xB5m" : out;
+        break;
+    }
+    case Drag::height: v = "height " + chip_length(height_); break;
+    case Drag::cut:
+        v = (mode_ == modeller::Mode::chamfer ? "cut " : "radius ") + chip_length(drag_s_);
+        if (mode_ != modeller::Mode::chamfer) v += chords_ > 0 ? std::format(", {} chords", chords_) : std::string(", chords under 6 s");
+        break;
+    case Drag::taper: {
+        v = offset(drag_d_);
+        if (const Solid* s = solid_at(m_start_, ref_)) {
+            if (const auto ec = edge_corner(*s, edge_)) {
+                // The wall leaning: the neighbour edge across the move, its length against the offset.
+                const auto& w = ec->prism.polygon;
+                const std::size_t n = w.size(), k = static_cast<std::size_t>(ec->corner);
+                const Pt d = uv_of(axis_, drag_d_);
+                for (const std::size_t j : {(k + n - 1) % n, (k + 1) % n}) {
+                    const double ex = static_cast<double>(w[j].x - w[k].x), ey = static_cast<double>(w[j].y - w[k].y);
+                    if (ex * static_cast<double>(d.x) + ey * static_cast<double>(d.y) == 0.0 && (d.x != 0 || d.y != 0)) {
+                        v += std::format(", wall {:.1f}°", std::atan2(std::hypot(static_cast<double>(d.x), static_cast<double>(d.y)), std::hypot(ex, ey)) * 180.0 / std::numbers::pi);
+                        break;
+                    }
+                }
+            }
+        }
+        break;
+    }
+    case Drag::extrude: v = "depth " + chip_length(drag_s_); break;
+    case Drag::implant:
+    case Drag::junction:
+        v = (drag_ == Drag::implant ? "peak depth " : "junction depth ") + chip_length(drag_s_) +
+            std::format(", {} {:.0e} (D, wheel)", donor_ ? "donor" : "acceptor", level_);
+        break;
+    case Drag::max_size: {
+        const auto e = extent(m_);
+        v = "max_size " + chip_length(drag_s_) +
+            (e && res_q_ > 0 ? std::format(", about {:.0f} nodes", node_estimate(*e, static_cast<double>(drag_s_) * 1e-8, static_cast<double>(res_q_) * 1e-8)) : std::string());
+        break;
+    }
+    case Drag::implant_window: {
+        const Box3 b = normalized(a_, b_);
+        const int u = (normal_.axis + 1) % 3, w = (normal_.axis + 2) % 3;
+        v = "window " + chip_length(b.hi[u] - b.lo[u]) + " × " + chip_length(b.hi[w] - b.lo[w]) + " (a click: the whole face)";
+        break;
+    }
+    case Drag::implant_lateral: v = "lateral " + chip_length(lateral_) + ", peak depth " + chip_length(implant_depth_); break;
+    case Drag::level: v = std::format("{} {:.0e} (drag up or down; D)", donor_ ? "donor" : "acceptor", level_); break;
+    case Drag::refine: v = "size " + chip_length(refine_size_) + " (then the height, then the size)"; break;
+    case Drag::refine_height: v = "height " + chip_length(height_) + ", size " + chip_length(refine_size_) + " (wheel)"; break;
+    case Drag::refine_size: v = "size " + chip_length(refine_size_) + " (up or down, or wheel)"; break;
+    case Drag::inset: v = "margin " + chip_length(margin_); break;
+    case Drag::inset_depth: v = "margin " + chip_length(margin_) + ", depth " + chip_length(drag_s_); break;
+    case Drag::radius: v = "radius " + chip_length(radius_) + (preview_.solids.empty() ? std::string(", sides under 6 s") : std::format(", {} sides", preview_.solids.front().polygon.size())); break;
+    case Drag::measure: {
+        const double d = std::sqrt(std::pow(static_cast<double>(b_.x - a_.x), 2) + std::pow(static_cast<double>(b_.y - a_.y), 2) +
+                                   std::pow(static_cast<double>(b_.z - a_.z), 2)) / static_cast<double>(per_um);
+        v = std::format("{:.6g} \xC2\xB5m", d);
+        break;
+    }
+    default: return {};
+    }
+    if (!entry_.empty()) v += "   [" + entry_.text() + (entry_.value() ? "]" : "?]");
+    return v;
+}
+
+void SolidPage::after_drag_step(double x, double y) {
+    if (text_drag()) return;  // doping_step
+    if (auto next = pending()) {
+        // As commit_model writes it: a tied coordinate moved edits its parameter (MT8, MC4).
+        if (m_start_.parameters == next->parameters && !next->parameters.empty()) tie_edits(m_start_, *next);
+        auto out = write_model(text_seen_, *next);
+        live_line_ = out ? modeller::deck_line(text_seen_, *out) : out.error();
+        host_.solid_status(live_line_);
+    } else {
+        live_line_.clear();
+    }
+    const std::string v = chip_value();
+    const int off = MulDiv(16, dpi_, 96);
+    bar_->chip(static_cast<int>(x) + off, static_cast<int>(y) + canvas_top_ + off, v);
+}
+
+void SolidPage::end_drag_ui() {
+    entry_.clear();
+    typed_axis_ = -1;
+    live_line_.clear();
+    bar_->chip(0, 0, "");
+}
+
+bool SolidPage::on_char(wchar_t c) {
+    const bool scalar = drag_ == Drag::axis || drag_ == Drag::face || drag_ == Drag::height || drag_ == Drag::cut || drag_ == Drag::taper ||
+                        drag_ == Drag::extrude || drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius ||
+                        drag_ == Drag::implant || drag_ == Drag::junction || drag_ == Drag::max_size ||
+                        drag_ == Drag::implant_lateral || drag_ == Drag::refine_height || drag_ == Drag::refine_size;
+    const bool two = drag_ == Drag::move || drag_ == Drag::plane || drag_ == Drag::base || drag_ == Drag::array;
+    // Slice 4 (MT9): D swaps the doping tools' dopant, during a drag too.
+    if ((c == L'd' || c == L'D') && modeller::group_of(mode_) == modeller::Group::doping && mode_ != modeller::Mode::none) {
+        donor_ = !donor_;
+        host_.solid_status(std::format("{} {:.0e} cm^-3 (D: the dopant; the wheel: the level)", donor_ ? "donor" : "acceptor", level_));
+        if (drag_ != Drag::none) on_move(last_x_, last_y_, false, false);
+        return true;
+    }
+    if (!scalar && !two) return false;
+    // MT8: N names the dragged extent (a new parameter, then each existing length one in turn), while nothing is
+    // typed (once a number is, n is its unit's).
+    if (drag_ == Drag::face && entry_.empty() && (c == L'n' || c == L'N')) {
+        const Solid* s = solid_at(m_start_, ref_);
+        const bool along = s && (s->kind == SolidKind::box || index_ < 2);  // a box's face or a prism's cap
+        if (!along) return true;
+        std::vector<std::string> lengths;
+        for (const solid::Param& p : m_start_.parameters) {
+            if (p.length) lengths.push_back(p.name);
+        }
+        naming_ = naming_ + 1 > static_cast<int>(lengths.size()) ? 0 : naming_ + 1;
+        if (naming_ == 0) {
+            for (int k = 1;; ++k) {
+                naming_name_ = "L" + std::to_string(k);
+                if (std::ranges::find(m_start_.parameters, naming_name_, &solid::Param::name) == m_start_.parameters.end()) break;
+            }
+        } else {
+            naming_name_ = lengths[static_cast<std::size_t>(naming_ - 1)];
+        }
+        on_move(last_x_, last_y_, false, false);
+        return true;
+    }
+    if (c == L'\b') {
+        if (!entry_.backspace()) return true;
+    } else if (!entry_.type(c)) {
+        return false;
+    }
+    if (two && typed_axis_ < 0) {
+        // The axis of the larger offset so far (the first in-plane axis when none).
+        const P3 d = drag_ == Drag::base ? P3{b_.x - a_.x, b_.y - a_.y, b_.z - a_.z} : drag_d_;
+        const int skip = drag_ == Drag::base ? v_.plane.normal : axis_;
+        for (int a = 0; a < 3; ++a) {
+            if (a == skip) continue;
+            if (typed_axis_ < 0 || std::abs(d[a]) > std::abs(d[typed_axis_])) typed_axis_ = a;
+        }
+    }
+    on_move(last_x_, last_y_, false, false);
+    return true;
+}
+
+void SolidPage::finish_height() {
+    Model next = m_;
+    const int n = v_.plane.normal;
+    const Coord h = height_ != 0 ? height_ : grid();
+    const Coord lo = std::min(v_.plane.offset, v_.plane.offset + h), hi = std::max(v_.plane.offset, v_.plane.offset + h);
+    int r = -1;
+    if (polygon_.empty()) {
+        Box3 b = normalized(a_, b_);
+        b.lo[n] = lo;
+        b.hi[n] = hi;
+        r = add_box(next, b, material_);
+    } else {
+        std::vector<Pt> uv;
+        for (const P3& p : polygon_) uv.push_back(uv_of(n, p));
+        r = add_prism(next, n, lo, hi, uv, material_);
+    }
+    drag_ = Drag::none;
+    polygon_.clear();
+    preview_ = {};
+    end_drag_ui();
+    if (GetCapture() == canvas_) ReleaseCapture();
+    if (r >= 0 && commit_model(std::move(next))) sel_ = {{{r, 0}}, -1};
+    else host_.solid_status("That solid is not taken (it must have a size on each axis).");
+    update_inspector();
+    invalidate();
+}
+
+void SolidPage::apply_drag() {
+    if (text_drag()) {  // slice 4: a release's phase as released, else the line written
+        if (drag_ == Drag::implant_window || drag_ == Drag::refine) on_up_text();
+        else finish_text_drag();
+        return;
+    }
+    switch (drag_) {
+    case Drag::height: finish_height(); return;
+    case Drag::inset_depth: finish_inset(); return;
+    case Drag::cut:
+    case Drag::taper:
+    case Drag::extrude:
+    case Drag::inset:
+    case Drag::radius:
+    case Drag::move:
+    case Drag::array:
+    case Drag::axis:
+    case Drag::plane:
+    case Drag::face:
+    case Drag::vertex:
+    case Drag::contact_move:
+    case Drag::base:
+    case Drag::contact: on_up(last_x_, last_y_); return;
+    default: return;
     }
 }
 
 void SolidPage::cancel() {
+    pending_text_.clear();
+    pending_volume_.reset();
     if (drag_ == Drag::move || drag_ == Drag::axis || drag_ == Drag::plane || drag_ == Drag::face || drag_ == Drag::vertex ||
-        drag_ == Drag::contact_move) {
-        m_ = m_start_;
+        drag_ == Drag::contact_move || drag_ == Drag::array || drag_ == Drag::cut || drag_ == Drag::taper || drag_ == Drag::extrude ||
+        drag_ == Drag::inset || drag_ == Drag::inset_depth) {
+        m_ = copy_from_ ? *copy_from_ : m_start_;
+        if (copy_from_) sel_ = copy_sel_;
     }
+    copy_from_.reset();
     drag_ = Drag::none;
     button_ = false;
     polygon_.clear();
     preview_ = {};
+    end_drag_ui();
     if (GetCapture() == canvas_) ReleaseCapture();
     invalidate();
 }
@@ -492,6 +1160,15 @@ double SolidPage::render() {
         for (const solid::Problem& p : problems_) overlay.markers.insert(overlay.markers.end(), p.markers.begin(), p.markers.end());
     }
     if (mesh_shown()) overlay.mesh = mesh_;
+    // Slice 4: the profiles (Doping open) and refine boxes (Mesh open) as see-through volumes, the drag's too.
+    if (bar_->group() == modeller::Group::doping) {
+        for (const auto& p : profiles_) {
+            overlay.volumes.push_back({solid::profile_extent(m_.domain, p), solid::doping_color(p.dopant == device::Dopant::donor, p.peak_cm3)});
+        }
+    } else if (bar_->group() == modeller::Group::mesh) {
+        for (const auto& b : size_boxes_) overlay.volumes.push_back({b.box, {0.55f, 0.55f, 0.60f, 0.22f}});
+    }
+    if (pending_volume_) overlay.volumes.push_back(*pending_volume_);
     scene_ = solid_scene(m_, v_, sel_, preview_, overlay);
     scene_ms_ = 1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!target_) {
@@ -509,6 +1186,7 @@ double SolidPage::render() {
     }
     error_.reset();
     ValidateRect(canvas_, nullptr);
+    place_bar();
     return 1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -546,7 +1224,7 @@ void SolidPage::set_mesh(const std::string& text, std::vector<V3> edges) {
 
 void SolidPage::set_mesh_preview(bool on) {
     mesh_preview_ = on;
-    if (mesh_button_) SendMessageW(mesh_button_, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+    bar_->set_mesh(on);
     update_inspector();
     invalidate();
 }
@@ -576,10 +1254,12 @@ void SolidPage::update_inspector() {
         }
     };
     show({c_name_label, c_name, c_material_label, c_material, c_raise, c_lower, c_axis_label, c_axis, c_from_label, c_from, c_to_label,
-          c_to, c_vertices_label, c_vertices, c_apply, c_kind_label, c_kind, c_convert},
+          c_to, c_vertices_label, c_vertices, c_apply, c_kind_label, c_kind, c_convert, c_overlap},
          false);
     for (int k = 0; k < 12; ++k) show({c_x0_label + k}, false);
     const bool usable = m_.mesh != MeshKind::unsupported;
+    show({c_resolution, c_params_label, c_params, c_params_apply}, m_.editable());
+    if (GetFocus() != control(c_params)) set(c_params, parameters_text());
     show({c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset, c_section_label, c_section, c_cut_label, c_cut, c_translucent},
          usable);
     SendMessageW(control(c_plane), CB_SETCURSEL, static_cast<WPARAM>(v_.plane.normal), 0);
@@ -611,7 +1291,8 @@ void SolidPage::update_inspector() {
             ranges(m_.domain);
         } else {
             const Solid& sol = r.solids[static_cast<std::size_t>(s.solid)];
-            show({c_raise, c_lower}, true);
+            show({c_raise, c_lower, c_overlap}, true);
+            SendMessageW(control(c_overlap), BM_SETCHECK, r.fill ? BST_CHECKED : BST_UNCHECKED, 0);
             if (sol.kind == SolidKind::box) {
                 hint = std::format("Region {}, layer {} of {}: a box", r.name, s.region + 1, m_.regions.size());
                 ranges(sol.box);
@@ -669,6 +1350,14 @@ bool SolidPage::commit(int c) {
         convert();
         return true;
     }
+    if (c == c_params_apply) {
+        apply_parameters(text(c_params));
+        return true;
+    }
+    if (c == c_resolution) {
+        use_automatic_resolution();
+        return true;
+    }
     Model next = m_;
     bool ok = false;
     const auto box_of_fields = [&]() -> std::optional<Box3> {
@@ -689,6 +1378,7 @@ bool SolidPage::commit(int c) {
         const SolidRef s = sel_.solids[0];
         if (c == c_name) ok = rename_region(next, s.region, text(c_name));
         else if (c == c_material) ok = solid::set_material(next, s.region, choice(c_material));
+        else if (c == c_overlap) ok = set_overlap(next, s.region, SendMessageW(control(c_overlap), BM_GETCHECK, 0, 0) == BST_CHECKED);
         else if (c == c_raise && raise_region(next, s.region)) {
             ok = true;
             sel_ = {{{s.region + 1, s.solid}}, -1};
@@ -747,41 +1437,72 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
         drag_ = d;
         button_ = true;
         m_start_ = m_;
+        naming_ = -1;
         SetCapture(canvas_);
     };
     if (space_ || tool_ == Tool::pan) {
-        begin(Drag::pan);
+        // MT1: the Pan tool and Space+drag move the view only while the camera is free.
+        if (!camera_fixed_) begin(Drag::pan);
         return;
     }
     // A height being given: the click ends the box or prism.
     if (drag_ == Drag::height) {
-        Model next = m_;
-        const int n = v_.plane.normal;
-        const Coord h = height_ != 0 ? height_ : grid();
-        const Coord lo = std::min(v_.plane.offset, v_.plane.offset + h), hi = std::max(v_.plane.offset, v_.plane.offset + h);
-        int r = -1;
-        if (polygon_.empty()) {
-            Box3 b = normalized(a_, b_);
-            b.lo[n] = lo;
-            b.hi[n] = hi;
-            r = add_box(next, b, material_);
-        } else {
-            std::vector<Pt> uv;
-            for (const P3& p : polygon_) uv.push_back(uv_of(n, p));
-            r = add_prism(next, n, lo, hi, uv, material_);
-        }
-        drag_ = Drag::none;
-        polygon_.clear();
-        preview_ = {};
-        if (r >= 0 && commit_model(std::move(next))) sel_ = {{{r, 0}}, -1};
-        else host_.solid_status("That solid is not taken (it must have a size on each axis).");
-        update_inspector();
-        invalidate();
+        finish_height();
         return;
     }
+    if (drag_ == Drag::inset_depth) {  // MT6: the click ends the inset
+        finish_inset();
+        return;
+    }
+    if (drag_ == Drag::implant || drag_ == Drag::implant_lateral || drag_ == Drag::refine_height || drag_ == Drag::refine_size) {
+        (void)doping_press({}, x, y);  // slice 4: the click ends the phase
+        return;
+    }
+    entry_.clear();
+    typed_axis_ = -1;
+    drag_d_ = {};
+    drag_s_ = 0;
     switch (tool_) {
     case Tool::select: {
         const Pick p = pick(m_, v_, x, y, sel_);
+        // MT5: Mirror and Align act on a click (a face of a solid; Align also a face of the domain).
+        const bool solid_face = (p.kind == PickKind::face || (p.kind == PickKind::handle && p.handle == HandleKind::face)) && p.solid.solid >= 0;
+        if ((mode_ == modeller::Mode::mirror || mode_ == modeller::Mode::align) && editable &&
+            (solid_face || (mode_ == modeller::Mode::align && p.kind == PickKind::face && p.domain_face >= 0))) {
+            transform_click(p, shift, ctrl);
+            invalidate();
+            return;
+        }
+        // Unit 26m slice 2 (MT6, MT7): the Faces and Edges modes.
+        if (editable && tool_press(p, x, y)) {
+            invalidate();
+            return;
+        }
+        // MT2: what is picked opens its group.
+        const auto open = [&](modeller::Picked k) {
+            const modeller::Group g = modeller::group_for(k);
+            if (g != bar_->group()) {
+                bar_->set_group(g);
+                bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
+            }
+        };
+        if (p.kind == PickKind::handle) open(p.handle == HandleKind::face ? modeller::Picked::face : modeller::Picked::solid);
+        else if (p.kind == PickKind::edge) open(modeller::Picked::edge);
+        else if (p.kind == PickKind::contact) open(modeller::Picked::contact);
+        else if (p.kind == PickKind::face && p.solid.solid >= 0) open(modeller::Picked::solid);
+        else open(modeller::Picked::nothing);
+        // MT1, MQ3: empty background (or a region's background, which no drag moves) orbits or pans a free camera.
+        const bool background = p.kind == PickKind::none || (p.kind == PickKind::face && p.solid.solid < 0);
+        const modeller::Nav nav = modeller::navigation(camera_fixed_, true, {modeller::Button::left, background, shift, true, false});
+        if (nav == modeller::Nav::orbit || nav == modeller::Nav::pan) {
+            if (!shift) {
+                sel_ = p.kind == PickKind::face && p.solid.region >= 0 ? Selection{{p.solid}, -1} : Selection{};
+                update_inspector();
+                invalidate();
+            }
+            begin(nav == modeller::Nav::orbit ? Drag::orbit : Drag::pan);
+            return;
+        }
         if (p.kind == PickKind::handle) {
             if (!editable) return refuse_edit();
             ref_ = p.solid;
@@ -854,7 +1575,32 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
                 if (!q) return;
                 start_p_ = *q;
             }
+            if (mode_ == modeller::Mode::array) {
+                // MT5: the drag is the pitch, the wheel the count; one region per copy on release.
+                sel_ = {{s}, -1};
+                ref_ = s;
+                update_inspector();
+                begin(Drag::array);
+                return;
+            }
             begin(Drag::move);
+            if (mode_ == modeller::Mode::copy || GetKeyState(VK_MENU) < 0) {
+                // MT5: a copy of each picked solid is dragged (its region's rule kept); the originals stay.
+                copy_from_ = m_;
+                copy_sel_ = sel_;
+                Model with = m_;
+                std::vector<SolidRef> copies;
+                for (const SolidRef c : sel_.solids) {
+                    if (c.solid < 0) continue;
+                    const int r = duplicate_solid(with, c, {});
+                    if (r < 0) continue;
+                    with.regions[static_cast<std::size_t>(r)].fill = with.regions[static_cast<std::size_t>(c.region)].fill;
+                    copies.push_back({r, 0});
+                }
+                m_ = with;
+                m_start_ = with;
+                sel_ = {copies, -1};
+            }
             return;
         }
         sel_ = {};
@@ -911,6 +1657,17 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
         begin(Drag::contact);
         return;
     }
+    case Tool::cylinder: {  // MT7: the centre on the work plane, then the radius, then the height
+        if (!editable) return refuse_edit();
+        const auto p = plane_point(x, y);
+        if (!p) return;
+        a_ = b_ = *p;
+        radius_ = 0;
+        polygon_.clear();
+        preview_ = {};
+        begin(Drag::radius);
+        return;
+    }
     case Tool::measure: {
         const Pick p = pick(m_, v_, x, y, {});
         std::optional<P3> q;
@@ -959,6 +1716,16 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         update_inspector();
         invalidate();
     };
+    // MT3: a typed value replaces the dragged one, in the drag's direction (a typed minus sign: as typed).
+    const auto typed_or = [&](Coord dragged) {
+        const auto v = entry_.value();
+        if (!v) return dragged;
+        return *v >= 0 && dragged < 0 ? -*v : *v;
+    };
+    if (text_drag()) {  // slice 4
+        doping_step(x, y);
+        return;
+    }
     switch (drag_) {
     case Drag::orbit:
         v_.camera.azimuth_deg -= static_cast<float>(dx * 0.4);
@@ -975,12 +1742,14 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
     case Drag::axis: {
         Model next = m_start_;
         P3 d{};
-        d[axis_] = quantize(along_axis(m_start_, v_, x, y, origin_, axis_) - start_s_);
+        d[axis_] = typed_or(quantize(along_axis(m_start_, v_, x, y, origin_, axis_) - start_s_));
+        drag_d_ = d;
         move_solid(next, ref_, d);
         with_drag(std::move(next));
         return;
     }
     case Drag::move:
+    case Drag::array:
     case Drag::plane:
     case Drag::contact_move: {
         const auto q = on_plane(m_start_, v_, x, y, axis_, start_p_[static_cast<std::size_t>(axis_)]);
@@ -989,9 +1758,31 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         for (int a = 0; a < 3; ++a) {
             if (a != axis_) d[a] = quantize((*q)[static_cast<std::size_t>(a)] - start_p_[static_cast<std::size_t>(a)]);
         }
+        if (typed_axis_ >= 0 && drag_ != Drag::contact_move) d[typed_axis_] = typed_or(d[typed_axis_]);
+        // MT12 (2): copies keep clear of other solids' faces and the domain's: onto them or 4 s off.
+        if (res_q_ > 0 && (drag_ == Drag::array || (drag_ == Drag::move && copy_from_))) {
+            std::vector<Solid> moving;
+            std::vector<SolidRef> skip;
+            if (drag_ == Drag::array) {
+                if (const Solid* s = solid_at(m_start_, ref_)) moving.push_back(*s);
+            } else {
+                for (const SolidRef c : sel_.solids) {
+                    if (const Solid* s = solid_at(m_start_, c)) {
+                        moving.push_back(*s);
+                        skip.push_back(c);
+                    }
+                }
+            }
+            for (int a = 0; a < 3; ++a) {
+                if (a != axis_ && d[a] != 0) d[a] = keep_clear(m_start_, moving, skip, a, d[a], 4 * res_q_);
+            }
+        }
+        drag_d_ = d;
         Model next = m_start_;
         if (drag_ == Drag::contact_move) {
             move_contact(next, sel_.contact, d);
+        } else if (drag_ == Drag::array) {
+            if (!(d == P3{})) array_solid(next, ref_, d, array_count_);
         } else if (drag_ == Drag::plane) {
             move_solid(next, ref_, d);
         } else {
@@ -1002,7 +1793,9 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
     }
     case Drag::face: {
         Model next = m_start_;
-        move_face(next, ref_, index_, quantize(along_axis(m_start_, v_, x, y, origin_, axis_) - start_s_));
+        drag_s_ = typed_or(quantize(along_axis(m_start_, v_, x, y, origin_, axis_) - start_s_));
+        move_face(next, ref_, index_, drag_s_);
+        if (naming_ >= 0) static_cast<void>(name_extent(next, ref_, index_ ^ 1, index_, naming_name_));  // MT8: N
         with_drag(std::move(next));
         return;
     }
@@ -1013,6 +1806,7 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         const Pt d = uv_of(axis_, {quantize((*q)[0] - start_p_[0]), quantize((*q)[1] - start_p_[1]), quantize((*q)[2] - start_p_[2])});
         const Pt p0 = s->polygon[static_cast<std::size_t>(index_)];
         Model next = m_start_;
+        drag_d_ = from_uv(axis_, d, 0);
         set_vertex(next, ref_, index_, {p0.x + d.x, p0.y + d.y}, !(alone_ || ctrl));
         with_drag(std::move(next));
         return;
@@ -1033,6 +1827,7 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         }
         if (!p) return;
         b_ = *p;
+        if (drag_ == Drag::base && typed_axis_ >= 0) b_[typed_axis_] = a_[typed_axis_] + typed_or(b_[typed_axis_] - a_[typed_axis_]);
         preview_.solids = {Solid{SolidKind::box, normalized(a_, b_), 2, 0, 0, {}}};
         invalidate();
         return;
@@ -1040,7 +1835,7 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
     case Drag::height: {
         const int n = v_.plane.normal;
         const V3 corner = um_of(b_);
-        height_ = quantize(along_axis(m_, v_, x, y, corner, n) - corner[static_cast<std::size_t>(n)]);
+        height_ = typed_or(quantize(along_axis(m_, v_, x, y, corner, n) - corner[static_cast<std::size_t>(n)]));
         if (height_ == 0) height_ = grid();
         const Coord lo = std::min(v_.plane.offset, v_.plane.offset + height_), hi = std::max(v_.plane.offset, v_.plane.offset + height_);
         if (polygon_.empty()) {
@@ -1053,10 +1848,80 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
             for (const P3& p : polygon_) uv.push_back(uv_of(n, p));
             preview_.solids = {Solid{SolidKind::prism, {}, n, lo, hi, uv}};
         }
-        host_.solid_status(std::format("height {} µm", ui_length(height_)));
         invalidate();
         return;
     }
+    case Drag::cut:
+    case Drag::taper: {
+        const auto q = on_plane(m_start_, v_, x, y, axis_, start_p_[static_cast<std::size_t>(axis_)]);
+        if (!q) return;
+        P3 raw{};
+        for (int a = 0; a < 3; ++a) raw[a] = quantize((*q)[static_cast<std::size_t>(a)] - start_p_[static_cast<std::size_t>(a)]);
+        Pt d = uv_of(axis_, raw);
+        if (drag_ == Drag::taper) {
+            // Sideways along one axis of the cross-section: the larger offset's.
+            if (std::abs(d.x) >= std::abs(d.y)) {
+                d.y = 0;
+                d.x = typed_or(d.x);
+            } else {
+                d.x = 0;
+                d.y = typed_or(d.y);
+            }
+            drag_d_ = from_uv(axis_, d, 0);
+            Model next = m_start_;
+            if (d.x != 0 || d.y != 0) taper_edge(next, ref_, edge_, d);
+            with_drag(std::move(next));
+            return;
+        }
+        const double len = std::hypot(static_cast<double>(d.x), static_cast<double>(d.y)) / um;
+        drag_s_ = std::max<Coord>(0, typed_or(quantize(len)));
+        with_drag(cut_model(drag_s_));
+        return;
+    }
+    case Drag::extrude:
+    case Drag::inset_depth: {
+        const Coord raw = quantize(along_axis(m_start_, v_, x, y, origin_, normal_.axis) - start_s_) * normal_.sign;
+        drag_s_ = gap_up(typed_or(raw));  // MT12 (2): no layer under 4 s
+        Model next = m_start_;
+        if (drag_ == Drag::extrude) {
+            if (drag_s_ > 0) extrude_face(next, ref_, index_, drag_s_, material_);
+        } else if (drag_s_ != 0) {
+            inset_face(next, ref_, index_, margin_, drag_s_, material_);
+        }
+        with_drag(std::move(next));
+        return;
+    }
+    case Drag::inset: {
+        const auto q = on_plane(m_start_, v_, x, y, normal_.axis, start_p_[static_cast<std::size_t>(normal_.axis)]);
+        if (!q) return;
+        double reach = 0;
+        for (int a = 0; a < 3; ++a) {
+            if (a != normal_.axis) reach = std::max(reach, std::abs((*q)[static_cast<std::size_t>(a)] - start_p_[static_cast<std::size_t>(a)]));
+        }
+        margin_ = gap_up(std::max<Coord>(0, typed_or(quantize(reach))));  // MT12 (2): a margin of 0 or at least 4 s
+        // Shown with a depth of one grid step until the depth is given.
+        Model next = m_start_;
+        inset_face(next, ref_, index_, margin_, gap_up(grid()), material_);
+        with_drag(std::move(next));
+        return;
+    }
+    case Drag::radius: {
+        const auto p = plane_point(x, y);
+        if (!p) return;
+        b_ = *p;
+        const int n = v_.plane.normal;
+        const Pt c = uv_of(n, a_), e = uv_of(n, b_);
+        radius_ = std::max<Coord>(0, typed_or(quantize(std::hypot(static_cast<double>(e.x - c.x), static_cast<double>(e.y - c.y)) / um)));
+        // MQ4, MT12 (2): 16 sides, fewer while a side is under 6 s.
+        const int sides = res_q_ > 0 ? geo::polygon_sides(static_cast<double>(radius_), 6.0 * static_cast<double>(res_q_)) : 16;
+        preview_.solids.clear();
+        if (radius_ > 0 && sides >= 3) {
+            preview_.solids = {Solid{SolidKind::prism, {}, n, v_.plane.offset, v_.plane.offset + grid(), geo::regular_polygon(c, radius_, sides)}};
+        }
+        invalidate();
+        return;
+    }
+
     case Drag::polygon: {
         if (const auto p = plane_point(x, y)) {
             const int n = v_.plane.normal;
@@ -1091,22 +1956,372 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
     (void)shift;
 }
 
-void SolidPage::on_up(double x, double y) {
-    (void)x;
-    (void)y;
+// --- Slice 4 (MT9, MT10): the Doping and Mesh tools, each writing one deck line ---------------------------------------
+
+bool SolidPage::text_drag() const noexcept {
+    switch (drag_) {
+    case Drag::implant_window:
+    case Drag::implant:
+    case Drag::implant_lateral:
+    case Drag::junction:
+    case Drag::level:
+    case Drag::max_size:
+    case Drag::refine:
+    case Drag::refine_height:
+    case Drag::refine_size: return true;
+    default: return false;
+    }
+}
+
+bool SolidPage::commit_text(const std::string& out) {
+    const std::string text = host_.solid_deck();
+    if (out.empty() || out == text) return false;
+    history_.record(text);
+    apply_text(out);
+    return true;
+}
+
+// The pending line written and the drag ended (a phase's click, a release, Enter).
+void SolidPage::finish_text_drag() {
+    const std::string out = pending_text_;
+    drag_ = Drag::none;
     button_ = false;
     if (GetCapture() == canvas_) ReleaseCapture();
+    pending_text_.clear();
+    pending_volume_.reset();
+    end_drag_ui();
+    if (!out.empty()) commit_text(out);
+    update_inspector();
+    invalidate();
+}
+
+namespace {
+
+// A level on the 1, 2, 5 steps: `steps` of them from 10^0 (3 a decade).
+double level_step(int steps) {
+    static constexpr double m[] = {1.0, 2.0, 5.0};
+    const int d = steps >= 0 ? steps / 3 : -((-steps + 2) / 3);
+    return m[steps - 3 * d] * std::pow(10.0, d);
+}
+
+int level_steps(double level) {
+    const double l = std::log10(level);
+    const double d = std::floor(l + 1e-9);
+    const double f = l - d;
+    const int k = f < std::log10(1.5) ? 0 : f < std::log10(3.5) ? 1 : 2;
+    return 3 * static_cast<int>(d) + k;
+}
+
+}  // namespace
+
+bool SolidPage::doping_press(const Pick& pressed, double x, double y) {
+    using modeller::Mode;
+    // A phase's click: the next phase, or the line the phase shows written (a typed value already in it).
+    if (drag_ == Drag::implant) {
+        entry_.clear();
+        drag_ = Drag::implant_lateral;
+        doping_step(x, y);
+        return true;
+    }
+    if (drag_ == Drag::implant_lateral || drag_ == Drag::refine_size) {
+        finish_text_drag();
+        return true;
+    }
+    if (drag_ == Drag::refine_height) {
+        entry_.clear();
+        drag_ = Drag::refine_size;
+        press_y_ = y;
+        size_from_ = static_cast<double>(refine_size_);
+        doping_step(x, y);
+        return true;
+    }
+    pending_text_.clear();
+    pending_volume_.reset();
+    drag_s_ = 0;
+    entry_.clear();
+    if (mode_ == Mode::max_size) {
+        if (!(max_size_ > 0.0)) {
+            host_.solid_status("The deck has no max_size to change.");
+            return true;
+        }
+        size_from_ = max_size_;
+        press_y_ = y;
+        begin_drag(Drag::max_size);
+        doping_step(x, y);
+        return true;
+    }
+    if (mode_ == Mode::refine) {
+        const auto q = plane_point(x, y);
+        if (!q) return true;
+        a_ = b_ = *q;
+        if (refine_size_ <= 0) refine_size_ = std::max<Coord>(1, static_cast<Coord>(std::llround(max_size_ * 1e8 / 4.0)));
+        begin_drag(Drag::refine);
+        return true;
+    }
+    // The Doping tools take a solid's face under the handles (a picked solid's gizmo moves nothing here).
+    const Pick p = pressed.kind == PickKind::face && pressed.solid.solid >= 0 ? pressed : pick(m_, v_, x, y, {});
+    const bool on_face = p.kind == PickKind::face && p.solid.solid >= 0;
+    if (!on_face) {
+        if (pressed.solid.solid < 0 && p.solid.solid < 0) return false;  // the background: MT1's navigation
+        host_.solid_status("Press a solid's face.");
+        return true;  // a solid's edge or handle: nothing moves
+    }
+    ref_ = p.solid;
+    index_ = p.index;
+    origin_ = p.at;
+    sel_ = {{p.solid}, -1};
+    if (mode_ == Mode::profile) {  // MT9: a drag up or down sets the level (1, 2, 5 a decade); a click keeps it
+        press_y_ = y;
+        level_from_ = level_;
+        begin_drag(Drag::level);
+        doping_step(x, y);
+        return true;
+    }
+    const Solid* s = solid_at(m_, p.solid);
+    const auto n = s ? face_normal(*s, p.index) : std::nullopt;
+    if (!n) {
+        host_.solid_status("A slanted face takes no implant or junction; press another face.");
+        return true;
+    }
+    normal_ = *n;
+    if (mode_ == Mode::implant) {  // MT9: a window dragged on the face, then the depth, then the lateral spread
+        face_at_ = quanta_of(origin_)[n->axis];
+        a_ = b_ = face_point(x, y).value_or(quanta_of(origin_));
+        lateral_ = 0;
+        begin_drag(Drag::implant_window);
+        doping_step(x, y);
+        return true;
+    }
+    start_s_ = along_axis(m_, v_, x, y, origin_, n->axis);
+    begin_drag(Drag::junction);
+    return true;
+}
+
+// The point under (x, y) on the implanted face's plane, snapped as the work plane's are; none off the plane.
+std::optional<P3> SolidPage::face_point(double x, double y) const {
+    const int a = normal_.axis;
+    const auto p = on_plane(m_start_, v_, x, y, a, static_cast<double>(face_at_) / static_cast<double>(per_um));
+    if (!p) return std::nullopt;
+    P3 raw = quanta_of(*p);
+    raw[a] = face_at_;
+    P3 out = snap(m_start_, {a, face_at_}, raw, snap_tolerance(m_start_, v_, *p), std::nullopt, grid()).p;
+    out[a] = face_at_;
+    return out;
+}
+
+void SolidPage::on_up_text() {
     switch (drag_) {
+    case Drag::implant_window: {
+        button_ = false;
+        if (GetCapture() == canvas_) ReleaseCapture();
+        // The window (the whole face for a click), then the depth along the face's normal through its centre.
+        const Solid* s = solid_at(m_start_, ref_);
+        if (!s) {
+            cancel();
+            return;
+        }
+        Box3 face = s->bounds();
+        face.lo[normal_.axis] = face.hi[normal_.axis] = face_at_;
+        Box3 w = normalized(a_, b_);
+        const int u = (normal_.axis + 1) % 3, v = (normal_.axis + 2) % 3;
+        if (w.lo[u] == w.hi[u] || w.lo[v] == w.hi[v]) w = face;
+        window_ = w;
+        V3 c{};
+        for (int k = 0; k < 3; ++k) c[static_cast<std::size_t>(k)] = 0.5 * static_cast<double>(w.lo[k] + w.hi[k]) / static_cast<double>(per_um);
+        origin_ = c;
+        start_s_ = c[static_cast<std::size_t>(normal_.axis)];
+        implant_depth_ = 0;
+        entry_.clear();
+        drag_ = Drag::implant;
+        doping_step(last_x_, last_y_);
+        return;
+    }
+    case Drag::refine: {
+        button_ = false;
+        if (GetCapture() == canvas_) ReleaseCapture();
+        const int n = v_.plane.normal, u = (n + 1) % 3, w = (n + 2) % 3;
+        if (a_[u] == b_[u] || a_[w] == b_[w]) {
+            cancel();
+            return;
+        }
+        height_ = grid();
+        entry_.clear();
+        drag_ = Drag::refine_height;
+        doping_step(last_x_, last_y_);
+        return;
+    }
+    case Drag::implant:
+    case Drag::implant_lateral:
+    case Drag::refine_height:
+    case Drag::refine_size: return;  // a phase ended by a click, not a release
+    default: finish_text_drag(); return;
+    }
+}
+
+void SolidPage::doping_step(double x, double y) {
+    const auto dopant = donor_ ? device::Dopant::donor : device::Dopant::acceptor;
+    std::expected<std::string, std::string> out = std::unexpected(std::string());
+    pending_volume_.reset();
+    const auto typed = entry_.value();
+    const auto implant = [&] {
+        const auto p = solid::implant_profile(normal_, face_at_, window_, implant_depth_, lateral_, dopant, level_);
+        out = solid::add_profile(text_seen_, p);
+        pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, p), solid::doping_color(donor_, level_)};
+    };
+    switch (drag_) {
+    case Drag::level: {
+        const double px = 30.0 * dpi_ / 96.0;  // a 1, 2, 5 step every 30 px
+        level_ = std::clamp(level_step(level_steps(level_from_) + static_cast<int>(std::lround((press_y_ - y) / px))), 1e12, 1e22);
+        const auto p = solid::region_profile(m_start_, ref_, dopant, level_);
+        out = solid::add_profile(text_seen_, p);
+        pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, p), solid::doping_color(donor_, level_)};
+        break;
+    }
+    case Drag::implant_window: {
+        if (const auto q = face_point(x, y)) b_ = *q;
+        const Solid* s = solid_at(m_start_, ref_);
+        if (!s) break;
+        // Kept on the face.
+        const Box3 f = s->bounds();
+        for (int k = 0; k < 3; ++k) {
+            if (k == normal_.axis) continue;
+            b_[k] = std::clamp(b_[k], f.lo[k], f.hi[k]);
+            a_[k] = std::clamp(a_[k], f.lo[k], f.hi[k]);
+        }
+        pending_volume_ = solid::Volume{normalized(a_, b_), solid::doping_color(donor_, level_, 0.5f)};
+        break;
+    }
+    case Drag::implant: {
+        const Coord raw = quantize(along_axis(m_start_, v_, x, y, origin_, normal_.axis) - start_s_) * -normal_.sign;  // into the solid
+        implant_depth_ = drag_s_ = typed ? std::abs(*typed) : std::max<Coord>(0, raw);
+        if (drag_s_ > 0) implant();
+        break;
+    }
+    case Drag::implant_lateral: {
+        // The distance on the face's plane from the window out to the pointer.
+        Coord out_by = 0;
+        if (const auto q = face_point(x, y)) {
+            for (int k = 0; k < 3; ++k) {
+                if (k == normal_.axis) continue;
+                out_by = std::max({out_by, window_.lo[k] - (*q)[k], (*q)[k] - window_.hi[k]});
+            }
+        }
+        lateral_ = drag_s_ = typed ? std::abs(*typed) : out_by;
+        if (implant_depth_ > 0) implant();
+        break;
+    }
+    case Drag::junction: {
+        const Coord raw = quantize(along_axis(m_start_, v_, x, y, origin_, normal_.axis) - start_s_) * -normal_.sign;
+        drag_s_ = typed ? std::abs(*typed) : std::max<Coord>(0, raw);
+        const Solid* s = solid_at(m_start_, ref_);
+        if (!s || drag_s_ <= 0) break;
+        const Coord at = quanta_of(origin_)[normal_.axis];
+        Box3 window = s->bounds();
+        window.lo[normal_.axis] = window.hi[normal_.axis] = at;
+        const auto p = solid::junction_profile(profiles_, normal_, at, window, drag_s_, dopant, level_);
+        if (!p) {
+            out = std::unexpected(p.error());
+            break;
+        }
+        out = solid::add_profile(text_seen_, *p);
+        pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, *p), solid::doping_color(donor_, level_)};
+        break;
+    }
+    case Drag::max_size: {
+        // Up doubles it every 100 px (at 96 dpi), down halves it; a typed value is the size.
+        const double px = 100.0 * dpi_ / 96.0;
+        drag_s_ = typed ? std::abs(*typed) : std::max<Coord>(1, static_cast<Coord>(std::llround(size_from_ * std::pow(2.0, (press_y_ - y) / px) * 1e8)));
+        if (drag_s_ > 0) out = solid::set_mesh_length(text_seen_, "max_size", drag_s_);
+        break;
+    }
+    case Drag::refine:
+    case Drag::refine_height:
+    case Drag::refine_size: {
+        const int n = v_.plane.normal;
+        if (drag_ == Drag::refine) {
+            if (const auto q = plane_point(x, y)) b_ = *q;
+        } else if (drag_ == Drag::refine_height) {
+            const V3 corner = um_of(b_);
+            height_ = typed ? *typed : quantize(along_axis(m_, v_, x, y, corner, n) - corner[static_cast<std::size_t>(n)]);
+            if (height_ == 0) height_ = grid();
+        } else {
+            // Up doubles the size every 100 px, down halves it; or typed.
+            const double px = 100.0 * dpi_ / 96.0;
+            refine_size_ = typed ? std::abs(*typed) : std::max<Coord>(1, static_cast<Coord>(std::llround(size_from_ * std::pow(2.0, (press_y_ - y) / px))));
+        }
+        Box3 b = normalized(a_, b_);
+        if (drag_ != Drag::refine) {
+            b.lo[n] = std::clamp(std::min(v_.plane.offset, v_.plane.offset + height_), m_.domain.lo[n], m_.domain.hi[n]);
+            b.hi[n] = std::clamp(std::max(v_.plane.offset, v_.plane.offset + height_), m_.domain.lo[n], m_.domain.hi[n]);
+            out = solid::add_size_box(text_seen_, {b, refine_size_});
+        }
+        pending_volume_ = solid::Volume{b, {0.55f, 0.55f, 0.60f, 0.22f}};
+        break;
+    }
+    default: return;
+    }
+    pending_text_ = out ? *out : std::string();
+    live_line_ = out ? modeller::deck_line(text_seen_, *out) : out.error();
+    if (!live_line_.empty()) host_.solid_status(live_line_);
+    const int off = MulDiv(16, dpi_, 96);
+    bar_->chip(static_cast<int>(x) + off, static_cast<int>(y) + canvas_top_ + off, chip_value());
+    invalidate();
+}
+
+void SolidPage::on_up(double /*x*/, double /*y*/) {  // the release's place: no step uses it
+    if (text_drag()) {  // slice 4
+        on_up_text();
+        return;
+    }
+    button_ = false;
+    if (drag_ != Drag::base && drag_ != Drag::inset && drag_ != Drag::radius) end_drag_ui();
+    if (GetCapture() == canvas_) ReleaseCapture();
+    switch (drag_) {
+    case Drag::inset: {  // MT6: the margin given; now the depth, a click ending it
+        drag_ = Drag::inset_depth;
+        entry_.clear();
+        // The depth from the face itself (its pressed point along the normal), not from the release pixel's ray: the
+        // margin drag ends off the normal line, and its nearest point there is not the face's.
+        start_s_ = origin_[static_cast<std::size_t>(normal_.axis)];
+        drag_s_ = 0;
+        m_ = m_start_;
+        invalidate();
+        return;
+    }
+    case Drag::radius: {  // MT7: the radius given; now the height, as a prism's
+        if (preview_.solids.empty()) {
+            host_.solid_status(radius_ > 0 ? "A cylinder that small has sides under 6 s (lower interface_resolution)." : "A cylinder needs a radius.");
+            cancel();
+            return;
+        }
+        const int n = v_.plane.normal;
+        polygon_.clear();
+        for (const Pt& p : preview_.solids.front().polygon) polygon_.push_back(from_uv(n, p, v_.plane.offset));
+        entry_.clear();
+        typed_axis_ = -1;
+        height_ = grid();
+        b_ = polygon_.front();
+        drag_ = Drag::height;
+        invalidate();
+        return;
+    }
+    case Drag::cut:
+    case Drag::taper:
+    case Drag::extrude:
     case Drag::move:
+    case Drag::array:
     case Drag::axis:
     case Drag::plane:
     case Drag::face:
     case Drag::vertex:
     case Drag::contact_move: {
         Model done = m_;
-        m_ = m_start_;
+        const bool moved = !(done == m_start_);
+        m_ = copy_from_ ? *copy_from_ : m_start_;
+        if (copy_from_ && !moved) sel_ = copy_sel_;  // a copy not moved is no copy
+        copy_from_.reset();
         drag_ = Drag::none;
-        if (!(done == m_start_)) commit_model(std::move(done));
+        if (moved) commit_model(std::move(done));
         update_inspector();
         invalidate();
         return;
@@ -1118,6 +2333,8 @@ void SolidPage::on_up(double x, double y) {
             return;
         }
         drag_ = Drag::height;
+        entry_.clear();
+        typed_axis_ = -1;
         height_ = grid();
         Box3 b = normalized(a_, b_);
         b.hi[n] = b.lo[n] + height_;
@@ -1153,11 +2370,23 @@ void SolidPage::on_up(double x, double y) {
 
 bool SolidPage::on_key(UINT key, bool shift, bool ctrl) {
     if (ctrl) return false;
+    // MT3: while a drag takes a typed value, letters and digits are its (WM_CHAR), not the tools' keys.
+    const bool typing = drag_ == Drag::axis || drag_ == Drag::face || drag_ == Drag::height || drag_ == Drag::move || drag_ == Drag::plane ||
+                        drag_ == Drag::base || drag_ == Drag::array || drag_ == Drag::cut || drag_ == Drag::taper || drag_ == Drag::extrude ||
+                        drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius || drag_ == Drag::implant ||
+                        drag_ == Drag::junction || drag_ == Drag::max_size || drag_ == Drag::implant_lateral || drag_ == Drag::refine_height ||
+                        drag_ == Drag::refine_size;
+    if (typing && ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') || (key >= VK_NUMPAD0 && key <= VK_DIVIDE) ||
+                   key == VK_OEM_PERIOD || key == VK_OEM_MINUS || key == VK_BACK)) {
+        return true;
+    }
     switch (key) {
+    case 'L': set_camera_fixed(!camera_fixed_); return true;
     case 'V': set_tool(Tool::select); return true;
     case 'B':
     case 'R': set_tool(Tool::box); return true;
     case 'P': set_tool(Tool::prism); return true;
+    case 'O': set_tool(Tool::cylinder); return true;
     case 'C': set_tool(Tool::contact); return true;
     case 'H': set_tool(Tool::pan); return true;
     case 'M': set_tool(Tool::measure); return true;
@@ -1174,6 +2403,7 @@ bool SolidPage::on_key(UINT key, bool shift, bool ctrl) {
     case VK_ESCAPE: cancel(); return true;
     case VK_RETURN:
         if (drag_ == Drag::polygon) close_polygon();
+        else apply_drag();
         return true;
     case VK_DELETE: remove(); return true;
     case VK_LEFT:
@@ -1212,19 +2442,25 @@ LRESULT CALLBACK SolidPage::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARAM
             return 0;
         }
         if (message == WM_COMMAND && HIWORD(w) == BN_CLICKED) {
-            const int id = LOWORD(w);
-            if (id >= id_tool_first && id < id_tool_first + static_cast<int>(tool_texts.size())) {
-                self->set_tool(static_cast<Tool>(id - id_tool_first));
-                SetFocus(self->canvas_);
-                return 0;
-            }
-            if (id == id_mesh) {
-                self->set_mesh_preview(SendMessageW(self->mesh_button_, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                SetFocus(self->canvas_);
-                return 0;
-            }
-            if (id == id_fit) {
-                self->fit();
+            if (const auto c = self->bar_->command(LOWORD(w))) {
+                using Kind = ModellerBar::Command::Kind;
+                switch (c->kind) {
+                case Kind::group: self->set_group(static_cast<modeller::Group>(c->index)); break;
+                case Kind::tool: self->set_tool(static_cast<Tool>(c->index)); break;
+                case Kind::duplicate: self->duplicate(); break;
+                case Kind::mode: self->set_mode(static_cast<modeller::Mode>(c->index)); break;
+                case Kind::overlap: self->toggle_overlap(); break;
+                case Kind::corner:
+                    switch (c->index) {
+                    case ModellerBar::camera: self->set_camera_fixed(!self->camera_fixed_); break;
+                    case ModellerBar::reset: self->reset_view(); break;
+                    case ModellerBar::fit: self->fit(); break;
+                    case ModellerBar::measure: self->set_tool(self->tool_ == Tool::measure ? Tool::select : Tool::measure); break;
+                    case ModellerBar::mesh: self->set_mesh_preview(!self->mesh_preview_); break;
+                    default: break;
+                    }
+                    break;
+                }
                 SetFocus(self->canvas_);
                 return 0;
             }
@@ -1243,7 +2479,7 @@ LRESULT CALLBACK SolidPage::inspector_proc(HWND hwnd, UINT message, WPARAM w, LP
         if (message == WM_COMMAND) {
             const int c = LOWORD(w) - self->inspector_id_;
             const int code = HIWORD(w);
-            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert)) ||
+            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert || c == c_overlap || c == c_resolution || c == c_params_apply)) ||
                 (code == CBN_SELCHANGE && (c == c_material || c == c_kind || c == c_draw || c == c_axis || c == c_plane || c == c_section))) {
                 self->commit(c);
                 return 0;
@@ -1282,7 +2518,10 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
     case WM_SIZE: invalidate(); return 0;
     case WM_LBUTTONDOWN: on_down(x, y, shift, ctrl, false); return 0;
     case WM_LBUTTONDBLCLK: on_down(x, y, shift, ctrl, true); return 0;
-    case WM_MOUSEMOVE: on_move(x, y, shift, ctrl); return 0;
+    case WM_MOUSEMOVE:
+        on_move(x, y, shift, ctrl);
+        after_drag_step(x, y);
+        return 0;
     case WM_LBUTTONUP:
         if (drag_ != Drag::none && button_) on_up(x, y);
         return 0;
@@ -1293,6 +2532,8 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         last_x_ = x;
         last_y_ = y;
         if (drag_ == Drag::polygon || drag_ == Drag::height) return 0;  // a drawing keeps going
+        // MT1: a fixed camera takes no middle or right drag.
+        if (modeller::navigation(camera_fixed_, true, {message == WM_RBUTTONDOWN ? modeller::Button::right : modeller::Button::middle}) == modeller::Nav::none) return 0;
         drag_ = message == WM_RBUTTONDOWN ? Drag::orbit : Drag::pan;
         button_ = true;
         SetCapture(canvas_);
@@ -1302,6 +2543,26 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         if (drag_ == Drag::orbit || drag_ == Drag::pan) on_up(x, y);
         return 0;
     case WM_MOUSEWHEEL: {
+        // Slice 4: the wheel sets the doping tools' level by decades, a refine box's size by halves.
+        if (mode_ != modeller::Mode::none && modeller::group_of(mode_) == modeller::Group::doping) {
+            level_ = std::clamp(level_ * (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 10.0 : 0.1), 1e12, 1e22);
+            level_ = std::pow(10.0, std::round(std::log10(level_)));
+            host_.solid_status(std::format("{} {:.0e} cm^-3 (D: the dopant; the wheel: the level)", donor_ ? "donor" : "acceptor", level_));
+            if (drag_ != Drag::none) on_move(last_x_, last_y_, false, false);
+            return 0;
+        }
+        if (drag_ == Drag::refine || drag_ == Drag::refine_height || drag_ == Drag::refine_size) {
+            refine_size_ = std::max<Coord>(1, GET_WHEEL_DELTA_WPARAM(w) > 0 ? refine_size_ * 2 : refine_size_ / 2);
+            on_move(last_x_, last_y_, false, false);
+            return 0;
+        }
+        if (drag_ == Drag::array) {  // MT5: the wheel sets the count, whatever the camera
+            array_count_ = std::clamp(array_count_ + (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 1 : -1), 2, 100);
+            on_move(last_x_, last_y_, false, false);
+            after_drag_step(last_x_, last_y_);
+            return 0;
+        }
+        if (!modeller::wheel_zooms(camera_fixed_)) return 0;
         POINT p{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
         ScreenToClient(canvas_, &p);
         const double k = std::pow(1.2, GET_WHEEL_DELTA_WPARAM(w) / 120.0);
@@ -1326,7 +2587,9 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
     case WM_KEYUP:
         if (w == VK_SPACE) space_ = false;
         return 0;
-    case WM_CHAR: return 0;
+    case WM_CHAR:
+        if (on_char(static_cast<wchar_t>(w))) after_drag_step(last_x_, last_y_);
+        return 0;
     case WM_SETCURSOR:
         if (LOWORD(l) == HTCLIENT) {
             SetCursor(LoadCursorW(nullptr, tool_ == Tool::select ? IDC_ARROW : tool_ == Tool::pan || space_ ? IDC_SIZEALL : IDC_CROSS));

@@ -69,7 +69,9 @@ struct Geometry2D {
 };
 
 // Layered 2D geometry (Unit 26k, GD1-GD2): the domain [lo, hi] (z ignored); the background region fills it; each
-// shape, in order, replaces what it covers (a shape past the domain is cut to it). `layered_partition2d` resolves
+// shape, in order, replaces what it covers (a shape past the domain is cut to it), or with `fill` takes only what no
+// earlier shape covers (Unit 26m MT4: a point's region is the last replacing shape over it, else the first filling one,
+// else the background). `layered_partition2d` resolves
 // the layers into the tiling generate_mesh takes, exactly: every vertex is one of the inputs' coordinates, never
 // computed, so polygons that meet share bit-identical vertices. Per region, each connected part (cells sharing an
 // edge) becomes one simple polygon, counter-clockwise from its lowest-then-leftmost vertex; a part with a hole or
@@ -82,6 +84,7 @@ struct Geometry2D {
 struct LayeredShape {
     std::vector<Point> vertices;
     std::int32_t region = 0;
+    bool fill = false;  // Unit 26m MT4: takes only what no earlier shape holds (the background's)
 };
 
 struct LayeredGeometry2D {
@@ -379,6 +382,28 @@ struct MeshOptions3D {
 // (max_nodes, or the iteration cap); degenerate_mesh (a postcondition failed).
 [[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry& geometry,
                                                                      const MeshOptions3D& options);
+
+// Unit 26m (MT12): the rules above only, as generate_mesh checks them before it places a node (check_complex's,
+// the options', the boundary's, the interfaces' at options.interface_resolution; not the pair sets', which
+// mesh each piece), refusing with generate_mesh's own error. True when the complex has interfaces.
+[[nodiscard]] std::expected<bool, base::Error> check_rules(const PolyhedralGeometry& geometry, const MeshOptions3D& options);
+// The largest interface_resolution check_rules accepts, within `rel` relative: down by eighths from the complex's largest extent to the first s that passes
+// (no lower than a millionth of it), then a bisection (every s-dependent rule is a length at least a multiple of s, so
+// passing is monotone in s). Infinity without interfaces; the error at the smallest s when no s passes (a rule
+// that does not scale with s: a sector, a hole, ...).
+[[nodiscard]] std::expected<double, base::Error> largest_resolution(const PolyhedralGeometry& geometry, MeshOptions3D options,
+                                                                   double rel = 1e-3);
+// The largest interface_resolution generate_mesh meshes (Unit 26m MT12, MC13): largest_resolution's s, built; when
+// that mesh is refused by a check only a mesh makes (degenerate_mesh: the interface certificate, ...), s goes down by
+// a fifth a build until one builds (at most `tries` builds: 4 reach about half the rules' s, as each finer build
+// costs more), then a bisection on builds between the last refused s and the first built one, to `rel`. Passing need
+// not be monotone here, so the s found builds but a slightly larger one may too. Errors: largest_resolution's;
+// resource_exhausted as soon as a build meets max_nodes (a smaller s only costs more); any other refusal
+// (invalid_input: a pair set's geometry, ...) at once, as a finer s does not cure it; when no try builds, the last
+// refusal, its message naming the s range tried.
+[[nodiscard]] std::expected<double, base::Error> largest_meshable_resolution(const PolyhedralGeometry& geometry,
+                                                                            MeshOptions3D options, double rel = 5e-3,
+                                                                            int tries = 4);
 
 // A 64-bit FNV-1a digest of a complex and the options it is meshed with (Unit 53, FD14): the
 // vertices (doubles by bit pattern), facets with their patch names, volumes with their regions,

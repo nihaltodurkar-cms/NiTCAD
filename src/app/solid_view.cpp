@@ -533,13 +533,28 @@ render::FieldScene solid_scene(const Model& m, const ViewState& v, const Selecti
         case Marker::Kind::domain: add_edges(marks, v, box_solid(m.domain)); break;
         }
     }
-    for (render::TriangleBatch* b : {&opaque, &pads, &glass, &ghost}) {
+    // Slice 4 (MT9, MT10): the profiles' and refine boxes' volumes, see-through, their edges drawn.
+    render::TriangleBatch volumes{"volumes", render::Shading::flat, true, true, {}, render::Finish::matte};
+    render::LineBatch volume_edges{"volume edges", {0.20f, 0.20f, 0.25f, 0.9f}, 1.0f, true, {}};
+    const double above = push * static_cast<double>(m.regions.size() + 3);
+    for (const Volume& vol : ov.volumes) {
+        const Solid s = box_solid(vol.box);
+        for (const Face& f : faces_of(s)) add_face(volumes, v, f, above, vol.color);
+        add_edges(volume_edges, v, s);
+    }
+    for (render::TriangleBatch* b : {&opaque, &pads, &glass, &ghost, &volumes}) {
         if (!b->vertices.empty()) scene.triangles.push_back(std::move(*b));
     }
-    for (render::LineBatch* b : {&mesh_lines, &edges, &pad_edges, &picked, &ghost_edges, &marks, &gizmo[0], &gizmo[1], &gizmo[2], &knobs, &corners}) {
+    for (render::LineBatch* b : {&mesh_lines, &edges, &pad_edges, &picked, &ghost_edges, &volume_edges, &marks, &gizmo[0], &gizmo[1], &gizmo[2], &knobs, &corners}) {
         if (!b->points.empty()) scene.lines.push_back(std::move(*b));
     }
     return scene;
+}
+
+render::Rgba doping_color(bool donor, double peak_cm3, float alpha) {
+    const double t = std::clamp((std::log10(std::max(peak_cm3, 1.0)) - 14.0) / 7.0, 0.0, 1.0);
+    const auto f = static_cast<float>(0.85 - 0.65 * t);  // light at 1e14, deep at 1e21
+    return donor ? render::Rgba{f, f, 1.0f, alpha} : render::Rgba{1.0f, f, f, alpha};
 }
 
 Pick pick(const Model& m, const ViewState& v, double x, double y, const Selection& sel) {

@@ -135,7 +135,7 @@ std::vector<std::string> changed_lines(const std::string& a, const std::string& 
 bool geometry_line(std::string_view l) {
     while (!l.empty() && (l.back() == '\r' || l.back() == ' ')) l.remove_suffix(1);
     if (l.empty()) return true;
-    for (const char* k : {"box =", "polygon =", "material =", "[region ", "[contact ", "patch", "layered =", "domain =", "kind =", "          "}) {
+    for (const char* k : {"box =", "polygon =", "material =", "overlap =", "[region ", "[contact ", "patch", "layered =", "domain =", "kind =", "          "}) {
         if (l.starts_with(k)) return true;
     }
     return false;
@@ -815,4 +815,123 @@ TEST_CASE("app geometry: slanted polygons drawn and edited exactly, and the deck
     REQUIRE(d);
     const auto b = NiTCAD::deck::build(*d);
     if (!b) FAIL(b.error().message);
+}
+
+// --- Unit 26m slice 1 (MT4, MT5; MC6) ----------------------------------------------------------------------------
+
+namespace {
+
+std::string build_message(const std::string& text) {
+    const auto d = NiTCAD::deck::parse(text, "t.deck");
+    if (!d) return d.error().message;
+    const auto p = NiTCAD::deck::build(*d);
+    return p ? std::string() : p.error().message;
+}
+
+}  // namespace
+
+TEST_CASE("app geometry: overlap = fill read, written by a minimal edit and built (Unit 26m MT4)", "[app][geometry][overlap]") {
+    Geometry g = must_read(layered_deck);
+    const int r = add_box(g, {{5000, 6000}, {15000, 9000}}, "sio2");  // over the p background, the n well and the oxide
+    REQUIRE(r == 3);
+    CHECK_FALSE(set_overlap(g, 0, true));  // the background has no shape
+    CHECK_FALSE(set_overlap(g, r, false));
+    REQUIRE(set_overlap(g, r, true));
+    std::string out = must_write(layered_deck, g);
+    CHECK(out.find("\n[region sio2_1]\nmaterial = sio2\noverlap = fill\nbox = 0.5um 1.5um 0.6um 0.9um\n") != std::string::npos);
+    CHECK(only_geometry(layered_deck, out) == "");
+    CHECK(must_read(out).regions[3].fill);
+    CHECK(strip(must_read(out)) == strip(g));
+    CHECK(paint_order(g) == std::vector<int>{3, 1, 2});
+    CHECK(build_message(out) == "");
+    // A kept region's line goes in after its material and out again, the deck coming back byte for byte.
+    Geometry k = must_read(layered_deck);
+    REQUIRE(set_overlap(k, 2, true));
+    out = must_write(layered_deck, k);
+    CHECK(out.find("[region oxide]\nmaterial = sio2\noverlap = fill\nbox = 0   2um  0.8um 1um\n") != std::string::npos);
+    REQUIRE(set_overlap(k, 2, false));
+    CHECK(must_write(layered_deck, k) == layered_deck);
+}
+
+namespace {
+
+// Silicon with sio2 blocks drawn inside it (Unit 26m slice 1's transforms).
+const std::string blocks_deck = R"([mesh]
+type = generate2d
+layered = on
+domain = 0 2um 0 1um
+patch source = 0 0, 0 1um
+patch drain = 2um 0, 2um 1um
+max_size = 0.25um
+interface_resolution = 20nm
+
+[region si]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact source]
+kind = ohmic
+patch = source
+
+[contact drain]
+kind = ohmic
+patch = drain
+
+[equilibrium]
+)";
+
+}  // namespace
+
+TEST_CASE("app geometry: Array, Mirror, Align and the quarter turn, each one edit that builds (Unit 26m MT5, MC6)", "[app][geometry][transform]") {
+    Geometry g0 = must_read(blocks_deck);
+    REQUIRE(build_message(blocks_deck) == "");
+    const int r = add_box(g0, {{1500, 2000}, {3000, 5000}}, "sio2");
+    REQUIRE(r == 1);
+    const ShapeRef s{r, 0};
+    {
+        Geometry g = g0;
+        CHECK(array_shape(g, s, 0, 0, 3) == -1);
+        CHECK(array_shape(g, s, 2500, 0, 101) == -1);
+        REQUIRE(array_shape(g, s, 2500, 0, 3) == 2);  // fins at 0.15, 0.4 and 0.65um
+        REQUIRE(g.regions.size() == 4);
+        CHECK(g.regions[3].shapes[0].points == std::vector<Pt>{{6500, 2000}, {8000, 5000}});
+        const std::string out = must_write(blocks_deck, g);
+        CHECK(only_geometry(blocks_deck, out) == "");
+        CHECK(strip(must_read(out)) == strip(g));
+        CHECK(build_message(out) == "");
+    }
+    {
+        Geometry g = g0;
+        REQUIRE(mirror_shape_at(g, s, true, 20000));  // across x = 1um, into the n well
+        CHECK(g.regions[1].shapes[0].points == std::vector<Pt>{{17000, 2000}, {18500, 5000}});
+        CHECK(build_message(must_write(blocks_deck, g)) == "");
+        Geometry c = g0;
+        REQUIRE(mirror_shape_at(c, s, false, 2000 + 5000));  // about its own centre: a box is symmetric
+        CHECK(c == g0);
+        // A polygon keeps its orientation.
+        Geometry p = must_read(layered_deck);
+        REQUIRE(mirror_shape_at(p, {1, 0}, true, 30000));
+        CHECK(polygon_ok(p.regions[1].shapes[0].points));
+        CHECK(p.regions[1].shapes[0].bounds() == Rect{{10000, 0}, {20000, 8000}});
+    }
+    {
+        Geometry g = g0;
+        REQUIRE(rotate_shape(g, s));
+        CHECK(g.regions[1].shapes[0].points == std::vector<Pt>{{750, 2750}, {3750, 4250}});
+        for (int k = 0; k < 3; ++k) REQUIRE(rotate_shape(g, s));
+        CHECK(g == g0);
+        CHECK(build_message(must_write(blocks_deck, g)) == "");
+    }
+    {
+        Geometry g = g0;
+        const int q = add_box(g, {{6000, 1500}, {7500, 3500}}, "sio2");
+        CHECK_FALSE(align_shapes(g, {{q, 0}}, 2, 1500));  // there already
+        REQUIRE(align_shapes(g, {{q, 0}, {q, 0}}, 2, 1000));
+        CHECK(g.regions[static_cast<std::size_t>(q)].shapes[0].points == std::vector<Pt>{{6000, 1000}, {7500, 3000}});
+        CHECK(build_message(must_write(blocks_deck, g)) == "");
+        CHECK_FALSE(align_shapes(g, {{q, 7}}, 2, 0));
+        CHECK_FALSE(align_shapes(g, {{q, 0}}, 4, 0));
+    }
 }

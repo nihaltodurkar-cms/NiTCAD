@@ -1307,3 +1307,64 @@ interface_resolution = 0.08nm
     CHECK(p->device.interface_certificate() != nullptr);
     CHECK(p->device.contacts().size() == 4);
 }
+
+TEST_CASE("deck build: overlap = fill takes only what no earlier shape covers (Unit 26m MT4, MC5)", "[deck][overlap]") {
+    const std::string head = R"(
+[mesh]
+type = generate2d
+layered = on
+domain = 0 2um 0 1um
+patch source = 0 0, 0 0.6um
+patch body = 0.2um 0, 0.8um 0
+max_size = 0.25um
+interface_resolution = 20nm
+
+[region p]
+material = silicon
+
+[region n]
+material = silicon
+polygon = 1um 0, 2um 0, 2um 0.5um, 2um 0.8um, 1um 0.8um
+)";
+    const std::string tail = R"(
+[doping]
+profile = acceptor constant 1e16
+
+[contact source]
+kind = ohmic
+patch = source
+
+[contact body]
+kind = ohmic
+patch = body
+
+[equilibrium]
+)";
+    const auto same = [](const deck::Plan& a, const deck::Plan& b) {
+        return io::mesh_digest(a.device.mesh()) == io::mesh_digest(b.device.mesh()) && std::ranges::equal(a.device.node_region(), b.device.node_region());
+    };
+    // Over the n well too, filling: only the p part is taken, as the box cut to it.
+    const deck::Plan fill = must(head + "\n[region cap]\nmaterial = sio2\noverlap = fill\nbox = 0.5um 1.5um 0.6um 0.8um\n" + tail);
+    const deck::Plan cut = must(head + "\n[region cap]\nmaterial = sio2\nbox = 0.5um 1um 0.6um 0.8um\n" + tail);
+    const deck::Plan over = must(head + "\n[region cap]\nmaterial = sio2\nbox = 0.5um 1.5um 0.6um 0.8um\n" + tail);
+    CHECK(same(fill, cut));
+    CHECK_FALSE(same(fill, over));
+    // Over the background only: the same bits as replace; `overlap = replace` the default.
+    const deck::Plan a = must(head + "\n[region cap]\nmaterial = sio2\noverlap = fill\nbox = 0 1um 0.8um 1um\n" + tail);
+    const deck::Plan b = must(head + "\n[region cap]\nmaterial = sio2\nbox = 0 1um 0.8um 1um\n" + tail);
+    const deck::Plan c = must(head + "\n[region cap]\nmaterial = sio2\noverlap = replace\nbox = 0 1um 0.8um 1um\n" + tail);
+    CHECK(same(a, b));
+    CHECK(same(b, c));
+    // The errors, on their lines.
+    const auto fails = [](const std::string& text, std::string_view message) {
+        const auto p = plan_of(text);
+        REQUIRE_FALSE(p.has_value());
+        CAPTURE(p.error().message);
+        CHECK(p.error().message.find(message) != std::string::npos);
+    };
+    fails(head + "\n[region cap]\nmaterial = sio2\noverlap = under\nbox = 0 1um 0.8um 1um\n" + tail, ":20: overlap is 'replace' or 'fill'");
+    fails(head + "\n[region cap]\nmaterial = sio2\noverlap = fill\noverlap = fill\nbox = 0 1um 0.8um 1um\n" + tail, ":21: a second 'overlap'");
+    fails("[mesh]\ntype = tensor\nx = 0, 1um, 2um\n[region si]\nmaterial = silicon\noverlap = fill\n[contact a]\nkind = ohmic\npatch = x_min\n"
+          "[contact b]\nkind = ohmic\npatch = x_max\n[equilibrium]\n",
+          ":6: overlap is for a layered mesh");
+}

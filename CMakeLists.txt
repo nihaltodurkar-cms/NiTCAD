@@ -734,6 +734,7 @@ endif()
 
 # --- deck layer (the text input deck, its meaning and the batch runner; Unit 31) ----------
 add_library(nitcad_deck STATIC
+  src/deck/parameters.cpp
   src/deck/syntax.cpp
   src/deck/build.cpp
   src/deck/run.cpp)
@@ -744,6 +745,7 @@ target_link_libraries(nitcad_deck PUBLIC NiTCAD::base NiTCAD::io NiTCAD::solve)
 add_executable(nitcad_deck_test
   tests/deck/syntax_test.cpp
   tests/deck/build_test.cpp
+  tests/deck/parameters_test.cpp
   tests/deck/run_test.cpp
   tests/deck/analyses_test.cpp
   tests/deck/analyses_run_test.cpp
@@ -1079,7 +1081,8 @@ add_library(nitcad_app STATIC
   src/app/integration.cpp
   src/app/geometry.cpp
   src/app/solid.cpp
-  src/app/solid_view.cpp)
+  src/app/solid_view.cpp
+  src/app/modeller.cpp)
 add_library(NiTCAD::app ALIAS nitcad_app)
 target_include_directories(nitcad_app PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_app PUBLIC NiTCAD::deck NiTCAD::render NiTCAD::analysis NiTCAD::io)
@@ -1102,7 +1105,7 @@ add_executable(nitcad_app_test
   tests/app/compare_test.cpp
   tests/app/integration_test.cpp
   tests/app/geometry_test.cpp
-  tests/app/solid_test.cpp tests/app/solid_view_test.cpp)
+  tests/app/solid_test.cpp tests/app/solid_view_test.cpp tests/app/modeller_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
 # The view tests compare the app's images with nitcad plot's (WG4's choices).
 add_dependencies(nitcad_app_test nitcad)
@@ -1121,7 +1124,8 @@ add_library(nitcad_app_window STATIC
   src/app/pages.cpp
   src/app/self_test.cpp
   src/app/geometry_page.cpp
-  src/app/solid_page.cpp)
+  src/app/solid_page.cpp
+  src/app/modeller_bar.cpp)
 target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid dwmapi advapi32 d2d1 dwrite)
 # The start page lists the examples beside the executable, else the source tree's (26-3, VQ11).
 target_compile_definitions(nitcad_app_window PRIVATE NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
@@ -1131,7 +1135,7 @@ add_executable(nitcad-app WIN32 app/main.cpp app/icon/nitcad.rc)
 target_link_libraries(nitcad-app PRIVATE nitcad_app_window)
 add_executable(nitcad_app_window_test tests/app/window_test.cpp tests/app/self_test_test.cpp
   tests/app/analysis_window_test.cpp tests/app/hover_window_test.cpp tests/app/geometry_window_test.cpp
-  tests/app/solid_window_test.cpp tests/app/solid_check_window_test.cpp)
+  tests/app/solid_window_test.cpp tests/app/solid_check_window_test.cpp tests/app/modeller_window_test.cpp)
 target_link_libraries(nitcad_app_window_test PRIVATE nitcad_app_window Catch2::Catch2WithMain dxgi dxguid)
 target_compile_definitions(nitcad_app_window_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
   NITCAD_APP_PATH="$<TARGET_FILE:nitcad-app>" NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")

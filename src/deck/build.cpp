@@ -115,6 +115,8 @@ struct RegionSpec {
     std::vector<const Entry*> boxes, polygons, seeds;
     std::vector<const Entry*> prisms;    // Unit 26l (SD1): layered generate3d meshes
     std::vector<const Entry*> extrudes;  // Unit 53 (FD13): extrude3d meshes
+    const Entry* overlap = nullptr;      // Unit 26m (MT4): overlap = replace | fill, layered meshes only
+    bool fill = false;
 };
 
 class Builder {
@@ -241,6 +243,7 @@ private:
     std::vector<RegionSpec> regions_;
     MeshType type_ = MeshType::tensor;
     std::string type_name_;  // the [mesh] type as written (extrude3d for a file mesh from a complex)
+    bool layered_mesh_ = false;  // a layered generate2d or generate3d mesh (the only ones taking a region's overlap)
     std::optional<mesh::GeneratedMesh> generated_;
     // Unit 17: the loop's refinement (null: the deck's mesh) and what [adapt] needs of the mesh.
     const solve::MeshRefinement* refine_ = nullptr;
@@ -325,6 +328,13 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         if (e.key == "seed") { spec.seeds.push_back(&e); continue; }
         if (e.key == "extrude") { spec.extrudes.push_back(&e); continue; }
         if (e.key == "prism") { spec.prisms.push_back(&e); continue; }
+        if (e.key == "overlap") {
+            if (spec.overlap) return std::unexpected(at(e.line, "a second 'overlap'"));
+            if (e.value != "replace" && e.value != "fill") return std::unexpected(at(e.line, "overlap is 'replace' or 'fill'"));
+            spec.overlap = &e;
+            spec.fill = e.value == "fill";
+            continue;
+        }
         if (auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
             if (e.key == "band_to_band.direct_gap") {
                 NITCAD_DECK_TRY(v, flag(e));
@@ -530,7 +540,9 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
     if (domain != nullptr && !layered) return std::unexpected(at(domain->line, "domain is for a layered generate2d mesh (layered = on)"));
     if (layered) {
         // GD1: one region without shapes is the background; every box and polygon, in deck order, replaces what it
-        // covers; the kernel resolves the layers into the tiling (GD2).
+        // covers (or, in a region with overlap = fill, takes only what no earlier shape covers: Unit 26m MT4); the
+        // kernel resolves the layers into the tiling (GD2).
+        layered_mesh_ = true;
         mesh::LayeredGeometry2D l;
         std::vector<std::pair<const Entry*, std::int32_t>> shapes;
         for (std::size_t r = 0; r < regions_.size(); ++r) {
@@ -549,7 +561,7 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
         double lo[2] = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
         double hi[2] = {-lo[0], -lo[1]};
         for (const auto& [e, r] : shapes) {
-            mesh::LayeredShape shape{{}, r};
+            mesh::LayeredShape shape{{}, r, regions_[static_cast<std::size_t>(r)].fill};
             if (e->key == "box") {
                 NITCAD_DECK_TRY(b, box(*e, 2));
                 shape.vertices = {{b.bounds[0], b.bounds[2], 0.0}, {b.bounds[1], b.bounds[2], 0.0},
@@ -707,6 +719,7 @@ std::expected<void, base::Error> Builder::generated_3d(const Section& s) {
 // background, and every region `box` (x0 x1 y0 y1 z0 z1) and `prism` (<axis> <from> <to>, u v, ...) is painted in
 // deck order over what it covers; the kernel resolves the layers into the polyhedral complex (SD2).
 std::expected<void, base::Error> Builder::layered_3d(const Section& s) {
+    layered_mesh_ = true;
     mesh::LayeredGeometry3D l;
     mesh::MeshOptions3D o;
     const Entry* domain = nullptr;
@@ -751,6 +764,7 @@ std::expected<void, base::Error> Builder::layered_3d(const Section& s) {
     for (const auto& [e, r] : solids) {
         mesh::LayeredSolid v;
         v.region = r;
+        v.fill = regions_[static_cast<std::size_t>(r)].fill;
         if (e->key == "box") {
             NITCAD_DECK_TRY(b, box(*e, 3));
             v.kind = mesh::LayeredSolid::Kind::box;
@@ -1123,6 +1137,11 @@ std::expected<void, base::Error> Builder::build_mesh(device::DeviceDescription& 
     case MeshType::file: made = file_mesh(s, d); break;
     }
     if (!made) return made;
+    if (!layered_mesh_) {
+        for (const RegionSpec& g : regions_) {
+            if (g.overlap) return std::unexpected(at(g.overlap->line, "overlap is for a layered mesh (generate2d or generate3d, layered = on)"));
+        }
+    }
     if (generated_) {
         d.mesh = generated_->mesh;
         d.node_region.assign(generated_->node_region.begin(), generated_->node_region.end());
@@ -1142,45 +1161,9 @@ std::expected<void, base::Error> Builder::doping(device::DeviceDescription& d) c
     if (const Section* s = single("doping")) {
         for (const Entry& e : s->entries) {
             if (e.key != "profile") return std::unexpected(unknown(e, *s));
-            const auto t = tokens(e.value);
-            if (t.size() < 3) return std::unexpected(at(e.line, "a profile starts '<donor|acceptor> <shape> <peak>'"));
-            device::DopingProfile p;
-            if (t[0] == "donor") p.dopant = device::Dopant::donor;
-            else if (t[0] == "acceptor") p.dopant = device::Dopant::acceptor;
-            else return std::unexpected(at(e.line, "the dopant is donor or acceptor"));
-            if (t[1] == "constant") p.shape = device::DepthShape::constant;
-            else if (t[1] == "gaussian") p.shape = device::DepthShape::gaussian;
-            else if (t[1] == "erfc") p.shape = device::DepthShape::erfc;
-            else return std::unexpected(at(e.line, "the shape is constant, gaussian or erfc"));
-            NITCAD_DECK_TRY(peak, lift(e.line, number(t[2])));
-            p.peak_cm3 = peak;
-            for (std::size_t k = 3; k < t.size(); ++k) {
-                const std::size_t eq = t[k].find('=');
-                if (eq == std::string_view::npos) return std::unexpected(at(e.line, "expected name=value, not '" + std::string(t[k]) + "'"));
-                const std::string_view name = t[k].substr(0, eq);
-                const std::string_view value = t[k].substr(eq + 1);
-                static constexpr std::array<std::string_view, 3> axes{"x", "y", "z"};
-                const auto a = std::find(axes.begin(), axes.end(), name);
-                if (name == "axis") {
-                    const auto v = std::find(axes.begin(), axes.end(), value);
-                    if (v == axes.end()) return std::unexpected(at(e.line, "axis is x, y or z"));
-                    p.axis = static_cast<int>(v - axes.begin());
-                } else if (name == "center" || name == "width" || name == "lateral") {
-                    NITCAD_DECK_TRY(v, lift(e.line, length(value)));
-                    (name == "center" ? p.center : name == "width" ? p.width : p.lateral) = v;
-                } else if (a != axes.end()) {
-                    const auto range = items(value, ':');
-                    if (range.size() != 2) return std::unexpected(at(e.line, "a window is <lo>:<hi>"));
-                    NITCAD_DECK_TRY(lo, lift(e.line, length(range[0])));
-                    NITCAD_DECK_TRY(hi, lift(e.line, length(range[1])));
-                    const auto k3 = static_cast<std::size_t>(a - axes.begin());
-                    p.lo[k3] = lo;
-                    p.hi[k3] = hi;
-                } else {
-                    return std::unexpected(at(e.line, "unknown profile attribute '" + std::string(name) + "'"));
-                }
-            }
-            profiles.push_back(p);
+            const auto p = parse_profile(e.value);
+            if (!p) return std::unexpected(at(e.line, p.error()));
+            profiles.push_back(*p);
         }
     }
     auto sampled = device::sample(profiles, d.mesh, d.node_region, d.regions);
@@ -2210,14 +2193,86 @@ std::expected<Plan, base::Error> Builder::run() {
 
 }  // namespace
 
+std::expected<device::DopingProfile, std::string> parse_profile(std::string_view value) {
+    using namespace detail;
+    const auto t = tokens(value);
+    if (t.size() < 3) return std::unexpected(std::string("a profile starts '<donor|acceptor> <shape> <peak>'"));
+    device::DopingProfile p;
+    if (t[0] == "donor") p.dopant = device::Dopant::donor;
+    else if (t[0] == "acceptor") p.dopant = device::Dopant::acceptor;
+    else return std::unexpected(std::string("the dopant is donor or acceptor"));
+    if (t[1] == "constant") p.shape = device::DepthShape::constant;
+    else if (t[1] == "gaussian") p.shape = device::DepthShape::gaussian;
+    else if (t[1] == "erfc") p.shape = device::DepthShape::erfc;
+    else return std::unexpected(std::string("the shape is constant, gaussian or erfc"));
+    const auto peak = number(t[2]);
+    if (!peak) return std::unexpected(peak.error());
+    p.peak_cm3 = *peak;
+    for (std::size_t k = 3; k < t.size(); ++k) {
+        const std::size_t eq = t[k].find('=');
+        if (eq == std::string_view::npos) return std::unexpected("expected name=value, not '" + std::string(t[k]) + "'");
+        const std::string_view name = t[k].substr(0, eq);
+        const std::string_view v = t[k].substr(eq + 1);
+        static constexpr std::array<std::string_view, 3> axes{"x", "y", "z"};
+        const auto a = std::find(axes.begin(), axes.end(), name);
+        if (name == "axis") {
+            const auto w = std::find(axes.begin(), axes.end(), v);
+            if (w == axes.end()) return std::unexpected(std::string("axis is x, y or z"));
+            p.axis = static_cast<int>(w - axes.begin());
+        } else if (name == "center" || name == "width" || name == "lateral") {
+            const auto l = length(v);
+            if (!l) return std::unexpected(l.error());
+            (name == "center" ? p.center : name == "width" ? p.width : p.lateral) = *l;
+        } else if (a != axes.end()) {
+            const auto range = items(v, ':');
+            if (range.size() != 2) return std::unexpected(std::string("a window is <lo>:<hi>"));
+            const auto lo = length(range[0]);
+            if (!lo) return std::unexpected(lo.error());
+            const auto hi = length(range[1]);
+            if (!hi) return std::unexpected(hi.error());
+            const auto k3 = static_cast<std::size_t>(a - axes.begin());
+            p.lo[k3] = *lo;
+            p.hi[k3] = *hi;
+        } else {
+            return std::unexpected("unknown profile attribute '" + std::string(name) + "'");
+        }
+    }
+    return p;
+}
+
+std::string profile_text(const device::DopingProfile& p) {
+    // Lengths in cm, shortest round-trip: the same doubles read back.
+    static constexpr const char* axes[] = {"x", "y", "z"};
+    std::string out = std::string(p.dopant == device::Dopant::donor ? "donor " : "acceptor ") +
+                      (p.shape == device::DepthShape::constant ? "constant " : p.shape == device::DepthShape::gaussian ? "gaussian " : "erfc ") +
+                      std::format("{}", p.peak_cm3);
+    if (p.shape != device::DepthShape::constant || p.axis != 0) out += std::string(" axis=") + axes[p.axis];
+    if (p.shape != device::DepthShape::constant) out += std::format(" center={}cm width={}cm", p.center, p.width);
+    for (int k = 0; k < 3; ++k) {
+        if (k == p.axis) continue;
+        const auto i = static_cast<std::size_t>(k);
+        if (std::isinf(p.lo[i]) && std::isinf(p.hi[i])) continue;
+        out += std::format(" {}={}cm:{}cm", axes[k], p.lo[i], p.hi[i]);
+    }
+    if (p.lateral != 0.0) out += std::format(" lateral={}cm", p.lateral);
+    return out;
+}
+
+
+// Unit 26m MT8: the parameters substituted first, so the build reads values as written out (the plan keeps no view
+// into the deck it read; [adapt] keeps the deck as given and substitutes again per pass).
 std::expected<Plan, base::Error> build(const Deck& deck) {
-    auto plan = Builder(deck, nullptr).run();
+    const auto read = substituted(deck);
+    if (!read) return std::unexpected(read.error());
+    auto plan = Builder(*read, nullptr).run();
     if (plan && plan->adapt) plan->adapt->deck = std::make_shared<const Deck>(deck);
     return plan;
 }
 
 std::expected<Plan, base::Error> build(const Deck& deck, const solve::MeshRefinement& refinement) {
-    return Builder(deck, &refinement).run();
+    const auto read = substituted(deck);
+    if (!read) return std::unexpected(read.error());
+    return Builder(*read, &refinement).run();
 }
 
 solve::AdaptableMesh adaptable(Plan plan) {

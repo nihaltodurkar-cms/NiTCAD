@@ -1855,6 +1855,387 @@ limits found), 6.14 (as built, the modeller) and the two 11.3 rows (geometry and
 Left for later units: curved solids, oblique planes, slanted sidewalls crossed by a plane (the generator's 4 s rule),
 interface pieces with holes, snapping onto slanted faces.
 
+### Unit 26m — minimal modeller tools (proposed 2026-11-21; on `app/modeller-tools`)
+
+**Owner request (2026-11-21):** after "too many bugs, visually bad" on the 26l modeller and the drag-to-start fix,
+the owner asked for a minimal, easy modeller: tool groups (Solid, Edges, Faces, Transform, and later Advanced and
+Semiconductor), then "check Sentaurus, Silvaco and other CAD modellers … improve the plan", then "ignore the
+emulator things" (no process emulation), then a button that fixes the camera, with the view moved by the mouse when
+it is off. The design canvas the owner approved ("Its good plan it") is the private artifact
+`DkqARw6W5TT8wz9nKHsGXr` (two artboards: the Geometry tab and the 23 tools). The branch starts from
+`app/solid-modeller` `a8ca49f` (Unit 26l, PR #111 open), since every tool edits 26l's model.
+
+**Where things stand.** The 3D modeller (26l) has Select, Box, Prism, Contact, Pan and Measure in a fixed tool row,
+a move gizmo, face handles, prism vertex handles, duplicate and mirror as model operations, slanted prisms, live
+validation and the drag-to-start gesture. The camera orbits on the right button and pans on the middle one; nothing
+fixes it. The 2D editor (26k) has its own tool row. The deck already has `[doping]` profiles (`constant`,
+`gaussian`, `erfc`, with axis, centre, width and lateral spread) and the mesh keys `max_size` and `layer`; it has no
+named values. Solids only replace what they cover.
+
+**What the canvas fixed, and where it came from:**
+- **Selection decides the tools.** Picking a solid, an edge or a face opens its group as a small floating bar beside
+  it; with nothing picked, Solid. Six groups, at most five tools showing.
+- **Every tool is one drag.** The value shows at the cursor; a typed number makes it exact; Enter applies, Esc
+  cancels; a refusal (the build's own check) shows before the button is released.
+- **From Sentaurus Structure Editor:** an overlap rule per solid ("replaces" or "fills only empty space") in place
+  of Union, Subtract and Intersect; the deck line each action writes is shown as it is dragged (as SDE echoes Scheme);
+  dragged values can be named parameters (as Workbench substitutes them); doping and refinement are drawn like
+  geometry.
+- **Camera:** a "Camera fixed / Camera free" button; free, the mouse moves the view of the 3D model or the 2D
+  layout; fixed, drags only edit the model.
+
+**Standing conditions:** as Unit 26l. The deck is the only source of truth, written by minimal edits through the
+deck editor's undo. Every deck that builds today builds to the same bits (new keys opt-in). Win32 + D3D12 + Direct2D
+only, no new dependency. The models have no Win32 type. Criteria fixed before code. Targeted Release tests per
+slice; full suites and Debug only on the owner's word; builds `-j 6`, runs on 6 threads. No screen automation.
+Nothing pushed or merged without authorization.
+
+**Left out:** process emulation (deposit, etch, fill, planarize, spacer, masks; owner, 2026-11-21); sweeping
+geometry parameters across runs (a batch-run unit); variable fillets and rounded 3D corners (boxes and prisms cannot
+hold them); oblique planes and fillets on edges not parallel to a prism's axis (26l SQ4); relaxing the 3D
+generator's rules; GDS/STEP import.
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| MT1 | 0 | **Camera lock and mouse navigation** in the 3D modeller and the 2D editor. A toggle button "Camera free / Camera fixed" (lock icon, pressed when fixed; shortcut L). Free: left-drag on empty background orbits in 3D and pans in 2D; Shift+left-drag and middle-drag pan; right-drag orbits (as now); the wheel zooms about the cursor. Fixed: no mouse drag or wheel moves the view; every drag goes to the model; view presets and Reset view still work. A Reset view button. The state is per view and kept in the view settings. | Orbit pitch kept off the poles as now. |
+| MT2 | 0 | **The context toolbar.** The fixed tool row becomes a group switcher (Solid, Edges, Faces, Transform, Doping, Mesh). The armed group's tools float in a small bar beside the selection's screen bounds (clamped inside the viewport, not over the picked thing); with nothing picked, in the viewport's top-left corner. Picking a solid, an edge or a face opens its group; the bar's line names the armed tool and how to drag it. Section and Measure move to the view's corner. The same switcher on the 2D editor. | Pure presentation over 26l/26k tools. |
+| MT3 | 0 | **The live deck line and the value chip.** The status bar shows the deck line the current drag will write (the same text the minimal edit produces), updated each frame. The chip at the cursor shows the value; digits typed during a drag set it exactly (units as the deck's), Enter applies, Esc cancels. | |
+| MT4 | 1 | **The overlap rule.** A region's solid may say `overlap = fill` (default `replace`): it takes only the cells no earlier solid holds (the background's), in both layered kernels (2D 26k, 3D 26l). Set from the inspector's two-way switch or the Solid group's Overlap tool (click a solid). | Exact: decided per cell on grid indices, as the replace rule. |
+| MT5 | 1 | **Transform group:** Move (gizmo, as now), Copy (Alt+drag, or the tool: drag and release to place; one new region), Mirror (click a plane through the solid's centre or a picked face; Shift: a quarter turn about the view axis instead), Array (drag the pitch, the wheel sets the count; writes one region per copy), Align (click a face; the selected solids' matching faces move to its plane). | Each one deck edit and one undo step. |
+| MT6 | 2 | **Faces group:** Push/Pull (the face handle, as now), Inset (drag inward for the margin: a new solid on the face, inset, of the chosen material, then pushed or pulled), Extrude (drag off a face: a new solid on it), Contact (as now). | Inset and Extrude are new solids, so they obey the overlap rule. |
+| MT7 | 2 | **Edges group and Cylinder,** on edges parallel to a prism's axis (a box is first written as its rectilinear prism): Chamfer (one slanted segment), Fillet (an arc of segments, MQ4), Round vertex (a prism polygon's corner, or a 2D corner in the 2D editor), Taper (drag the edge sideways; the wall angle shows; 26l slanted prisms). Cylinder in the Solid group: a prism whose polygon is a regular polygon (MQ4), drawn by dragging the radius. | Exact as 26l SD6; the generator's refusals shown, not loosened. |
+| MT8 | 3 | **Named parameters.** `[parameters]` holds `name = <length or number>`; a length value anywhere in `[mesh]`, region solids and `[doping]` may be `$name` or `$a + $b`, `$a - 5nm` (MQ1). Pressing N during a drag names the value (a new parameter, or an existing one picked); the model then writes the reference, and dragging a tied dimension edits the parameter's line. The inspector lists the parameters, editable. | Substituted before the build parses values, errors placed on the referring line. |
+| MT9 | 4 | **Doping group:** Region profile (click a solid: a `constant` profile over its box; drag up or down for the level, a log scale), Implant (drag a window on a face, then its peak depth and lateral spread: a `gaussian` profile), Junction (drag where the junction sits: an `erfc` profile's depth). Profiles show as translucent boxes coloured by concentration; each writes one `[doping]` profile by minimal edit. | Uses the existing profile keys only. |
+| MT10 | 4 | **Mesh group:** Max size (drag anywhere: `max_size`; the node count estimate shows), Interface layers (click an interface: `layer`, drag for the count and first thickness), Refine box (drag a box, then inside it for the size: a new opt-in `[mesh]` key `refine = <lo point>  <hi point>  <size>`, handed to the generators' existing `SizeBox` list, 2D and 3D; MQ5). | No generator change. |
+| MT12 | 2 | **Meshable by construction** (the 3D generator's rules, in units of `interface_resolution` s: feature lines ≥ 6 s, unrelated interfaces ≥ 4 s apart, sectors ≥ 60°, no holed interface piece, no interface ending on a domain edge or corner, pieces wide enough for the 1.5 s inset). (1) **Automatic s:** the modeller computes the largest s the layout allows (the shortest feature over 6, the thinnest gap over 4, the narrowest piece over its inset) and shows it; written as `interface_resolution` unless the deck sets one. (2) **Adjusted before release:** a fillet's or cylinder's segment count drops until each segment is ≥ 6 s; Array, Align, Copy and Inset snap to keep a 4 s margin from unrelated interfaces and from the domain's edges; what cannot be adjusted (a holed piece, a sector under 60°) is shown as the refusal during the drag, naming the rule. (3) **Node estimate:** the expected node count (from s, `max_size` and the feature lines' graded pairs) shows live in the chip and the status bar. | The rules themselves unchanged here; lifting them is Unit 64. |
+| MT11 | — | **Commits:** this proposal, a commit per slice, then ARCHITECTURE (6.14, the deck chapter for `overlap` and `[parameters]`, 11.3) and the records. The owner may stop after any slice. | |
+
+**Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
+
+| # | Criterion |
+|---|---|
+| MC1 | **Nothing else moves:** every example and test deck builds to the same bits; the 26k and 26l test suites pass unchanged except where a test names the removed fixed tool row (recorded). |
+| MC2 | **Camera lock:** window tests by messages: with the camera fixed, left, middle and right drags and the wheel leave the camera bit-identical and a left drag on a face still resizes it; free, a left drag on empty background changes yaw/pitch in 3D and the pan in 2D, the wheel the zoom; Reset view restores the start camera exactly; the state survives a reload of the deck. |
+| MC3 | **Context toolbar:** for each selection kind the right group opens; the bar's rectangle lies inside the viewport and does not overlap the selection's screen bounds at 96, 144 and 192 dpi and six camera directions (table test, except where the selection fills the view: then the corner). |
+| MC4 | **Deck line:** for every tool, the line shown during the drag equals, byte for byte, the line the applied edit writes. |
+| MC5 | **Overlap rule exact:** 1000 seeded random layouts in 2D and in 3D with `fill` solids mixed in pass `check_complex` / the 2D tiling check; the region at 200 random points equals a brute-force layered resolution with the fill rule; `fill` on a solid that only covers background gives the same bits as `replace`. |
+| MC6 | **Transform, Faces, Edges:** each tool's edit round-trips (undo restores the deck byte-identical; redo replays), and a table of cases builds (Array of 3 fins, Copy, Mirror, Align, Inset, Extrude, Chamfer and Fillet on a fin's top edges, Taper, a Cylinder nanowire), or is refused with the build's own message where the generator's rules refuse it (recorded). |
+| MC7 | **Parameters:** decks with references build to the same bits as the same decks with the values written out; an undefined name, a cycle, or a non-length where a length is needed is an error on the referring line; changing `Lg` in the inspector moves every tied face. |
+| MC8 | **Doping and mesh tools:** each writes exactly the profile or mesh line expected (table), and the built device's net doping at sample points equals the profile's formula to 1e-12 relative. |
+| MC9 | **Speed:** with 100 solids on WARP, an orbit frame ≤ 16 ms median (26l SE5 unchanged); the floating bar and the deck line add ≤ 1 ms per frame. |
+| MC10 | **Interaction:** a FinFET drawn by window messages only (box, Array of fins, Fillet on the fin tops, Extrude a gate over them with `fill`, Contacts, a Gaussian source/drain implant, one named `Lg`) builds and runs its equilibrium (coarse, ≤ 20k nodes). |
+| MC11 | **Mutants:** at least 8 per slice caught (e.g. the fixed camera still zooming on the wheel; `fill` taking a non-background cell; a parameter substituted on the wrong line; the deck line built from stale drag state). |
+| MC12 | **Layering:** models in `app` without Win32 headers; kernels in `mesh` without `app` or `deck`; parameters in `deck`; no new dependency. |
+| MC13 | **Meshable by construction (MT12):** for 500 seeded random layouts drawn with the tools, every layout the modeller accepts builds, and every one it refuses is refused by the build with the same message (no false accepts; false refusals counted and recorded). The automatic s is the largest that passes: s × 1.01 is refused by the build for each layout in a table. The node estimate is within ±30 % of the built mesh's node count on that table (recorded, not a gate, if missed). `refine` boxes build to the same bits as the same `SizeBox` list given to the generator directly. |
+
+**Questions (each with a recommendation; ruled by the standing "choose recommended" rule, 2026-11-11):**
+
+- **MQ1 — parameter syntax.** (a) `[parameters]` with `$name` references and only `+`/`-` of lengths, substituted
+  before parsing; the model writes `$x0 + $Lg` for a tied far face. (b) A full expression language (×, ÷,
+  functions). **Recommended (a)**: enough for tied dimensions and readable; (b) later if sweeps need it. Ruled (a).
+- **MQ2 — camera default.** (a) Free on open, fixed by the button or L. (b) Fixed on open. **Recommended (a)**: the
+  owner's complaint was not being able to move the view. Ruled (a).
+- **MQ3 — left-drag on empty background when free.** (a) Orbit in 3D, pan in 2D; drawing a new solid needs a tool
+  armed (or an empty deck's drag-to-start, unchanged). (b) Left-drag always rubber-band selects. **Recommended (a)**,
+  as the canvas; rubber-band selection with Shift held. Ruled (a).
+- **MQ4 — arcs.** (a) A fillet of radius r is n = max(2, ⌈θ/15°⌉) segments over its turn angle θ (6 for a right
+  angle); a cylinder 16 sides; both on the 0.1 nm quantum; where a segment is shorter than the generator's 6 s
+  trace, fewer segments and the reason shown. (b) A user-set count. **Recommended (a)** with the count editable in the
+  inspector. Ruled (a).
+- **MQ5 — Refine box.** Checked while proposing: both generators already take `SizeBox` lists
+  (`MeshOptions2D::boxes`, `MeshOptions3D::boxes`), and per-region `region_max_size`, but the deck exposes neither.
+  (a) A new opt-in `[mesh] refine` key mapped to `SizeBox`, so Refine box ships in slice 4 with no generator change.
+  (b) Leave it out. **Recommended (a)**. Ruled (a).
+- **MQ6 — the 2D editor.** (a) Gets MT1–MT3 and the Edges group's corner tools and the overlap rule; the 3D-only
+  tools are hidden there. (b) 3D only. **Recommended (a)**: one way of working in both. Ruled (a).
+
+**Risks:** the 3D generator's rules (26l SQ6) refuse some layouts. At the FinFET decks' s = 0.08 nm a 6-segment
+fillet needs r ≥ 23 s ≈ 1.9 nm and a 16-sided cylinder r ≥ 15 s ≈ 1.2 nm (arithmetic, not measured), so sizes are
+rarely the problem; MT12 keeps drawn layouts inside the rules. What stays refused: a nanowire through a gate (a holed
+interface piece), fins or fillets touching the domain's sides, a plane crossing a slanted wall, sectors under 60°.
+The first three are Unit 64; the last stays until measured (Unit 16 U12, the owner's ruling). Every non-right bend
+adds graded pairs along its whole length, so fillets may cost many nodes (MT12's estimate shows it); the floating bar and live deck line touch every drag path, so MC4 and MC9
+are the gates there; `[parameters]` is a deck change, so MC1 and MC7 guard every existing deck.
+
+**Slice 0 as built (MT1–MT3, 2026-11-21; owner "start"; Release, MSVC 14.51, 6 cores).** `app::modeller`
+(`include/NiTCAD/app/modeller.hpp`, no Win32): the groups and their tools, `navigation` (what a press does to the
+view, camera free or fixed), `place_bar`, `deck_line`, `Entry` (typed values). `ModellerBar` (`src/app/modeller_bar.*`,
+shared by both pages): the group switcher and the corner's buttons (Camera free/fixed (L), Reset view, Fit, Measure,
+Mesh) in the strip where the fixed tool row was, the floating bar (the armed group's tools and its line) and the value
+chip as children of the page over the canvas (the canvas clips siblings). Both pages: the camera lock on every drag,
+the Pan tool, Space and the wheel; picks open their group; the status bar shows the deck line of the drag (the edit's
+own writer on the in-progress model); the chip its value; typed digits (nm, um, cm; µm by default) set it, in the
+drag's direction, Enter applying, Esc cancelling. Typed values are taken by the 3D axis, face, move, plane, base and
+height drags and the 2D move and rectangle; on a two-axis drag they set the axis of the larger offset (recorded).
+- MC1: the 26k and 26l window tests pass unchanged (789 assertions in 22 cases with slice 0's; no test named the old
+  row); app unit tests 110/110. Decks untouched.
+- MC2, MC3, MC4: `tests/app/modeller_window_test.cpp` (6 cases) and `tests/app/modeller_test.cpp` (5 cases, 6000
+  random bar placements over 96/144/192 dpi). In the window table (3 dpi × 6 views) the bar never needed the corner.
+- MC9: deck line + bar placement with 100 solids, median 0.197 ms (≤ 1 ms); SE5 orbit 5.10 ms, drag 5.21 ms; GE5 2.93 ms.
+- MC11: 14/15 mutants caught; the survivor (the bar's overlap test removed) is equivalent, since a place beside the
+  selection never overlaps it.
+- Not done in slice 0 (recorded): Section stays in the inspector rather than the view's corner; Shift+left-drag pans in
+  3D (MT1), the 2D editor keeps Shift for the rubber band (MQ3); the camera state lives in the page (kept across
+  reloads and tab changes, not written to the view settings file). Whether the floating bar draws cleanly over the
+  D3D12 flip-model canvas needs the owner's eyes (no screen automation).
+
+**Slice 1 as built (MT4, MT5, 2026-11-21; owner "start slice 1"; Release, MSVC 14.51, 6 cores).** MT4: `[region]
+overlap = replace|fill` (layered meshes only; elsewhere a build error), `LayeredShape::fill` / `LayeredSolid::fill`.
+Both kernels paint in one order, replacing shapes top-first and then filling shapes bottom-first, the first to hold a
+cell taking it (the 3D slanted labeller: the top replacing solid of a slab, else its lowest filling one). The views
+draw and hit-test in the same order (`paint_order` in `app::geo` and `app::solid`). The 2D and 3D models read the
+key, and write it by minimal edits: after the material of a new region; replaced, removed or inserted after the
+material of a kept one. Set from the Solid group's Fill / Replace (fill unless every picked region already fills) or
+the inspector's switch. MT5: the Transform group is Move, then the modes Copy, Mirror, Array, Align (`Mode`; the
+armed one is `armed_key`). Copy (or Alt+drag in any mode) moves copies, the originals kept; a copy not moved, or
+cancelled by Esc, is none. Mirror is a click: 3D about the centre across the clicked face's axis (Ctrl: across that
+face's own plane; Shift: a quarter turn about the view's axis); 2D left-right (Ctrl: up-down; a side handle: across
+that side; Shift: a quarter turn). Array is a drag from the solid: the pitch, the wheel setting the count (2-100,
+whatever the camera), one region per copy keeping the material and `overlap`. Align is a click: the picked solids'
+(or shapes') matching face goes to the clicked face's plane (a domain face too; 2D: the side of the clicked bounds
+nearest the click). Model calls: `set_overlap`, `mirror_*_at`, `rotate_*`, `array_*`, `align_*` in both models. Each
+is one deck edit and one undo step.
+- MC5: `[overlap]` in the mesh tests: 1000 seeded layouts with fill shapes in 2D (seed 26131), in 3D rectilinear
+  (26132) and slanted (26133), each against a sequential oracle, exact; with a fill shape over background only, the
+  tiling is bit-identical to `replace`. Deck build: a fill box takes only what no earlier shape holds; the errors
+  (second key, bad value, non-layered mesh). The mesh `[layered]` tests: 30/30.
+- MC6: app tests `[overlap]` and `[transform]` (4 cases: read/write round trip, `only_geometry`, exact volumes, builds
+  of arrayed, mirrored, turned and aligned layouts; four quarter turns give the model back; an L prism turned keeps
+  its volume). Window tests (2 cases, by messages): Copy, Mirror, Align, Array with the wheel, Fill / Replace and the
+  inspector switch in 3D and 2D, every step undone to the byte and redone.
+- MC4: the deck line shown during the copy and array drags equals the line written (both window tests).
+- MC1: the 26k, 26l and slice 0 window tests pass unchanged (910 assertions in 24 cases with slice 1's); app unit
+  tests 114/114; deck tests pass. One test changed: `modeller_test`'s tool table, which names the group sizes (Solid
+  4, Transform 5) and the Duplicate button (removed; Copy replaces it).
+- MC9: deck line + bar with 100 solids median 0.159 ms (≤ 1 ms); SE5 orbit 4.81 ms, drag 4.85 ms.
+- MC11: 16/16 mutants caught (kernel orders 2D and 3D, deck build, readers and writers, the resolver, Array's count
+  and fill, Align's dedupe, Copy's cancel and unmoved press, the wheel during Array, Copy mode). Runs 4-16 sharded
+  6 ways after a first sharded run was void (its runner never started the tests; recorded).
+- Not done or limits (recorded): `overlap` is per region, not per solid; Alt+drag is not tested by messages (it
+  reads `GetKeyState`); Align translates, it does not resize; the quarter turn rounds its centre down when it falls
+  off the 0.1 nm quantum; the 3D view draws fill solids depth-tested, not in paint order; a mirror or turn leaving
+  the domain is refused by the writer (the deck kept); the 2D model builds of the transform cases use a plain
+  silicon deck, since small boxes near the layered deck's well corner trip the generator's P4 corner rule (U12).
+  In the 3D view only top faces of solids under the oxide are pickable, so a buried solid is reached by the
+  inspector or the selection.
+
+**Slice 2 as built (MT6, MT7, MT12, 2026-11-22; owner "start slice 2"; Release, MSVC 14.51, 6 cores).** Shared corner
+geometry in `app::geo` (`arc_segments`, `polygon_sides`, `corner_turn`, `fillet_tangent`, `chamfer_corner`,
+`fillet_corner`, `regular_polygon`; 2D `chamfer_shape`, `fillet_shape`), on the quantum, a cut point landing on its
+edge's far vertex merged with it. 3D model (`app::solid`): `edge_corner` (an edge along an axis as a prism's corner, a
+box written as its rectangle), `chamfer_edge`, `fillet_edge`, `fillet_vertex`, `taper_edge`, `add_cylinder`,
+`face_normal`, `face_solid`, `inset_face`, `extrude_face`. MT12: `mesh::check_rules` (generate_mesh's rules only, no
+node placed; its body now `generate(…, rules)`, generate_mesh unchanged) and `mesh::largest_resolution` (down by
+eighths from the complex's extent to a pass, then bisection to 0.1 %); `solid::automatic_resolution`, `keep_clear`,
+`extent` (volume, interface area, feature-line length), `node_estimate`, `mesh_length`, `set_mesh_length`.
+Pages: the Faces group (Push/Pull, Inset, Extrude, Contact), the Edges group (Chamfer, Fillet, Round vertex, Taper),
+Cylinder (O) in Solid; `modeller::group_of`, `tools_for` (the 2D bar leaves out the 3D-only tools: MQ6 gives 2D
+Chamfer and Round vertex on a shape's corners). Inset is two steps (drag the margin, release, move for the depth,
+click); Cylinder three (centre, radius, height). The inspector's "Use the largest interface_resolution" writes the
+automatic s (rounded down to the quantum) as one edit and reports the node estimate.
+- MC6: app tests `[edges]`, `[faces]` (arcs and corners; Chamfer, Fillet, Round vertex, Taper, Cylinder and Extrude each
+  written by minimal edits, read back, undone to the byte, the partition's volume exact (to 1e-12) and the deck
+  building; Inset: see limits). Window tests `[tools]` (2 cases, 127 assertions): every tool in 3D and Chamfer and
+  Round vertex in 2D by messages, each deck equal to the model function's own edit, every step undone and redone.
+- MC4: the deck line shown during every slice 2 drag equals the line written (window tests).
+- MT12 (2): fillet chords and cylinder sides drop while one is under 6 s (the chip says how many, or that they are under
+  6 s); Copy and Array offsets keep clear (onto a plane or 4 s off; `keep_clear`); Inset's margin and depth and
+  Extrude's depth are 0 or at least 4 s.
+- The automatic s is `mesh::largest_meshable_resolution`: largest_resolution's s (the rules only), then built; a
+  refusal a finer s can cure (degenerate_mesh: the interface certificate) steps s down by a fifth a build, at most 4
+  builds (about half the rules' s; each finer build costs more), then a bisection on builds to 0.5 %; any other
+  refusal (invalid_input: a pair set's geometry) ends it at once. Cost on the 7-layout table: 0.9-4.9 s a layout (one
+  build each: the rules' s meshes there).
+- MC13 table (7 drawn layouts): the automatic s meshes and s × 1.01 the generator refuses; the rules' own s passes
+  check_rules and its 1.01 does not, each layout.
+  Node estimate N = 2.65 V/h³ + 1.12 A/hp² + 13.3 L/hp (hp = min(h, 4 s)), fitted by least squares on that table's 7
+  meshes (7k-15k nodes): within ±10 % there. In-sample only: no held-out table (recorded).
+  500 random layouts (seed 26231, hidden test `[mc13]`, 6 processes by NITCAD_SHARD): accepted 301, all meshing (0
+  false accepts); refused 81 (118 more stop in the partition: slanted prisms along two axes). **MC13 missed** on two
+  counts, recorded, not loosened: 4 false refusals (the 4-build cap gives up where a finer s meshes) and 4 layouts
+  that also mesh at 1.01 s (meshing is not monotone in s once the certificate counts). A first run with the rules-only
+  s had 19 false accepts (P4b certificate) and a crash (layout 284): both fixed, below.
+- Bugs found and fixed in slice 2's checks: (1) the rules-only s was refused by the certificate after meshing (19 of
+  500): the build-confirmed search above. (2) Layout 284 (a cylinder whose axis lies on a box face) at s = 0.5 nm: a
+  pair set's 2D mesh held two copies of one vertex an ulp apart, and splitting the segment between them inserted a
+  point twice, ending in Triangulation2D's contract (`in_circle`, existing generate2d code): generate2d now refuses
+  a point already a vertex (`coincides`, the first insertion, segment splits, circumcentres) as degenerate_mesh;
+  regression test `[l284]`. (3) Inset's depth was measured from the release pixel's ray, not the face: after the
+  margin drag, 0.1um straight up read 0.15um (view-dependent); now from the face (found by mutant 16). (4) At 200 %
+  the Solid group's five buttons overflowed the canvas: the bar narrows its buttons to the viewport (48 px floor at
+  96 dpi).
+  (5) mesh_length read the first [mesh], set_mesh_length the last: both the last, as read_model. (6) Replacing a
+  continued entry at the end of a deck without a final newline added one: kept.
+- MC1: app tests 45 570 assertions (full app binary) and `[solid]` 10 744/22 after the fixes; window tests
+  `[modeller]`, `[solid]`, `[geometry]` 1231/0; mesh `[complex_generate]`, `[complex_interfaces]`, `[layered]` all
+  pass; deck tests pass (9 expected failures). clangd (`--check`) and clang-tidy (bugprone, analyzer) on the changed
+  files: no error in slice 2's code (one raw CR in a test char literal fixed).
+- MC9: slice 2's per-frame work with 100 solids: a Copy frame (keep_clear and its deck line) median 0.152 ms, a
+  Fillet frame 0.148 ms (≤ 1 ms); slice 1's 0.149 ms; SE5 orbit 4.97 ms; GE5 2.67 ms.
+- MC12: met (no Win32 in the models, no app or deck in mesh, no new dependency).
+- MC11: 20/20 caught (~/mut-gv/s26m2.sh, s26m2b.sh through run6.sh, sharded on 6 cores). First pass 17 of 21: three
+  did not compile (an unused variable under /WX; rewritten) and "a handle press keeps no start point" survived. It
+  was no fault of the tests: a handle's pick already carries its place on the face, so the page code it mutated
+  (added for a test that could not find a face under the handles) did nothing; removed, so that mutant is gone. The
+  window tests now check the dragged value before anything is typed (Extrude, Inset's depth), which found bug (3).
+- MC1 (after the last fixes): window `[modeller]`, `[solid]`, `[geometry]` 1233/27.
+- Limits (recorded): Inset with a margin on every side of a face inside the device leaves that face a ring, a holed
+  interface piece this branch's generator refuses (Unit 64, merged on main, is not on this branch); the refusal shows,
+  and the automatic s says it. Inset of the face's own material joins its region. Pushing a solid's faces needs them
+  pickable: solids inside the domain are hidden by its faces (26l), reached with the section plane. Align is not
+  kept clear (it places a face exactly). `check_rules` leaves out what only a mesh shows (the pair sets, the
+  certificate): the automatic s builds to confirm it, up to a few seconds a layout (more where it steps down). The
+  automatic s is shown on demand (the button), not live in the chip; the node estimate shows in the button's status,
+  not during drags. Arrays keep clear on the first copy's offset only. MC13's 500-layout test is hidden (it meshes
+  every layout; about an hour on 6 processes).
+
+
+**Slice 2 follow-up (2026-11-22, owner "fix").** The automatic s climbs after its search: while 1 % above still builds,
+s rises by 1 % (bounded: above largest_resolution's s the rules refuse, without placing a node). MC13 rerun (500
+layouts, 6 processes): accepted 301, all meshing (0 false accepts), **0 meshing at 1.01 s (was 4)**; false refusals
+still 4 (layouts 124, 381, 463, 473: each of the 4 builds fails the certificate, P4b "the dual face of an edge in a
+corner zone", where the test's 0.005um meshes) — **MC13 still missed on that count, recorded**: the cure is in the
+generator's corner zones, not the search. The test's message comparison (a refusal by the rules at the automatic s
+against the rules at 0.005um) is informational, not MC13: which rule fires first depends on s. The climb's mutant is
+caught only by the hidden MC13 run (an hour), not run as a mutant. Two range-for copies in the window test fixed
+(clang -Wrange-loop-construct).
+
+**Slice 3 as built (MT8, 2026-11-22; owner "start slice 3"; Release, MSVC 14.51, 6 cores).** Deck: `[parameters]`
+(once, no name) of `name = value`, a value a length (with nm, um or cm), a number, or a sum of lengths and other
+parameters; references `$name` and sums `$a + $b`, `$a - 5nm`, `5nm + $a` in [mesh], [region], [contact] and [doping]
+(MQ1 (a); [contact] added to MT8's list: a patch box is geometry too). An operator has spaces on both sides or on
+neither: `$a -5nm` is two values. `deck::substituted` replaces them before the build reads values (deck::build calls it,
+the plan keeping no view into the deck; [adapt] substitutes per pass): a lone reference by its parameter's text as
+written (the same bits as the value written out), a sum by its value in cm written shortest round-trip. Errors on the
+referring line (invalid_input): undefined, a cycle (`$a -> $b -> $a`), a number in a sum, a value neither a length nor
+a number, a bad or repeated name, a second [parameters], a reference outside those sections, a `$` not starting one.
+A number parameter in a length place reads as cm, exactly as its value written out would (DK5: a unitless length is
+cm): the "non-length where a length is needed" of MC7 is a number in a sum and a value neither (recorded).
+Modeller (`app::solid`): `Model::parameters` (name, expression, resolved), `Solid::refs` and `Model::domain_refs`
+(each coordinate's reference as written); read_model resolves them; write_model writes a coordinate as its reference
+while the reference gives it (else its value: the tie broken), [parameters] by minimal edits (a changed expression in
+place, a new one after the last, a new section before the first). `set_parameter` (every tied face follows),
+`tie_edits` (after an edit: a moved coordinate tied by a lone `$p` sets p; one tied by a sum moves its last
+parameter by the rest; the edited solid's other tied coordinates are held where the edit put them, so dragging a box's
+near face keeps its far face and Lg takes the rest; a tie to a parameter that is itself an expression, or that
+disagrees, is broken), `name_extent` (N: the extent named, the far face `<near> + $name`, a low face `<near> - $name`).
+A parameter a drag sets is written with a unit (a bare 0 would be a number). Page: the inspector's Parameters (an
+editable `name = value` list and Apply parameters, one undo step; refused with the reason in the status when one
+does not resolve); commit_model and the live line follow ties (MC4); N during a face drag, nothing typed, names the
+dragged extent: a new parameter L<k>, then each existing length parameter in turn (the chip says which); once a number
+is typed, n is its unit's.
+- MC7: deck tests `[parameters]` 88 assertions: the diode (mesh, doping, number parameters) and a layered generate2d
+  deck (domain, solids, sums, tied faces) build to the same run identity and mesh digest as the values written out;
+  every error on its line. App `[parameters]` (model): ties read and written back byte for byte; Lg changed moves both
+  tied faces with one line changed; errors leave the model as it was; drags of the far face, the near face, the whole
+  solid, a low face named with `-`; an expression parameter's tie broken; N naming. Window `[parameters]` 41: Lg in the
+  inspector moves every tied face (one undo step, a cycle refused), a tied face dragged by typing (the line shown the
+  line written, MC4), N naming and cycling.
+- MC9: a tied drag frame with 100 tied solids (the edit, tie_edits, write_model, the deck line) median 0.68 ms
+  (≤ 1 ms; measured while MC13 ran on 3 cores); window suites' MC9 0.19 ms, slice 2's frames 0.22/0.18 ms.
+- MC1: app tests 45 755 assertions in 122 cases (before the last tests were added; `[parameters]` 387 after); window
+  `[modeller]`, `[solid]`, `[geometry]` 1271 in 28 (then `[parameters]` 41); deck 128 cases, 123 passed and 5 failed as
+  expected (the 9 `[!shouldfail]` assertions, as before).
+- MC11: 17/17 caught (~/mut-gv/s26m3.sh, s26m3b.sh through run6.sh, sharded on 6 cores). First pass 15: "a sum of
+  lengths not evaluated" survived (only the app tests held one; a deck test added) and one did not compile (an unused
+  variable under /WX; rewritten).
+- Deck `[parameters]` 93 assertions after it.
+- Limits (recorded): a contact's patch box reads references but is written as values (its ties are not kept); 2D
+  (the geometry editor) does not read references yet; renaming a parameter in the
+  inspector makes a new one (the old stays, its references with it); the live preview moves only the dragged solid,
+  other tied faces following when the drag ends (the deck line shows the parameter's line throughout); a polygon
+  vertex inserted or removed drops that prism's ties (its slots renumbered).
+
+**Slice 4 as built (MT9, MT10, 2026-11-22; owner "once slice 3 is done start slice 4"; Release, MSVC 14.51, 6
+cores).** Deck: the `[doping]` profile reader moved out of the builder into `deck::parse_profile` (the build reads
+every profile through it, unchanged: deck baseline 123 passed, 5 failed as expected, the 9 `[!shouldfail]` as
+before), with its writer `deck::profile_text` (lengths in cm, shortest round-trip: read back to the same doubles;
+windows only where bounded). Modeller (`app::solid`): `profiles(deck)` (references substituted), `add_profile` (one
+`profile =` line last in [doping], a new [doping] before the first contact or analysis section when there is none;
+every other line byte for byte), `region_profile` (constant over the solid's bounds; the deck windows two axes, so the
+unbounded depth axis is the one the solid spans most of the domain along, z on a tie: exact where it spans all of
+it), `implant_profile` (gaussian along the face's axis, its peak `depth` inside, σ half of it), `junction_profile`
+(erfc from a face looking down an axis, its length half the depth and its centre so the profile equals the other
+dopant's net `depth` inside the face, at the window's centre: c = x_j - w erfc⁻¹(2 N_bg / N_peak), erfc⁻¹ by Newton to
+the last bits), `profile_extent` (as drawn), `size_boxes` / `add_size_box`. Page: the Doping group's Region profile
+(click a solid), Implant (drag into a face: the peak depth, typed or dragged), Junction (drag into a face looking down
+an axis: the junction depth); D swaps donor and acceptor and the wheel sets the level by decades (1e12 to 1e22),
+during a drag too; the chip shows the depth and the dopant and level. The Mesh group's Max size (drag up or down
+anywhere: doubled every 100 px, or typed; the chip estimates the nodes, MT12) and Refine box (drag a rectangle on the
+work plane: a box through the domain along the plane's normal, its size max_size / 4, the wheel halving or doubling
+it). Each writes one line by minimal edit, shown live as the deck line (MC4), one undo step. Profiles are drawn as
+see-through boxes (donors blue, acceptors red, deeper with the level, log 1e14 to 1e21) while Doping is open, refine
+boxes grey while Mesh is open, the dragged one too; both read once per deck change, not per frame. Snapping (found
+building MC10): a snap onto a face or an edge now also puts its free coordinates on the view's grid where that stays
+on the face or edge (it kept the pixel's place: a gate at 0.0401um beside a fin at 0.04um, slivers of a quantum the
+generator refuses).
+- **MQ5 premise corrected:** the deck already exposes the generators' size boxes, `[mesh] box = u0 v0 u1 v1 h`
+  (generate2d) and `box = x0 y0 z0 x1 y1 z1 h` (generate3d, layered too). Refine box writes that existing key; no
+  `refine` key was added (recommended option: no second spelling of one thing).
+- MC8: app `[doping]` 3049 assertions: each tool's line exactly (a minimal edit: one line more, the rest byte for
+  byte), read back to the same profile, the junction meeting 1e16 to 1e-9 at its depth, its three refusals; max_size
+  and a refine box; then the deck built and the net doping at every one of its 1506 semiconductor nodes equal to the
+  profiles' formula (`device::evaluate` summed) to 1e-12 relative. Window `[doping]` 61: Region profile (wheel, D, a
+  click), Implant (typed), a Junction from a face looking up refused with the deck as it was, Max size (the chip's node
+  estimate), Refine box (the wheel's size); each the line shown, one undo step and redo; the deck builds.
+- MC10: a FinFET by window messages only (`[finfet]`): Box (a silicon fin), Array (two, pitch typed), Fillet (each
+  fin's top edge, 0.02um), a sio2 gate box with Fill and its x_max face dragged with N naming `Lg` (`0.04um + $Lg`),
+  a Gaussian implant into each fin's top (donors 1e20, 10nm), Region profile (acceptors 1e17 in each fin), three
+  Contacts (source and drain the x faces, the gate on top made an electrode by the inspector's Kind), the inspector's
+  largest interface_resolution (1.2nm); built, **13 359 nodes** (≤ 20k), equilibrium converged in 1.7 s.
+- MC9: 100 solids and 100 profiles: an Implant drag's frame median 0.12 ms, a Junction's 0.11 ms, the 100 volumes
+  drawn +0.23 ms (≤ 1 ms).
+- MC1: app tests 49 059 assertions in 124 cases (the slice 2 group test updated: Doping has its tools, Mesh lacks
+  Interface layers); window `[modeller]`, `[solid]`, `[geometry]` 1386 in 30, all passing after the snap change.
+- MC11: 12/12 caught (~/mut-gv/s26m4.sh through run6.sh, sharded on 6 cores): windows not read, lateral not
+  written, the region depth axis always z, the implant peak outside, the junction centre off, a junction from a face
+  looking up, a new [doping] section every time (its first pattern did not apply; rerun), a refine box unchecked, the
+  drag's line not written, D doing nothing, the wheel keeping the level, face snaps off the grid.
+- **Misses and deviations (recorded):** Interface layers (MT10) **not built**: the `layer` key exists only for
+  extrude3d cross-sections (`option_swept`); a layered deck has none and MT10 allows no generator change — the Mesh
+  group says so. Implant's window is the whole face and its lateral spread 0 (MT9: a window dragged on the face, then
+  the depth and the spread). Region profile's level is the wheel (MT9: a drag up or down), the same for all three
+  tools. Refine box spans the domain along the work plane's normal and takes its size from the wheel (MT10: a box
+  dragged, then inside it for the size). MC10's implant covers each fin's whole top, under the gate too (no mask: the
+  window is the face), so the device is a resistor-like FinFET; MC10 asks only that it builds and runs equilibrium.
+- Limits: a junction is made only from a face looking down an axis (the deck's erfc falls along its axis); the
+  junction's background is taken at the window's centre only; profiles are drawn only while the Doping group is open;
+  the profile tools are 3D only (the 2D editor has no Doping group tools yet, MQ6 allows it).
+
+**Slice 4 follow-up (2026-11-22, owner "do the follow ups").** Three of the recorded deviations built as MT9 and
+MT10 give them: Implant is a window dragged on the face (snapped on the face's plane as on the work plane, kept on the
+face; a click without a drag takes the whole face), released, then the peak depth (moved or typed) and a click, then
+the lateral spread (the distance out from the window on the face, or typed) and a click writing the line. Region
+profile is a press on a solid dragged up or down for the level, on the 1, 2, 5 steps (3 a decade, one every 30 px;
+a click keeps the level; the wheel still steps decades and D swaps the dopant). Refine box is a rectangle dragged on
+the work plane, released, then its height along the plane's normal (moved or typed) and a click, then its size (up
+doubles, down halves, or typed; the wheel too) and a click writing the `[mesh] box` line. Enter writes any phase's
+line as it stands. A press in a Doping tool picks a solid's face under the handles (a picked solid's gizmo moved it
+before: found by the new window test) and never falls back to moving (a press on empty background still navigates, MT1). MC10 now masks the gate: two windows on each
+fin's top (x 0..0.04um and 0.08..0.12um), the peak 10nm in, lateral 2nm: source and drain only, six profiles; built,
+13 359 nodes, equilibrium 2.0 s.
+- Window `[doping]` 135 assertions in 2 cases (an edge press in Implant moving nothing; each phase's chip, the deck unchanged until the last click, the line
+  shown the line written, one undo step); app 49 059 in 124; window `[modeller]`, `[solid]`, `[geometry]` 1604 in 31.
+- MC11: 7/7 caught (~/mut-gv/s26m4b.sh, three rerun by hand with fixed patterns): the level drag doing nothing, the
+  window always the face, the lateral spread not applied, the depth click ending the implant, the refine height
+  ignored, the window off the face's grid, a press on an edge falling back to moving (survived first: the edge-press
+  test added).
+- Still a miss: Interface layers (no `layer` key for a layered deck without a generator change).
+
+**PR #116's first CI run (2026-11-22): two failures, fixed.** MC3: at 200 % the bar was wider than the view on
+the runner's 1024 x 768 screen (a 525 px view, the bar 602 px: the hint's 300 px at 96 dpi a floor). The hint now
+narrows to the view's room and wraps onto as many lines as it takes, and the buttons wrap into rows when even their
+48 px floor leaves no room. MC3 now runs at three window sizes (as opened, 1024 x 768, 800 x 600: 48 placements; the
+old bar fails at 1024 x 768 exactly as on CI); 800 x 600 at 200 % is left out (a 301 x 195 px view holds no bar in
+any layout: a limit). The test's check of the bar's place is now to 1e-9 px (the page places in its panel's
+coordinates; the new sizes reached "above" placements, differing by rounding). MC9 slice 3's tied drag frame took
+1.055 ms on the runner: recorded there, gated on this workstation (0.769 ms), as SE5 (owner, 2026-11-22). Window
+`[modeller]`, `[solid]`, `[geometry]` 1722 in 31; app 49 058 in 124. Seen once: MC2's L key ignored in one full run
+while the owner typed (the page reads Ctrl from the physical keyboard, GetKeyState); it passed in the next full run and
+3 of 3 alone: a test hazard, not changed.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays

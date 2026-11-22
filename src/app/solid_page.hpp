@@ -17,11 +17,20 @@
 // - Every edit goes to the deck at once by minimal edits; undo and redo step through the deck texts the page wrote.
 //   An extrude3d deck is shown and selected but not edited until Convert (SQ5) makes it layered.
 //
+// - Unit 26m slice 0 (MT1-MT3): the fixed tool row is a group switcher; the armed group's tools float beside the
+//   selection; Camera free / fixed (L) decides whether the mouse moves the view (modeller.hpp); Reset view; the status
+//   bar shows the deck line a drag will write, the chip at the cursor its value, typed digits setting it exactly.
+// - Unit 26m slice 1 (MT4, MT5): Fill / Replace and the inspector's overlap switch; the Transform modes: Copy (or
+//   Alt+drag) moves a copy, Mirror clicks (about the centre; Ctrl: the face's plane; Shift: a quarter turn about the
+//   view's axis), Array drags (pitch; the wheel sets the count), Align clicks (the picked solids' matching face to
+//   the clicked face's plane). Each is one deck edit and one undo step.
+//
 // The tests drive the view by its messages (SE8; no screen automation).
 #pragma once
 
 #include <windows.h>
 
+#include <expected>
 #include <optional>
 #include <span>
 #include <string>
@@ -31,6 +40,9 @@
 #include "NiTCAD/app/solid.hpp"
 #include "NiTCAD/app/solid_view.hpp"
 #include "NiTCAD/render/image.hpp"
+#include "modeller_bar.hpp"
+
+#include <memory>
 
 namespace NiTCAD::app {
 
@@ -47,7 +59,7 @@ public:
     };
 
     // The 2D editor's tools' order, so the Edit menu's tool commands work on both.
-    enum class Tool : int { select, box, prism, contact, pan, measure };
+    enum class Tool : int { select, box, prism, contact, pan, measure, cylinder };  // cylinder: 3D only (Unit 26m MT7)
 
     SolidPage(HWND parent, Host& host, int id, int inspector_id);
     ~SolidPage();
@@ -78,6 +90,36 @@ public:
     bool convert();  // an extrude3d deck made layered (SQ5)
     bool select_region(const std::string& name);
     bool commit(int control);
+
+    // --- Unit 26m slice 0 (MT1-MT3) ---
+    void set_camera_fixed(bool fixed);
+    [[nodiscard]] bool camera_fixed() const noexcept { return camera_fixed_; }
+    void reset_view();  // the camera the page opened with
+    void set_group(modeller::Group g);
+    [[nodiscard]] modeller::Group group() const noexcept { return bar_->group(); }
+    [[nodiscard]] const ModellerBar& bar() const noexcept { return *bar_; }
+    // The floating bar's place over the canvas (canvas pixels), and the selection's screen bounds it was put beside.
+    [[nodiscard]] modeller::Placement bar_placement() const;
+    [[nodiscard]] std::optional<modeller::Box> selection_bounds() const;
+    [[nodiscard]] const std::string& live_line() const noexcept { return live_line_; }  // "" when no drag
+    [[nodiscard]] std::string chip() const { return bar_->chip_text(); }
+    [[nodiscard]] const modeller::Entry& typed() const noexcept { return entry_; }
+    // --- Unit 26m slice 1 (MT4, MT5) ---
+    void set_mode(modeller::Mode m);  // a Transform mode of the Select tool (modeller.hpp)
+    [[nodiscard]] modeller::Mode mode() const noexcept { return mode_; }
+    bool toggle_overlap();  // the picked solids' regions: fill <-> replace
+    [[nodiscard]] int array_count() const noexcept { return array_count_; }
+    [[nodiscard]] int view_axis() const;  // the model axis most nearly along the view
+    // --- Unit 26m slice 2 (MT12) ---
+    [[nodiscard]] solid::Coord resolution() const noexcept { return res_q_; }  // the deck's s, quanta
+    [[nodiscard]] int chords() const noexcept { return chords_; }
+    // The largest s the layout allows (cm; +inf without interfaces), or why none does.
+    [[nodiscard]] std::expected<double, std::string> automatic_resolution() const;
+    bool use_automatic_resolution();  // written to the deck's interface_resolution (on the quantum, rounded down)
+    // Unit 26m MT8: the inspector's parameters, a `name = value` line each; applied: each changed or new one set (every
+    // tied face following), one undo step. False (the status says why, nothing written) when one does not resolve.
+    [[nodiscard]] std::string parameters_text() const;
+    bool apply_parameters(const std::string& lines);
 
     // State, for the tests.
     [[nodiscard]] const solid::Model& model() const noexcept { return m_; }
@@ -120,7 +162,7 @@ public:
         c_x0_label, c_x0, c_x1_label, c_x1, c_y0_label, c_y0, c_y1_label, c_y1, c_z0_label, c_z0, c_z1_label, c_z1,
         c_axis_label, c_axis, c_from_label, c_from, c_to_label, c_to, c_vertices_label, c_vertices, c_apply,
         c_kind_label, c_kind, c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset,
-        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_count
+        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_overlap, c_resolution, c_params_label, c_params, c_params_apply, c_count
     };
     [[nodiscard]] HWND control(int c) const;
 
@@ -149,7 +191,6 @@ private:
 
     Host& host_;
     HWND panel_ = nullptr, strip_ = nullptr, canvas_ = nullptr, inspector_ = nullptr;
-    std::vector<HWND> tool_buttons_;
     std::vector<HWND> controls_;
     int inspector_id_ = 0;
     int dpi_ = 96;
@@ -170,12 +211,18 @@ private:
     std::string material_ = "silicon";
 
     // A drag or a drawing in progress.
-    enum class Drag { none, orbit, pan, move, axis, plane, face, vertex, contact_move, base, height, polygon, contact, measure };
+    enum class Drag { none, orbit, pan, move, axis, plane, face, vertex, contact_move, base, height, polygon, contact, measure, array,
+                      cut, taper, extrude, inset, inset_depth, radius, implant, junction, max_size, refine,
+                      implant_window, implant_lateral, level, refine_height, refine_size };
     Drag drag_ = Drag::none;
     bool button_ = false;  // the left button is down
     solid::Model m_start_;
     solid::SolidRef ref_;
     int index_ = -1;  // the handle's axis, plane normal, face or vertex
+    // MT8: N during a face drag, with nothing typed, names the extent it drags: -1 not named, 0 a new parameter
+    // (naming_name_), k > 0 the k-th existing length parameter.
+    int naming_ = -1;
+    std::string naming_name_;
     int axis_ = 2;    // the axis a drag runs along, or the normal of the plane it runs in
     solid::V3 origin_{};
     double start_s_ = 0.0;
@@ -193,8 +240,69 @@ private:
     std::vector<solid::Problem> problems_;
     std::vector<solid::V3> mesh_;
     bool mesh_preview_ = false;
-    HWND mesh_button_ = nullptr;
     void locate_problems();
+
+    // Unit 26m slice 0.
+    std::unique_ptr<ModellerBar> bar_;
+    bool camera_fixed_ = false;  // MQ2: free on open
+    render::Camera start_camera_;
+    modeller::Entry entry_;
+    int typed_axis_ = -1;         // a two-axis drag's axis the typed value sets
+    solid::P3 drag_d_{};          // the drag's offset now (move, plane, axis, vertex)
+    solid::Coord drag_s_ = 0;     // a face's offset now
+    std::string live_line_;
+    int canvas_top_ = 0;
+    void after_drag_step(double x, double y);  // the deck line and the chip
+    [[nodiscard]] std::optional<solid::Model> pending() const;
+    [[nodiscard]] std::string chip_value() const;
+    bool on_char(wchar_t c);
+    void apply_drag();  // Enter: the drag ended as it stands
+    void finish_height();
+    void place_bar();
+    void end_drag_ui();
+
+    // Unit 26m slice 1.
+    modeller::Mode mode_ = modeller::Mode::none;
+    int array_count_ = 3;
+    std::optional<solid::Model> copy_from_;  // a copy drag: the model before the copies were made
+    solid::Selection copy_sel_;
+    bool transform_click(const solid::Pick& p, bool shift, bool ctrl);  // Mirror and Align
+
+    // Unit 26m slice 2 (MT6, MT7, MT12).
+    bool tool_press(const solid::Pick& p, double x, double y);  // the Faces and Edges modes' presses
+    void begin_drag(Drag d);
+    void finish_inset();
+    void read_mesh_keys();
+    [[nodiscard]] solid::Coord gap_up(solid::Coord v) const;  // a non-zero length under 4 s raised to 4 s (MT12)
+    [[nodiscard]] solid::Model cut_model(solid::Coord r);     // the edge cut (Chamfer, Fillet, Round vertex) of size r
+    int edge_ = -1;                // the edge a cut or taper drags
+    int chords_ = 0;               // a fillet's chords (0: under 6 s)
+    solid::Normal normal_;         // the face an inset or extrude starts on
+    solid::Coord margin_ = 0, radius_ = 0;
+    solid::Coord res_q_ = 0;       // the deck's interface_resolution, quanta (0: none)
+    double max_size_ = 0.0;        // the deck's max_size, cm
+    // Slice 4 (MT9, MT10): the doping tools' dopant and level (D, the wheel), a refine box's size (the wheel), the deck
+    // a doping or mesh drag would write (empty: none) and its volume drawn.
+    bool donor_ = true;
+    double level_ = 1e18;
+    solid::Coord refine_size_ = 0;
+    double size_from_ = 0.0;  // max_size at the press, cm
+    double press_y_ = 0.0;
+    std::string pending_text_;
+    std::vector<device::DopingProfile> profiles_;  // the deck's, as last read
+    std::vector<solid::SizeBox3> size_boxes_;
+    std::optional<solid::Volume> pending_volume_;
+    [[nodiscard]] bool doping_press(const solid::Pick& p, double x, double y);
+    void doping_step(double x, double y);
+    [[nodiscard]] bool text_drag() const noexcept;  // a slice 4 drag (its line pending_text_)
+    void finish_text_drag();
+    void on_up_text();
+    [[nodiscard]] std::optional<solid::P3> face_point(double x, double y) const;
+    solid::Box3 window_;           // the implant's window on the face
+    solid::Coord face_at_ = 0;     // the implanted face's plane
+    solid::Coord implant_depth_ = 0, lateral_ = 0;
+    double level_from_ = 1e18;
+    bool commit_text(const std::string& out);
 };
 
 }  // namespace NiTCAD::app

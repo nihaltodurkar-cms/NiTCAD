@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <format>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -153,7 +154,11 @@ struct Trace {
 
 }  // namespace
 
-std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry& geometry, const MeshOptions3D& options) {
+namespace {
+
+// generate_mesh's body. `rules` (Unit 26m, MT12): stop once the rules are checked, before any node is placed, with
+// *rules set to whether the complex has interfaces (no mesh then).
+std::expected<std::optional<GeneratedMesh>, base::Error> generate(const PolyhedralGeometry& geometry, const MeshOptions3D& options, bool* rules) {
     if (!(std::isfinite(options.max_size) && options.max_size > 0.0)) return std::unexpected(invalid("max_size must be finite and positive"));
     for (std::size_t k = 0; k < options.boxes.size(); ++k) {
         const SizeBox& b = options.boxes[k];
@@ -362,6 +367,10 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
     }
     const double res = options.interface_resolution;
     const bool has_interfaces = !layout.pieces.empty();
+    if (rules != nullptr) {  // the pair sets' own refusal (below) is not checked: it meshes every piece
+        *rules = has_interfaces;
+        return std::optional<GeneratedMesh>{};
+    }
 
     // The complex's vertices that bound a face: those on a domain edge or a patch edge.
     std::vector<std::vector<int>> vertex_edges(P.size());
@@ -1167,6 +1176,108 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
     }
     return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::move(certificate), report,
                          generation_digest(geometry, options)};
+}
+
+}  // namespace
+
+std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry& geometry, const MeshOptions3D& options) {
+    auto made = generate(geometry, options, nullptr);
+    if (!made) return std::unexpected(std::move(made.error()));
+    return std::move(**made);
+}
+
+std::expected<bool, base::Error> check_rules(const PolyhedralGeometry& geometry, const MeshOptions3D& options) {
+    bool interfaces = false;
+    auto checked = generate(geometry, options, &interfaces);
+    if (!checked) return std::unexpected(std::move(checked.error()));
+    return interfaces;
+}
+
+std::expected<double, base::Error> largest_resolution(const PolyhedralGeometry& geometry, MeshOptions3D options, double rel) {
+    if (geometry.vertices.empty()) return std::unexpected(invalid("the complex has no vertices"));
+    Point lo = geometry.vertices[0], hi = lo;
+    for (const Point& p : geometry.vertices) {
+        for (int a = 0; a < 3; ++a) {
+            lo[a] = std::min(lo[a], p[a]);
+            hi[a] = std::max(hi[a], p[a]);
+        }
+    }
+    const double extent = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]});
+    const auto passes = [&](double s) {
+        options.interface_resolution = s;
+        return check_rules(geometry, options);
+    };
+    const auto top = passes(extent);
+    if (top) return *top ? extent : std::numeric_limits<double>::infinity();
+    // Down by eighths from the top to the first s that passes (a passing check costs as its lattices, ~1/s, so the
+    // first pass is at most eight times finer than the answer), then bisect.
+    double good = extent / 8.0, bad = extent;
+    for (;;) {
+        const auto r = passes(good);
+        if (r) {
+            if (!*r) return std::numeric_limits<double>::infinity();
+            break;
+        }
+        if (good < extent * 1e-6) return std::unexpected(r.error());  // no s passes: the rule does not scale with s
+        bad = good;
+        good /= 8.0;
+    }
+    while (bad / good > 1.0 + rel) {
+        const double mid = std::sqrt(good * bad);
+        (passes(mid) ? good : bad) = mid;
+    }
+    return good;
+}
+
+std::expected<double, base::Error> largest_meshable_resolution(const PolyhedralGeometry& geometry, MeshOptions3D options,
+                                                              double rel, int tries) {
+    const auto top = largest_resolution(geometry, options);
+    if (!top || std::isinf(*top)) return top;
+    // A build at s: true when it meshes; the refusal kept; resource_exhausted ends the search.
+    std::optional<base::Error> last;
+    const auto builds = [&](double s) -> std::expected<bool, base::Error> {
+        options.interface_resolution = s;
+        const auto made = generate_mesh(geometry, options);
+        if (made) return true;
+        if (made.error().code == ErrorCode::resource_exhausted) return std::unexpected(made.error());
+        last = made.error();
+        return false;
+    };
+    double good = *top, bad = 0.0;
+    for (int k = 0;; ++k) {
+        const auto b = builds(good);
+        if (!b) return std::unexpected(b.error());
+        if (*b) break;
+        // Only the mesh's own checks (degenerate_mesh: the certificate, ...) are cured by a finer s; a refusal of the
+        // input (invalid_input: a pair set's geometry, ...) is not, and finer builds only cost more.
+        if (last->code != ErrorCode::degenerate_mesh) return std::unexpected(*last);
+        if (k + 1 >= tries) {  // capped: each finer build costs more (~1/s^2), and the button waits on it
+            base::Error e = *last;
+            e.message = std::format("no interface_resolution from {:.4g} down to {:.4g} cm meshes ({} builds): {}", *top, good, tries,
+                                    last->message);
+            return std::unexpected(std::move(e));
+        }
+        bad = good;
+        good *= 0.8;
+    }
+    if (bad != 0.0) {
+        while (bad / good > 1.0 + rel) {
+            const double mid = std::sqrt(good * bad);
+            const auto b = builds(mid);
+            if (!b) return std::unexpected(b.error());
+            (*b ? good : bad) = mid;
+        }
+    }
+    // Meshing is not monotone in s once the certificate counts: 1 % above the bracket's good may still build. Climb by
+    // 1 % while it does, so 1 % above the s returned does not build (bounded: above largest_resolution's s the rules
+    // refuse, without placing a node).
+    for (;;) {
+        const auto b = builds(good * 1.01);
+        if (!b) return std::unexpected(b.error());
+        if (!*b) break;
+        good *= 1.01;
+    }
+    return good;
 }
 
 std::uint64_t generation_digest(const PolyhedralGeometry& geometry, const MeshOptions3D& options) {

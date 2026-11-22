@@ -59,6 +59,7 @@ struct Region {
     std::string name, material;
     std::vector<Shape> shapes;  // empty: the background
     int origin = -1;            // the deck's region section it came from (its index among them), -1 new
+    bool fill = false;          // Unit 26m (MT4): `overlap = fill`, its shapes taking only what no earlier shape covers
     friend bool operator==(const Region&, const Region&) = default;
 };
 
@@ -125,6 +126,45 @@ bool raise_region(Geometry& g, int region);  // one layer up (later in the deck)
 bool lower_region(Geometry& g, int region);
 int duplicate_shape(Geometry& g, ShapeRef s, Coord dx, Coord dy);  // a new region on top, its index
 bool mirror_shape(Geometry& g, ShapeRef s, bool horizontal);       // about its bounds' centre
+// --- Unit 26m slice 1 (MT4, MT5) ---
+// The region's overlap rule (refused for the background, a tensor deck, or no change).
+bool set_overlap(Geometry& g, int region, bool fill);
+// Mirrored across the vertical (horizontal = true: x' = twice - x) or horizontal line at twice / 2 quanta.
+bool mirror_shape_at(Geometry& g, ShapeRef s, bool horizontal, Coord twice);
+// A quarter turn counter-clockwise about its bounds' centre (rounded down to the quantum when the centre is off it).
+bool rotate_shape(Geometry& g, ShapeRef s);
+// `count` - 1 copies, the k-th moved k × (dx, dy), each a new region on top; the first one's index (-1 refused:
+// count 2..100, a non-zero pitch).
+int array_shape(Geometry& g, ShapeRef s, Coord dx, Coord dy, int count);
+// Each shape moved so its bounds' side (0 x_min, 1 x_max, 2 y_min, 3 y_max) lies at `at` (refused if any is invalid
+// or none would move).
+bool align_shapes(Geometry& g, const std::vector<ShapeRef>& shapes, int side, Coord at);
+// The regions with shapes in the order that paints them so the last painted holds each point (MT4): the `fill`
+// regions last first, then the others in deck order. The canvas draws and hit_test picks in this order.
+[[nodiscard]] std::vector<int> paint_order(const Geometry& g);
+// --- Unit 26m slice 2 (MT7, MQ4): corners and arcs on the quantum, for the 2D shapes and the 3D prisms alike ---
+// The chords of an arc turning `turn` radians at radius `r` quanta: max(2, ⌈turn / 15°⌉), fewer while a chord is
+// shorter than `min_chord` quanta (the generator's 6 s; 0: no limit), down to 1; 0 when even one chord is shorter.
+[[nodiscard]] int arc_segments(double turn, double r, double min_chord) noexcept;
+// The turn at corner k of a polygon (π less its angle between the two edges), radians; 0 for a straight corner.
+[[nodiscard]] double corner_turn(const std::vector<Pt>& p, int k);
+// Polygon `p` with corner k cut, its vertices rounded to the quantum: a chamfer `d` along both edges (two vertices
+// in its place), or a fillet of radius `r` in `segments` chords (segments + 1 vertices, tangent to both edges). A
+// cut point landing on the edge's far vertex merges with it. None when the cut does not fit (d, or the fillet's
+// tangent length, longer than an edge), the corner is straight, or the polygon would not be valid.
+[[nodiscard]] std::optional<std::vector<Pt>> chamfer_corner(const std::vector<Pt>& p, int k, Coord d);
+[[nodiscard]] std::optional<std::vector<Pt>> fillet_corner(const std::vector<Pt>& p, int k, Coord r, int segments);
+// The tangent length of a fillet of radius r at corner k (from the corner along each edge), quanta.
+[[nodiscard]] double fillet_tangent(const std::vector<Pt>& p, int k, double r);
+// A cylinder's sides (MQ4): 16, fewer while a side of circumradius `r` is shorter than `min_side` quanta, down to 3;
+// 0 when even three are too short.
+[[nodiscard]] int polygon_sides(double r, double min_side) noexcept;
+// A regular polygon of `sides` around `c` of circumradius `r`, vertex 0 along +x, counter-clockwise, rounded.
+[[nodiscard]] std::vector<Pt> regular_polygon(Pt c, Coord r, int sides);
+// The shape's corner k (a box's: of its outline, lower left first, counter-clockwise; the box then written as that
+// polygon) chamfered or filleted (refused on a tensor deck, which takes no polygon).
+bool chamfer_shape(Geometry& g, ShapeRef s, int corner, Coord d);
+bool fillet_shape(Geometry& g, ShapeRef s, int corner, Coord r, int segments);
 // Contacts: a segment along one side of the domain (refused otherwise).
 int add_contact(Geometry& g, std::string name, std::string kind, Pt a, Pt b);
 bool set_contact(Geometry& g, int contact, Pt a, Pt b);
