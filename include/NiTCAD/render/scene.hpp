@@ -72,6 +72,14 @@ struct LineBatch {
     std::vector<Float3> points;  // two per segment, um
 };
 
+// Unit 26n (DT2): text at a point (a dimension line's label), drawn centred just above the point's projection, over
+// everything else.
+struct SceneLabel {
+    Float3 at{};  // um
+    std::string text;
+    Rgba color{};
+};
+
 struct Colorbar {
     Colormap map = Colormap::turbo;
     ColorScale scale;
@@ -108,6 +116,7 @@ struct FieldScene {
     std::string title;
     std::vector<TriangleBatch> triangles;
     std::vector<LineBatch> lines;
+    std::vector<SceneLabel> labels;  // Unit 26n: none by default
     std::optional<Colorbar> colorbar;
     Camera camera;
     Float3 lo{};  // bounds of everything drawn, um

@@ -1414,6 +1414,11 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
                 ink.text(name, small_text.Get(), o.x + dx * 1.3f, o.y + dy * 1.3f, 1, 1, c);
             }
         }
+        // Unit 26n (DT2): the scene's labels, centred just above their points, over everything.
+        for (const SceneLabel& l : s.labels) {
+            const D2D1_POINT_2F q = project(v, l.at, view);
+            ink.text(l.text, text.Get(), q.x, q.y - 3.0f, 1, 2, {l.color.r, l.color.g, l.color.b, l.color.a});
+        }
     }
     return end_2d();
 }
