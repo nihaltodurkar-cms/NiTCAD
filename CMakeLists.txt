@@ -1131,7 +1131,8 @@ add_library(nitcad_app_window STATIC
   src/app/geometry_page.cpp
   src/app/solid_page.cpp
   src/app/modeller_bar.cpp
-  src/app/dimensions_panel.cpp)
+  src/app/dimensions_panel.cpp
+  src/app/new_device_dialog.cpp)
 target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid dwmapi advapi32 d2d1 dwrite)
 # The start page lists the examples beside the executable, else the source tree's (26-3, VQ11).
 target_compile_definitions(nitcad_app_window PRIVATE NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
@@ -1142,7 +1143,8 @@ target_link_libraries(nitcad-app PRIVATE nitcad_app_window)
 add_executable(nitcad_app_window_test tests/app/window_test.cpp tests/app/self_test_test.cpp
   tests/app/analysis_window_test.cpp tests/app/hover_window_test.cpp tests/app/geometry_window_test.cpp
   tests/app/solid_window_test.cpp tests/app/solid_check_window_test.cpp tests/app/modeller_window_test.cpp
-  tests/app/dimensions_window_test.cpp)
+  tests/app/dimensions_window_test.cpp
+  tests/app/new_device_window_test.cpp)
 target_link_libraries(nitcad_app_window_test PRIVATE nitcad_app_window Catch2::Catch2WithMain dxgi dxguid)
 target_compile_definitions(nitcad_app_window_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
   NITCAD_APP_PATH="$<TARGET_FILE:nitcad-app>" NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")

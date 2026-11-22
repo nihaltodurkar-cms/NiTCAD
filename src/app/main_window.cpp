@@ -557,6 +557,7 @@ void MainWindow::update_command_states() {
     enable(Command::stop, runner_.state() == RunState::running);
     enable(Command::open_deck, !busy);
     enable(Command::new_deck, !busy);
+    enable(Command::new_device, !busy);
     enable(Command::open_result, !busy);
     enable(Command::find_error, !deck_->diagnostics().empty());
     enable(Command::compare_result, !busy && workspace_.has_value());
@@ -1405,6 +1406,36 @@ void MainWindow::start_recent(std::size_t index) { execute(static_cast<Command>(
 
 void MainWindow::start_example(std::size_t index) {
     if (confirm_discard()) open_example(index);
+}
+
+// Unit 26n slice 1 (DT4): File > New device... The dialog owns the window while open; Create's deck is opened on the
+// Geometry tab once the dialog has returned from its own message (posted).
+void MainWindow::open_new_device() {
+    if (new_device_) {
+        SetForegroundWindow(new_device_->hwnd());
+        return;
+    }
+    if (runner_.busy() || !confirm_discard()) return;
+    fs::path folder = options_.devices_copy_dir;
+    if (folder.empty()) folder = win32::documents_dir() / L"NiTCAD" / L"devices";
+    new_device_ = std::make_unique<NewDeviceDialog>(hwnd_, *this, devices::list_families(devices_dir_), folder, dpi_, font_, bold_);
+}
+
+void MainWindow::new_device_created(const fs::path& deck) {
+    new_device_path_ = deck;
+    PostMessageW(hwnd_, new_device_message, 0, 0);
+}
+
+void MainWindow::new_device_closed() {
+    new_device_path_.clear();
+    PostMessageW(hwnd_, new_device_message, 0, 0);
+}
+
+void MainWindow::finish_new_device() {
+    if (!new_device_) return;
+    new_device_.reset();  // the window enabled again
+    const fs::path deck = std::exchange(new_device_path_, {});
+    if (!deck.empty() && open_deck(deck)) select_tab(tab_geometry);
 }
 
 void MainWindow::run_page_stop() { execute(Command::stop); }
@@ -2868,6 +2899,9 @@ void MainWindow::execute(Command c) {
         update_title();
         select_tab(tab_deck);
         return;
+    case Command::new_device:  // Unit 26n slice 1 (DT4)
+        open_new_device();
+        return;
     case Command::open_deck: {
         if (!confirm_discard()) return;
         const fs::path p = win32::open_dialog(hwnd_, L"Decks (*.deck)\0*.deck\0All files\0*.*\0", L"Open a deck");
@@ -3526,8 +3560,10 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         if (options_.examples_dir.empty()) {
             wchar_t exe[MAX_PATH]{};
             GetModuleFileNameW(nullptr, exe, MAX_PATH);
+            devices_dir_ = examples_directory(fs::path(exe).parent_path(), fs::path(NITCAD_EXAMPLES_DIR)) / "devices";
             examples_ = list_examples(examples_directory(fs::path(exe).parent_path(), fs::path(NITCAD_EXAMPLES_DIR)));
         } else {
+            devices_dir_ = options_.examples_dir / "devices";
             examples_ = list_examples(options_.examples_dir);
         }
         refresh();  // the view's placeholder message
@@ -3604,6 +3640,9 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         break;
     case run_message:
         on_run_events();
+        return 0;
+    case new_device_message:  // Unit 26n slice 1
+        finish_new_device();
         return 0;
     case live_message:
         on_live_check();

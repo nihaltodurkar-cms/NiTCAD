@@ -19,6 +19,8 @@ public:
         [[nodiscard]] virtual std::string dimensions_deck() = 0;           // the deck now
         virtual void dimensions_edited(const std::string& text) = 0;      // through the deck editor (undo)
         virtual void dimensions_selected(const std::string& name) = 0;    // a row picked: its line lit
+        // Unit 26n slice 1: why the deck with an edit is not taken (shown on the row, not written); empty: taken.
+        [[nodiscard]] virtual std::string dimensions_refuse(const std::string& /*text*/) { return {}; }
 
     protected:
         ~Host() = default;
@@ -32,6 +34,7 @@ public:
     [[nodiscard]] HWND hwnd() const noexcept { return hwnd_; }
     void reload();                          // re-read the rows from the deck
     void select(const std::string& name);   // light a row (its dimension line was clicked)
+    void set_group(std::string group);       // only that group's rows (Unit 26n slice 1, the New device dialog); empty: all
     [[nodiscard]] const std::string& selected() const noexcept { return selected_; }
     [[nodiscard]] int preferred_height(int width) const;
     void set_dpi(int dpi, HFONT font, HFONT bold);
@@ -65,7 +68,7 @@ private:
     HFONT font_ = nullptr, bold_ = nullptr;
     std::vector<dims::Dimension> rows_;
     std::vector<Row> controls_;
-    std::string message_, selected_;
+    std::string message_, selected_, group_;
     bool enabled_ = true;
 };
 

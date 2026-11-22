@@ -40,6 +40,8 @@ bool register_class(const wchar_t* name, WNDPROC proc, HBRUSH background, HCURSO
 
 // Open and save dialogs: the chosen path, or empty when cancelled. `filter` is a double-NUL list.
 [[nodiscard]] std::filesystem::path open_dialog(HWND owner, const wchar_t* filter, const wchar_t* title);
+// A folder chosen in the shell's folder picker (Unit 26n slice 1), starting at `start`; empty when cancelled.
+[[nodiscard]] std::filesystem::path pick_folder(HWND owner, const wchar_t* title, const std::filesystem::path& start);
 [[nodiscard]] std::filesystem::path save_dialog(HWND owner, const wchar_t* filter, const wchar_t* title,
                                                 const wchar_t* default_extension);
 

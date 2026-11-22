@@ -13,8 +13,9 @@ constexpr std::uint16_t vk_tab = 0x09, vk_space = 0x20, vk_end = 0x23, vk_home =
 
 constexpr std::array<std::string_view, 7> bar{"&File", "&Edit", "&Device", "&Mesh", "&Physics", "&Simulation", "&View"};
 
-constexpr std::array<CommandInfo, 68> list{{
+constexpr std::array<CommandInfo, 69> list{{
     {Command::new_deck, "&File", "&New deck", {'N', true}, "Ctrl+N"},
+    {Command::new_device, "&File", "New de&vice...", {'N', true, true}, "Ctrl+Shift+N"},
     {Command::open_deck, "&File", "&Open deck...", {'O', true}, "Ctrl+O"},
     {Command::open_result, "&File", "Open &result...", {'R', true, true}, "Ctrl+Shift+R"},
     {Command::compare_result, "&File", "Co&mpare with a result...", {'C', true, true}, "Ctrl+Shift+C"},

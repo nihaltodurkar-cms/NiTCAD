@@ -53,9 +53,11 @@ void DimensionsPanel::reload() {
     }
     enabled_ = true;
     message_ = r->empty() ? "No named dimensions — name a value with N while dragging, or add [parameters] on the Deck tab." : "";
-    const bool same = r->size() == rows_.size() &&
-                      std::ranges::equal(*r, rows_, [](const auto& a, const auto& b) { return a.name == b.name && a.group == b.group; });
-    rows_ = *r;
+    std::vector<dims::Dimension> shown = *r;
+    if (!group_.empty()) std::erase_if(shown, [&](const dims::Dimension& d) { return d.group != group_; });
+    const bool same = shown.size() == rows_.size() &&
+                      std::ranges::equal(shown, rows_, [](const auto& a, const auto& b) { return a.name == b.name && a.group == b.group; });
+    rows_ = std::move(shown);
     if (!same) rebuild();
     show_rows();
 }
@@ -153,6 +155,13 @@ void DimensionsPanel::set_dpi(int dpi, HFONT font, HFONT bold) {
     layout();
 }
 
+void DimensionsPanel::set_group(std::string group) {
+    group_ = std::move(group);
+    rows_.clear();  // rebuilt for the group
+    rebuild();
+    reload();
+}
+
 void DimensionsPanel::select(const std::string& name) {
     selected_ = name;
     layout();
@@ -175,6 +184,11 @@ bool DimensionsPanel::commit(std::size_t row, const std::string& typed) {
     const auto out = dims::set_dimension(deck, rows_[row].name, typed);
     if (!out) {
         controls_[row].error_text = out.error();
+        show_rows();
+        return false;
+    }
+    if (const std::string why = host_.dimensions_refuse(*out); !why.empty()) {
+        controls_[row].error_text = why;
         show_rows();
         return false;
     }

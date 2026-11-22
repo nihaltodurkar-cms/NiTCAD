@@ -39,6 +39,7 @@
 #include "NiTCAD/app/integration.hpp"
 #include "NiTCAD/app/live_check.hpp"
 #include "deck_pane.hpp"
+#include "new_device_dialog.hpp"
 #include "geometry_page.hpp"
 #include "solid_page.hpp"
 #include "pages.hpp"
@@ -64,6 +65,7 @@ struct WindowOptions {
     // and where a user's copies go (empty: the user's Documents, NiTCAD\examples).
     std::filesystem::path examples_dir;
     std::filesystem::path examples_copy_dir;
+    std::filesystem::path devices_copy_dir;  // Unit 26n slice 1: where New device writes by default (empty: Documents/NiTCAD/devices)
 };
 
 // The posted message that wakes the window for the run controller's events.
@@ -77,6 +79,8 @@ inline constexpr UINT live_delay_ms = 400;
 inline constexpr UINT live_message = WM_APP + 2;
 // Posted when a box in the scene tree may have changed (Unit 26c, YD4).
 inline constexpr UINT tree_check_message = WM_APP + 3;
+// Unit 26n slice 1: the New device dialog closed (a deck created, or cancelled), handled after its own message.
+inline constexpr UINT new_device_message = WM_APP + 4;
 // Transient playback (Unit 26c, YD5): the timer that shows the snapshot due while playing. Each tick shows the
 // snapshot the time since Play has reached (playback_frame), so a frame drawn late skips the ones it missed.
 inline constexpr UINT_PTR playback_timer = 0x54;
@@ -91,7 +95,8 @@ class MainWindow final : public Viewport::Host,
                          public StartPage::Host,
                          public RunPage::Host,
                          public GeometryPage::Host,
-                         public SolidPage::Host {
+                         public SolidPage::Host,
+                         public NewDeviceDialog::Host {
 public:
     enum Tab : int { tab_start = 0, tab_geometry, tab_view, tab_curves, tab_deck, tab_run, tab_results, tab_count };
 
@@ -128,6 +133,7 @@ public:
     [[nodiscard]] Viewport& viewport() noexcept { return *viewport_; }
     [[nodiscard]] DeckPane& deck() noexcept { return *deck_; }
     [[nodiscard]] StartPage& start_page() noexcept { return *start_; }
+    [[nodiscard]] NewDeviceDialog* new_device_dialog() noexcept { return new_device_.get(); }  // Unit 26n slice 1; null when closed
     [[nodiscard]] RunPage& run_page() noexcept { return *run_page_; }
     [[nodiscard]] ResultsPage& results_page() noexcept { return *results_; }
     [[nodiscard]] GeometryPage& geometry_page() noexcept { return *geometry_; }
@@ -379,6 +385,10 @@ private:
     void start_command(int command) override;
     void start_recent(std::size_t index) override;
     void start_example(std::size_t index) override;
+    void new_device_created(const std::filesystem::path& deck) override;  // Unit 26n slice 1 (DT4)
+    void new_device_closed() override;
+    void open_new_device();
+    void finish_new_device();
     void run_page_stop() override;
 
     WindowOptions options_;
@@ -409,6 +419,9 @@ private:
     std::unique_ptr<SolidPage> solid_;
     bool solid_shown_ = false;
     std::vector<Example> examples_;
+    std::filesystem::path devices_dir_;  // the library (examples/devices), Unit 26n slice 1
+    std::unique_ptr<NewDeviceDialog> new_device_;
+    std::filesystem::path new_device_path_;  // the deck created, opened by finish_new_device
     HACCEL accelerators_ = nullptr;
     HFONT font_ = nullptr, bold_ = nullptr;
     int dpi_ = 96;
