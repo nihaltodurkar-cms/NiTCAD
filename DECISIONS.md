@@ -2359,6 +2359,40 @@ as slice 0 goes.
   A dimension used only in doping gets a line only through its `x=a:b` window. A line on a continued (`\`) deck line
   is not substituted (view only refused, the editor's message stands).
 
+**Slice 1 record (2026-11-23, branch `app/device-templates`, commits 083db06..HEAD, local only):** DT3 and DT4.
+
+- **Built.** Ten parametric decks in `examples/devices/`: PN diode 1D and 2D, Schottky diode 1D, MOS capacitor 1D
+  (C–V), planar MOSFET 2D and 3D, SOI MOSFET 2D, FinFET bulk and SOI (3D), JFET 2D. The MOSFET, JFET and SOI FinFET
+  follow the owner's deck set (`decks/example-decks`, f839bab); the bulk FinFET follows the owner's
+  `decks/finfet_bulk_3d.deck` (read only, not committed); the rest the shipped examples. Every geometric number,
+  doping level and junction position is a `[parameters]` row, labelled by its comment, the first group `Main`.
+  Positions are derived rows (`x_gate = $Lsd + $Lg`), and the mesh lines are written from the same rows. The four
+  shipped examples are unchanged (the 26k tests edit `mosfet_2d.deck` in the 2D editor). File ▸ New device…
+  (Ctrl+Shift+N, and the Start page's first button) opens a dialog over the window: the families, the chosen deck's
+  thumbnail (its region boxes, a 3D deck cut at mid z), its main dimensions in a dimensions panel over the deck's
+  text in memory (a value the build refuses shows on its row and is not written), and the folder (default
+  Documents\NiTCAD\devices, Browse… picks one) and name. Create writes `<name>.deck`, never over a file, with its
+  `[output]` files renamed after it, and opens it on the Geometry tab.
+- **Measured.** DC2: every length row of every deck moved by one panel edit changes one line and still builds
+  with the same node count. DC3: every geometric and doping number is a reference (a lint over
+  `[mesh]`/`[region]`/`[contact]`/`[doping]`), and the 2D MOSFET at Lg + 1 nm equals the deck written out by hand
+  (nodes, regions, doping, contacts, to 1e-12). DC4 (Release, solver threads 1): nodes jfet 4180, mosfet_2d 4331,
+  pn_2d 2511, soi_2d 2257, bulk FinFET 6720, SOI FinFET 19343, mosfet_3d 8525; every deck runs at its defaults.
+  mosfet_2d 11.7 s, V_th 0.446 V, SS 79.3 mV/dec; soi_mosfet_2d 3.8 s, 0.425 V, 92.8; mosfet_3d 57.2 s, 0.394 V, 79.6;
+  bulk FinFET 25.8 s, 0.286 V, 84.2; SOI FinFET 1167.6 s, 0.229 V, 64.9; jfet_2d 15.2 s; the 1D decks under 0.2 s.
+  **DC4 missed in part:** the SOI FinFET's run (19.5 min) is far over the slow-test budget. It stays a hidden test
+  (`[.library_runs3d]`), not in ctest. DC11: 10 of 10 mutants killed (one after a new check). DC12: the model
+  (`app/new_device`) has no Win32 headers.
+- **Rulings.** The library is a folder of its own, beside the four examples, not a rewrite of them. The 3D FinFETs
+  are tensor decks like the owner's, not `extrude3d`: the slice 0 preview draws a 3D tensor deck with its lines.
+  The SOI FinFET's mesh along the fin is coarser than the owner's (17 lines, not 23) to stay under 20k nodes.
+  Non-geometric keys (materials, work functions, Richardson constants, straddle widths) stay literals. DC4's
+  figures are checked on the MOSFETs and FinFETs only; the JFET's ohmic gates give no transfer figures. The panel's
+  Host gained a refusal hook (default: take the edit). The dialog closes from a posted message.
+- **Limitations (recorded).** The dialog has no dialog keys yet (Tab, Enter and Esc are not routed through
+  IsDialogMessage). Browse… is not driven by the tests. A thumbnail shows region boxes only (polygons and mesh
+  files: the background). DC10's full interaction (with Sweep…) waits for the sweep slice.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
