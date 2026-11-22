@@ -60,6 +60,7 @@ public:
         [[nodiscard]] virtual std::optional<geo::Rect> geometry_bounds() = 0;  // the built device's extent
         virtual void geometry_status(const std::string& cursor) = 0;  // the cursor's position, for the status bar
         virtual void geometry_selected(const std::string& region) = 0;  // a region selected on the canvas
+        virtual void geometry_sweep(const std::string& /*name*/) {}  // Unit 26n slice 3: a dimension row's Sweep...
 
     protected:
         ~Host() = default;
@@ -261,6 +262,8 @@ private:
         std::string dimensions_deck() override;
         void dimensions_edited(const std::string& text) override;
         void dimensions_selected(const std::string& name) override;
+        bool dimensions_sweeps() override { return true; }
+        void dimensions_sweep(const std::string& name) override;
     };
     DimsHost dims_host_;
     std::unique_ptr<DimensionsPanel> dims_;

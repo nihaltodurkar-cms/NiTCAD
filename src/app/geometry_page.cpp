@@ -2079,6 +2079,8 @@ void GeometryPage::DimsHost::dimensions_edited(const std::string& text) {
 
 void GeometryPage::DimsHost::dimensions_selected(const std::string&) { page->invalidate(); }
 
+void GeometryPage::DimsHost::dimensions_sweep(const std::string& name) { page->host_.geometry_sweep(name); }
+
 void GeometryPage::reload_dimensions() {
     dims_->reload();
     marks_ = dims::dimension_marks(text_seen_);

@@ -75,4 +75,11 @@ struct SweepFigures {
 [[nodiscard]] std::expected<render::PlotScene, base::Error> figure_plot(const SweepResults& s, const SweepFigures& f,
                                                                        std::size_t j);
 
+// The sweep dialog's values (DT6): `typed` read by deck::sweep_values for row `name`'s kind, a bare number typed for a
+// length taking the row's unit (as the panel takes it, dims::set_dimension). Errors: no such row, a derived row (a sum
+// or a reference: it follows others), sweep_values' errors.
+[[nodiscard]] std::expected<std::vector<std::string>, std::string> typed_sweep_values(std::string_view deck_text,
+                                                                                    std::string_view name,
+                                                                                    std::string_view typed);
+
 }  // namespace NiTCAD::app

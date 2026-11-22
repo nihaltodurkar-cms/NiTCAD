@@ -11,7 +11,7 @@ namespace NiTCAD::app {
 namespace {
 
 constexpr const wchar_t* panel_class = L"NiTCADDimensionsPanel";
-constexpr int id_message = 1, id_first = 100;  // a row k's edit is id_first + 4k; label +1, header +2, error +3
+constexpr int id_message = 1, id_first = 100;  // a row k's edit is id_first + 5k; label +1, header +2, error +3, sweep +4
 constexpr COLORREF error_ink = RGB(190, 30, 30);
 
 bool derived(const dims::Dimension& d) { return d.expr.find('$') != std::string::npos; }
@@ -56,7 +56,7 @@ void DimensionsPanel::reload() {
     std::vector<dims::Dimension> shown = *r;
     if (!group_.empty()) std::erase_if(shown, [&](const dims::Dimension& d) { return d.group != group_; });
     const bool same = shown.size() == rows_.size() &&
-                      std::ranges::equal(shown, rows_, [](const auto& a, const auto& b) { return a.name == b.name && a.group == b.group; });
+                      std::ranges::equal(shown, rows_, [](const auto& a, const auto& b) { return a.name == b.name && a.group == b.group && derived(a) == derived(b); });
     rows_ = std::move(shown);
     if (!same) rebuild();
     show_rows();
@@ -65,7 +65,7 @@ void DimensionsPanel::reload() {
 void DimensionsPanel::rebuild() {
     for (const Row& r : controls_) {
         RemoveWindowSubclass(r.edit, edit_proc, 1);
-        for (HWND h : {r.header, r.label, r.edit, r.error}) {
+        for (HWND h : {r.header, r.label, r.edit, r.error, r.sweep}) {
             if (h) DestroyWindow(h);
         }
     }
@@ -78,7 +78,7 @@ void DimensionsPanel::rebuild() {
     };
     std::string group;
     for (std::size_t k = 0; k < rows_.size(); ++k) {
-        const int base = id_first + 4 * static_cast<int>(k);
+        const int base = id_first + 5 * static_cast<int>(k);
         Row& c = controls_[k];
         if (!rows_[k].group.empty() && rows_[k].group != group) {
             c.header = make(L"STATIC", SS_LEFT, 0, base + 2);
@@ -89,6 +89,10 @@ void DimensionsPanel::rebuild() {
         c.label = make(L"STATIC", SS_LEFT | SS_ENDELLIPSIS, 0, base + 1);
         c.edit = make(L"EDIT", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, base);
         c.error = make(L"STATIC", SS_LEFT, 0, base + 3);
+        if (host_.dimensions_sweeps() && !derived(rows_[k])) {
+            c.sweep = make(L"BUTTON", WS_TABSTOP | BS_PUSHBUTTON, 0, base + 4);
+            SetWindowTextW(c.sweep, L"Sweep\x2026");
+        }
         SetWindowSubclass(c.edit, edit_proc, 1, reinterpret_cast<DWORD_PTR>(this));
     }
 }
@@ -127,7 +131,9 @@ void DimensionsPanel::layout() {
         }
         SendMessageW(c.label, WM_SETFONT, reinterpret_cast<WPARAM>(k < rows_.size() && rows_[k].name == selected_ ? bold_ : font_), FALSE);
         place(c.label, true, pad, label_w - gap, row - gap);
-        place(c.edit, true, pad + label_w, width - 2 * pad - label_w, row - gap);
+        const int sweep_w = c.sweep ? MulDiv(64, dpi_, 96) : 0;
+        place(c.edit, true, pad + label_w, width - 2 * pad - label_w - (sweep_w ? sweep_w + gap : 0), row - gap);
+        place(c.sweep, c.sweep != nullptr, width - pad - sweep_w, sweep_w, row - gap);
         y += row;
         place(c.error, !c.error_text.empty(), pad, width - 2 * pad, row - gap);
         if (!c.error_text.empty()) y += row;
@@ -149,7 +155,9 @@ void DimensionsPanel::set_dpi(int dpi, HFONT font, HFONT bold) {
     bold_ = bold;
     SendMessageW(message_label_, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
     for (const Row& c : controls_) {
-        for (HWND h : {c.label, c.edit, c.error}) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+        for (HWND h : {c.label, c.edit, c.error, c.sweep}) {
+            if (h) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+        }
         if (c.header) SendMessageW(c.header, WM_SETFONT, reinterpret_cast<WPARAM>(bold), FALSE);
     }
     layout();
@@ -198,6 +206,14 @@ bool DimensionsPanel::commit(std::size_t row, const std::string& typed) {
     return true;
 }
 
+HWND DimensionsPanel::sweep_button(std::size_t row) const { return row < controls_.size() ? controls_[row].sweep : nullptr; }
+
+bool DimensionsPanel::sweep(std::size_t row) {
+    if (!enabled_ || row >= rows_.size() || row >= controls_.size() || !controls_[row].sweep) return false;
+    host_.dimensions_sweep(rows_[row].name);
+    return true;
+}
+
 bool DimensionsPanel::wheel(std::size_t row, int notches) {
     if (!enabled_ || row >= rows_.size()) return false;
     const std::string next = dims::step_dimension(rows_[row], notches);
@@ -210,6 +226,12 @@ LRESULT CALLBACK DimensionsPanel::proc(HWND hwnd, UINT message, WPARAM w, LPARAM
     if (self) {
         switch (message) {
         case WM_COMMAND:
+            if (HIWORD(w) == BN_CLICKED) {
+                for (std::size_t k = 0; k < self->controls_.size(); ++k) {
+                    if (self->controls_[k].sweep && self->controls_[k].sweep == reinterpret_cast<HWND>(l)) self->sweep(k);
+                }
+                return 0;
+            }
             if (HIWORD(w) == EN_SETFOCUS) {
                 const std::size_t k = self->row_of(reinterpret_cast<HWND>(l));
                 if (k < self->rows_.size()) {

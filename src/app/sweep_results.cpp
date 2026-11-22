@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "NiTCAD/analysis/curve.hpp"
+#include "NiTCAD/app/dimensions.hpp"
 #include "NiTCAD/deck/dimension_sweep.hpp"
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/render/color.hpp"
@@ -191,6 +192,48 @@ std::expected<render::PlotScene, base::Error> figure_plot(const SweepResults& s,
     plot->series[0].markers = true;
     plot->series[0].color = render::sample(render::Colormap::viridis, 0.0);
     return plot;
+}
+
+}  // namespace NiTCAD::app
+
+namespace NiTCAD::app {
+
+std::expected<std::vector<std::string>, std::string> typed_sweep_values(std::string_view deck_text, std::string_view name,
+                                                                        std::string_view typed) {
+    const auto rows = dims::read_dimensions(deck_text);
+    if (!rows) return std::unexpected(rows.error());
+    const auto row = std::ranges::find(*rows, name, &dims::Dimension::name);
+    if (row == rows->end()) return std::unexpected(std::format("no dimension '{}'", name));
+    if (row->expr.find('$') != std::string::npos) {
+        return std::unexpected(std::format("{} follows other dimensions ({}): sweep those", name, row->expr));
+    }
+    std::string list(typed);
+    if (row->length) {
+        const std::string_view expr = row->expr;
+        const std::string unit = expr.ends_with("nm") || expr.ends_with("um") || expr.ends_with("cm")
+                                     ? std::string(expr.substr(expr.size() - 2))
+                                     : std::string(std::abs(row->value) < 1e-4 ? "nm" : "um");
+        const char sep = list.find(':') != std::string::npos ? ':' : ',';
+        std::string out;
+        std::size_t at = 0;
+        while (true) {
+            const std::size_t end = list.find(sep, at);
+            std::string item = list.substr(at, end == std::string::npos ? std::string::npos : end - at);
+            const auto b = item.find_first_not_of(" \t"), e = item.find_last_not_of(" \t");
+            item = b == std::string::npos ? std::string() : item.substr(b, e - b + 1);
+            double v = 0.0;
+            const auto [p, ec] = std::from_chars(item.data(), item.data() + item.size(), v);
+            if (!item.empty() && ec == std::errc{} && p == item.data() + item.size()) item += unit;
+            if (!out.empty() || at > 0) out += sep;
+            out += item;
+            if (end == std::string::npos) break;
+            at = end + 1;
+        }
+        list = std::move(out);
+    }
+    auto values = deck::sweep_values(list, row->length);
+    if (!values) return std::unexpected(std::format("{}: {}", name, values.error()));
+    return values;
 }
 
 }  // namespace NiTCAD::app

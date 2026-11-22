@@ -54,6 +54,7 @@ public:
         virtual void solid_edited(const std::string& text) = 0;  // the deck after an edit, undo or redo
         virtual void solid_status(const std::string& text) = 0;  // the cursor's position, a measure, a refusal
         [[nodiscard]] virtual render::Renderer* solid_renderer() = 0;
+        virtual void solid_sweep(const std::string& /*name*/) {}  // Unit 26n slice 3: a dimension row's Sweep...
 
     protected:
         ~Host() = default;
@@ -256,6 +257,8 @@ private:
         std::string dimensions_deck() override;
         void dimensions_edited(const std::string& text) override;
         void dimensions_selected(const std::string& name) override;
+        bool dimensions_sweeps() override { return true; }
+        void dimensions_sweep(const std::string& name) override;
     };
     DimsHost dims_host_;
     std::unique_ptr<DimensionsPanel> dims_;

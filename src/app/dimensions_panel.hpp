@@ -21,6 +21,9 @@ public:
         virtual void dimensions_selected(const std::string& name) = 0;    // a row picked: its line lit
         // Unit 26n slice 1: why the deck with an edit is not taken (shown on the row, not written); empty: taken.
         [[nodiscard]] virtual std::string dimensions_refuse(const std::string& /*text*/) { return {}; }
+        // Unit 26n slice 3 (DT6): whether a row offers Sweep... (not in the New device dialog), and its click.
+        [[nodiscard]] virtual bool dimensions_sweeps() { return false; }
+        virtual void dimensions_sweep(const std::string& /*name*/) {}
 
     protected:
         ~Host() = default;
@@ -48,11 +51,14 @@ public:
     [[nodiscard]] HWND row_edit(std::size_t row) const;
     bool commit(std::size_t row, const std::string& typed);  // as Enter in the row's edit
     bool wheel(std::size_t row, int notches);
+    // A row's Sweep... button: there for a row not derived from others when the host sweeps; null otherwise.
+    [[nodiscard]] HWND sweep_button(std::size_t row) const;
+    bool sweep(std::size_t row);  // as the button: the host opens the sweep dialog for the row
 
 private:
     struct Row {
         HWND header = nullptr;  // a group's title above the row, or null
-        HWND label = nullptr, edit = nullptr, error = nullptr;
+        HWND label = nullptr, edit = nullptr, error = nullptr, sweep = nullptr;
         std::string error_text;
     };
     static LRESULT CALLBACK proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);

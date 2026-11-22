@@ -1438,6 +1438,122 @@ void MainWindow::finish_new_device() {
     if (!deck.empty() && open_deck(deck)) select_tab(tab_geometry);
 }
 
+// A run of the deck in the editor (F5), or a dimension sweep of it (Unit 26n slice 3, DT6): the deck's text taken, an
+// untitled deck saved first (a run writes its outputs beside the deck), the run monitor shown.
+void MainWindow::start_deck_run(const std::pair<std::string, std::vector<std::string>>* sweep) {
+    document_.set_text(deck_->text());
+    if (document_.is_untitled() && !save(true)) return;
+    select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
+    pending_ = Pending::run;
+    console_log_.begin_run();
+    timings_ = {};
+    set_console_collapsed(false);  // Unit 26j: the console opens for a run
+    sweep_results_.reset();
+    sweep_figures_ = {};
+    sweep_view_ = -1;
+    if (sweep) {
+        std::string list;
+        for (const std::string& v : sweep->second) list += (list.empty() ? "" : ", ") + v;
+        log_line(LogLevel::header, std::format("Sweep {} of {} = {} ({} runs)", document_.path().filename().string(),
+                                               sweep->first, list, sweep->second.size()));
+        sweep_text_ = document_.text();
+        runner_.start_sweep(document_.text(), document_.path(), sweep->first, sweep->second);
+    } else {
+        log_line(LogLevel::header, "Run " + document_.path().filename().string());
+        runner_.start_run(document_.text(), document_.path());
+    }
+    update_points();  // the last run's rows cleared
+    update_taskbar(true);
+    show_status(status_state, "Running...");
+    SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
+    run_page_->update(runner_, renderer(), true);  // the last run's rows cleared
+    update_command_states();
+}
+
+void MainWindow::geometry_sweep(const std::string& name) { open_sweep_dialog(name); }
+void MainWindow::solid_sweep(const std::string& name) { open_sweep_dialog(name); }
+
+void MainWindow::open_sweep_dialog(const std::string& name) {
+    if (sweep_dialog_) {
+        SetForegroundWindow(sweep_dialog_->hwnd());
+        return;
+    }
+    if (runner_.busy()) {
+        set_status(status_state, "A run is in progress: sweep when it has finished", LogLevel::warning);
+        return;
+    }
+    const std::string text = deck_->text();
+    const auto rows = dims::read_dimensions(text);
+    if (!rows) return;
+    const auto row = std::ranges::find(*rows, name, &dims::Dimension::name);
+    if (row == rows->end()) return;
+    const fs::path path = document_.is_untitled() ? fs::path("untitled.deck") : document_.path();
+    sweep_dialog_ = std::make_unique<SweepDialog>(hwnd_, *this, text, path, name, row->label, row->expr, dpi_, font_, bold_);
+}
+
+void MainWindow::sweep_run(const std::string& name, const std::vector<std::string>& values) {
+    sweep_request_.emplace(name, values);
+    PostMessageW(hwnd_, sweep_message, 0, 0);
+}
+
+void MainWindow::sweep_closed() {
+    sweep_request_.reset();
+    PostMessageW(hwnd_, sweep_message, 0, 0);
+}
+
+void MainWindow::finish_sweep_dialog() {
+    if (!sweep_dialog_) return;
+    sweep_dialog_.reset();  // the window enabled again
+    const auto request = std::exchange(sweep_request_, std::nullopt);
+    if (request && !runner_.busy()) start_deck_run(&*request);
+}
+
+// The sweep's runs loaded (DT7), figures.csv written beside them, and the Curves tab showing their curves.
+void MainWindow::sweep_finished() {
+    const auto& s = runner_.sweep();
+    if (!s) return;
+    auto r = load_sweep(sweep_text_, document_.path(), s->name, s->values);
+    if (!r) {
+        log_line(LogLevel::error, "The sweep's results: " + r.error());
+        return;
+    }
+    sweep_results_ = std::move(*r);
+    sweep_figures_ = sweep_figures(*sweep_results_);
+    const fs::path csv = figures_csv_path(*sweep_results_);
+    {
+        std::ofstream out(csv, std::ios::binary);
+        out << figures_csv(*sweep_results_, sweep_figures_);
+        if (out) log_line(LogLevel::info, "Wrote " + csv.string());
+        else log_line(LogLevel::error, "Cannot write " + csv.string());
+    }
+    sweep_view_ = 0;
+    select_tab(tab_curves);
+    sync_inspector();
+    refresh();
+}
+
+std::vector<std::string> MainWindow::sweep_views() const {
+    std::vector<std::string> out;
+    if (!sweep_results_) return out;
+    out.emplace_back("sweep: curves");
+    for (const std::string& f : sweep_figures_.names) out.push_back("sweep: " + f + " vs " + sweep_results_->name);
+    return out;
+}
+
+void MainWindow::select_sweep_view(std::size_t k) {
+    if (k >= sweep_views().size()) return;
+    sweep_view_ = static_cast<int>(k);
+    if (tab_ != tab_curves) select_tab(tab_curves);
+    sync_inspector();
+    refresh();
+}
+
+std::expected<render::PlotScene, base::Error> MainWindow::sweep_scene() const {
+    if (!sweep_results_ || sweep_view_ < 0) return std::unexpected(base::Error{base::ErrorCode::invalid_input, "no sweep", std::nullopt});
+    if (sweep_view_ == 0) return sweep_overlay(*sweep_results_, curve_view_.log);
+    return figure_plot(*sweep_results_, sweep_figures_, static_cast<std::size_t>(sweep_view_ - 1));
+}
+
 void MainWindow::run_page_stop() { execute(Command::stop); }
 
 void MainWindow::default_settings() {
@@ -1587,7 +1703,15 @@ void MainWindow::refresh() {
     ViewSettings shown = s;
     const bool along = s.kind == ViewKind::profile || s.kind == ViewKind::bands;
     if (along || (!is_plot(s.kind) && workspace_->device->mesh().dimension() > 1)) shown.cut = cut_;
-    auto scene = build_scene(*workspace_, shown, run_b());
+    // Unit 26n slice 3 (DT7): a sweep view on the Curves tab draws the sweep's runs, not this run's.
+    std::expected<Scene, base::Error> scene = std::unexpected(base::Error{base::ErrorCode::invalid_input, {}, std::nullopt});
+    if (tab_ == tab_curves && sweep_view_ >= 0 && sweep_results_) {
+        auto p = sweep_scene();
+        if (p) scene = Scene(std::move(*p));
+        else scene = std::unexpected(std::move(p.error()));
+    } else {
+        scene = build_scene(*workspace_, shown, run_b());
+    }
     if (!scene) {
         viewport_->show_message(scene.error().message);
         if (tab_ == tab_view) sync_range(true);
@@ -1735,6 +1859,14 @@ void MainWindow::sync_inspector() {
             if (!belongs(k, tab_, workspace_->device->mesh().dimension())) continue;
             if (k == s.kind) selected = static_cast<int>(views.size());
             views.emplace_back(to_string(k));
+        }
+        // Unit 26n slice 3 (DT7): the sweep's views after the run's own, on the Curves tab.
+        if (tab_ == tab_curves) {
+            const std::size_t own = views.size();
+            for (std::string& v : sweep_views()) views.push_back(std::move(v));
+            if (sweep_view_ >= 0 && own + static_cast<std::size_t>(sweep_view_) < views.size()) {
+                selected = static_cast<int>(own) + sweep_view_;
+            }
         }
     }
     combo_fill(child(id_view), views, selected);
@@ -1979,6 +2111,8 @@ void MainWindow::on_inspector(int id, int code) {
         for (const ViewKind k : available_views(*workspace_, run_b())) if (belongs(k, tab_, dim)) kinds.push_back(k);
         const int k = combo_index(child(id_view));
         if (k >= 0 && k < static_cast<int>(kinds.size())) s.kind = kinds[static_cast<std::size_t>(k)];
+        // Unit 26n slice 3: an entry after the run's own views is a sweep view (Curves tab).
+        sweep_view_ = tab_ == tab_curves && k >= static_cast<int>(kinds.size()) ? k - static_cast<int>(kinds.size()) : -1;
         view_defaults(s);
         sync_inspector();
     } else if (id == id_field && selection) {
@@ -2440,6 +2574,9 @@ bool MainWindow::open_deck(const fs::path& path) {
     update_title();
     workspace_.reset();
     ++workspace_generation_;  // Unit 26i (ND5): the metrics again
+    sweep_results_.reset();  // Unit 26n slice 3: another deck's sweep is not shown
+    sweep_figures_ = {};
+    sweep_view_ = -1;
     run_b_.reset();
     previous_.reset();
     cut_.reset();
@@ -2540,6 +2677,9 @@ void MainWindow::on_run_timer() {
     {
         const auto& rows = runner_.points();
         std::string text = s == RunState::stopping ? "Stopping..." : "Running";
+        if (const auto& sw = runner_.sweep()) {
+            text = std::format("Sweep {} = {} ({} of {}): ", sw->name, sw->values[sw->current], sw->current + 1, sw->values.size()) + text;
+        }
         if (!rows.empty()) {
             const PointRow& r = rows.back();
             if (r.phase == solve::Phase::equilibrium) text += ": equilibrium";
@@ -2608,6 +2748,14 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
         set_status(status_state, stopped ? std::format("Stopped early after {:.1f} s: {}", seconds, stopped->message)
                                          : std::format("Done in {:.1f} s", seconds),
                    stopped ? LogLevel::warning : LogLevel::success);
+        if (runner_.sweep()) {
+            const auto& sw = *runner_.sweep();
+            set_status(status_state,
+                       std::format("Sweep of {}: {} of {} run{} done in {:.1f} s{}", sw.name, sw.completed, sw.values.size(),
+                                   sw.values.size() == 1 ? "" : "s", seconds, sw.stopped ? " (stopped)" : ""),
+                       sw.completed == sw.values.size() ? LogLevel::success : LogLevel::warning);
+            sweep_finished();
+        }
     }
     update_command_states();
     update_taskbar(pending == Pending::run);
@@ -3019,21 +3167,7 @@ void MainWindow::execute(Command c) {
                 return;
             }
         }
-        document_.set_text(deck_->text());
-        if (document_.is_untitled() && !save(true)) return;  // a run writes its outputs beside the deck
-        select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
-        pending_ = Pending::run;
-        console_log_.begin_run();
-        timings_ = {};
-        set_console_collapsed(false);  // Unit 26j: the console opens for a run
-        log_line(LogLevel::header, "Run " + document_.path().filename().string());
-        runner_.start_run(document_.text(), document_.path());
-        update_points();  // the last run's rows cleared
-        update_taskbar(true);
-        show_status(status_state, "Running...");
-        SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
-        run_page_->update(runner_, renderer(), true);  // the last run's rows cleared
-        update_command_states();
+        start_deck_run(nullptr);
         return;
     case Command::stop:
         runner_.request_stop();
@@ -3643,6 +3777,9 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         return 0;
     case new_device_message:  // Unit 26n slice 1
         finish_new_device();
+        return 0;
+    case sweep_message:  // Unit 26n slice 3
+        finish_sweep_dialog();
         return 0;
     case live_message:
         on_live_check();

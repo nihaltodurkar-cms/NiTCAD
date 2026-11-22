@@ -164,3 +164,18 @@ TEST_CASE("sweep results: a transfer sweep's thresholds follow the swept work fu
     CHECK(plot->x.label == "V(gate) (V)");
     CHECK(app::figures_csv(*r, f).starts_with("wf,"));
 }
+
+TEST_CASE("sweep results: the dialog's values, a bare number taking the row's unit", "[app][sweep_results]") {
+    const std::string deck = "[parameters]\nLg = 20nm\nLsd = 0.1um\nx = $Lg + $Lsd\nNd = 1e18\n";
+    CHECK(app::typed_sweep_values(deck, "Lg", "20, 30nm, 45") == std::vector<std::string>{"20nm", "30nm", "45nm"});
+    CHECK(app::typed_sweep_values(deck, "Lsd", "0.1 : 0.3 : 0.1") == std::vector<std::string>{"0.1um", "0.2um", "0.3um"});
+    CHECK(app::typed_sweep_values(deck, "Nd", "1e17, 1e18") == std::vector<std::string>{"1e17", "1e18"});
+    CHECK_FALSE(app::typed_sweep_values(deck, "Nd", "1nm"));
+    CHECK_FALSE(app::typed_sweep_values(deck, "Lg", "abc"));
+    CHECK_FALSE(app::typed_sweep_values(deck, "Lg", ""));
+    CHECK_FALSE(app::typed_sweep_values(deck, "x", "1nm"));  // a derived row is not swept
+    CHECK_FALSE(app::typed_sweep_values(deck, "Wfin", "1nm"));
+    const auto e = app::typed_sweep_values(deck, "Lg", "20, abc");
+    REQUIRE_FALSE(e);
+    CHECK(e.error().find("abc") != std::string::npos);
+}

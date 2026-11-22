@@ -2618,6 +2618,8 @@ void SolidPage::DimsHost::dimensions_edited(const std::string& text) {
 
 void SolidPage::DimsHost::dimensions_selected(const std::string&) { page->invalidate(); }
 
+void SolidPage::DimsHost::dimensions_sweep(const std::string& name) { page->host_.solid_sweep(name); }
+
 void SolidPage::reload_dimensions() {
     dims_->reload();
     marks_ = dims::dimension_marks(text_seen_);
