@@ -1,0 +1,87 @@
+# Planar MOSFET (3D)
+# An n-channel MOSFET with its width meshed, every size a named dimension: the transfer curve Id-Vg at 50 mV.
+#
+# The 2D planar MOSFET extruded along z by its width: a p-type body under a thin oxide, n+ source and drain
+# (Gaussians in depth, windows along x reaching under the gate by the overlap), a metal gate (4.1 eV) over the
+# channel across the whole width, the body contact below. A coarse mesh (about 50 nm along the channel at the
+# defaults) keeps the run short; refine it before trusting currents.
+
+[parameters]
+# group: Main
+Lg = 1um  # Gate length
+W = 1um  # Width
+tox = 10nm  # Oxide thickness
+Na = 1e17  # Body acceptors (cm^-3)
+Nsd = 1e20  # Source/drain donors (cm^-3)
+# group: Body, source, drain and contacts
+Lsd = 0.5um  # Source/drain length
+xj = 0.1um  # Junction depth
+tsi = 0.99um  # Silicon depth
+ov = 50nm  # Source/drain overlap under the gate
+lat = 20nm  # Lateral spread of the source/drain
+yc = 0.8um  # Contact bottom
+gc = 5nm  # Contact gap below the oxide
+# group: Positions (derived)
+x_gate = $Lsd + $Lg  # Gate end
+L = $Lsd + $Lg + $Lsd  # Device length
+x_s = $Lsd + $ov  # Source window end
+x_d = $Lsd + $Lg - $ov  # Drain window start
+y_ox = $tsi + $tox  # Oxide top
+y_ct = $tsi - $gc  # Contact top
+
+[mesh]
+type = tensor
+x = linspace(0, $Lsd, 6) + linspace($Lsd, $x_gate, 21) + linspace($x_gate, $L, 6)
+y = linspace(0, $yc, 9) + linspace($yc, $tsi, 13) + linspace($tsi, $y_ox, 4)
+z = linspace(0, $W, 11)
+straddle y = $tsi 1nm
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 $L  $tsi $y_ox  0 $W
+
+[doping]
+profile = acceptor constant $Na
+profile = donor gaussian $Nsd axis=y center=$tsi width=$xj x=0:$x_s lateral=$lat
+profile = donor gaussian $Nsd axis=y center=$tsi width=$xj x=$x_d:$L lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  $yc $y_ct  0 $W
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = $L $L  $yc $y_ct  0 $W
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = $Lsd $x_gate  $y_ox $y_ox  0 $W
+electrode = metal
+work_function = 4.1
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[models]
+field_mobility = on
+
+[solver]
+backend = gmres_ilut
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate = 0 : 1.5 : 0.1
+contact drain = 0.05
+
+[output]
+sweep = mosfet_3d.nitsweep
+device = mosfet_3d.nitdev
+table = mosfet_3d.csv
