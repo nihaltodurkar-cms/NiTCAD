@@ -630,7 +630,7 @@ void MainWindow::layout() {
     place(tabs_, panes_.tabs);
     place(inspector_, panes_.inspector);
     place(console_panel_, panes_.console);
-    const bool view = tab_ == tab_view || tab_ == tab_curves;
+    const bool view = tab_ == tab_view || tab_ == tab_curves || geometry_preview();
     Rect page = panes_.page;
     if (tab_ != tab_view) page.height += panes_.metrics.height;  // the metrics strip is the device view's
     const Rect whole{panes_.page.x, panes_.page.y, panes_.page.width, panes_.page.height + panes_.metrics.height};
@@ -646,7 +646,7 @@ void MainWindow::layout() {
     // Unit 26k: the Geometry tab's page, and its section in the inspector's place.
     place(geometry_->hwnd(), whole);
     place(geometry_->inspector(), panes_.inspector);
-    ShowWindow(geometry_->hwnd(), tab_ == tab_geometry && !solid_shown_ ? SW_SHOW : SW_HIDE);
+    ShowWindow(geometry_->hwnd(), tab_ == tab_geometry && !solid_shown_ && !geometry_preview() ? SW_SHOW : SW_HIDE);
     ShowWindow(geometry_->inspector(), tab_ == tab_geometry && !solid_shown_ && panes_.inspector.width > 0 ? SW_SHOW : SW_HIDE);
     // Unit 26l: the 3D modeller in its place for a 3D deck.
     place(solid_->hwnd(), whole);
@@ -1366,6 +1366,10 @@ void MainWindow::select_tab(int tab) {
             break;
         }
         geometry_->reload();
+        if (geometry_preview()) {  // Unit 26n (DT2): the preview in the canvas's place
+            layout();
+            refresh();
+        }
         SetFocus(geometry_->canvas());
         // GD9: a deck not checked since it was opened is checked now (an edit's check is on its way otherwise).
         if (geometry_->check() == GeometryPage::Check::pending && !live_.pending() && live_edits_ == edits_) {
@@ -1520,7 +1524,7 @@ void MainWindow::set_run_b(std::optional<Workspace> b) {
 
 void MainWindow::refresh() {
     hide_readout();
-    if (tab_ != tab_view && tab_ != tab_curves) return;
+    if (tab_ != tab_view && tab_ != tab_curves && !geometry_preview()) return;
     scene_.reset();
     values_.clear();
     ++values_generation_;  // Unit 26i (ND5)
@@ -1611,6 +1615,9 @@ void MainWindow::refresh() {
                 values_title_ = std::string(render::field_info(*f).title);
             }
         }
+    }
+    if (geometry_preview()) {  // Unit 26n (DT2): the dimension lines on the preview
+        if (auto* f = std::get_if<render::FieldScene>(&*scene_)) solid::add_dimension_marks(*f, geometry_->dimension_marks(), geometry_->dimensions_panel().selected());
     }
     viewport_->show(&*renderer_, &*scene_);
     update_metrics();
@@ -2708,6 +2715,10 @@ void MainWindow::update_geometry_page() {
     if (shown == solid_shown_) return;
     solid_shown_ = shown;
     layout();
+}
+
+bool MainWindow::geometry_preview() const {
+    return tab_ == tab_geometry && !solid_shown_ && geometry_ && !geometry_->geometry().editable() && !geometry_->can_start();
 }
 
 void MainWindow::geometry_selected(const std::string&) {}

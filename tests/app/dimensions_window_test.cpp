@@ -287,3 +287,152 @@ TEST_CASE("dimensions in the 3D modeller: the panel replaces the parameters box;
     SendMessageW(page.canvas(), WM_LBUTTONUP, 0, MAKELPARAM(static_cast<int>(std::lround(p[0])), static_cast<int>(std::lround(p[1]))));
     CHECK(page.dimensions_panel().selected() == "Lg");
 }
+
+// --- Task 6: the Geometry tab for decks neither editor draws ---------------------------------------------------------
+
+#include <chrono>
+#include <cstdio>
+#include <functional>
+
+namespace {
+
+bool pump_until(const std::function<bool()>& done, double seconds = 120.0) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+    MSG m;
+    while (!done()) {
+        if (std::chrono::steady_clock::now() > end) return false;
+        if (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        } else {
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 5, QS_ALLINPUT);
+        }
+    }
+    return true;
+}
+
+bool shown(HWND h) { return (GetWindowLongPtrW(h, GWL_STYLE) & WS_VISIBLE) != 0; }
+
+const std::string pn1d_deck = R"([parameters]
+Ln = 0.8um  # n side
+Lp = 1.2um  # p side
+
+[mesh]
+type = tensor
+x = linspace(0, $Ln, 81) + linspace($Ln, $Ln + $Lp, 121)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant 1e18 x=0:$Ln
+profile = acceptor constant 1e16
+
+[contact cathode]
+kind = ohmic
+patch = x_min
+
+[contact anode]
+kind = ohmic
+patch = x_max
+
+[equilibrium]
+)";
+
+const std::string mos3d_deck = R"([parameters]
+tox = 2nm  # Oxide
+L = 100nm
+
+[mesh]
+type = tensor
+x = linspace(0, $L, 11)
+y = linspace(0, 40nm, 9) + linspace(40nm, 40nm + $tox, 3)
+z = linspace(0, 30nm, 4)
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 $L  40nm 40nm + $tox  0 30nm
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[equilibrium]
+)";
+
+const NiTCAD::render::FieldScene* field_scene(MainWindow& w) {
+    const auto* s = w.scene();
+    return s ? std::get_if<NiTCAD::render::FieldScene>(s) : nullptr;
+}
+
+bool has_label(MainWindow& w, const std::string& text) {
+    const auto* f = field_scene(w);
+    return f && std::ranges::any_of(f->labels, [&](const auto& l) { return l.text == text; });
+}
+
+double median(std::vector<double> v) {
+    std::ranges::sort(v);
+    return v[v.size() / 2];
+}
+
+}  // namespace
+
+TEST_CASE("dimensions on the Geometry tab for a 1D deck: the preview in the canvas's place, the panel beside it", "[app][window][dimensions]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write_deck("pn1d", pn1d_deck)));
+    w->execute(Command::tab_geometry);
+    REQUIRE(pump_until([&] { return w->preview() && w->scene() != nullptr; }));
+    CHECK(shown(w->viewport().hwnd()));
+    CHECK_FALSE(shown(w->geometry_page().hwnd()));
+    CHECK(shown(w->geometry_page().inspector()));
+    CHECK(w->geometry_page().dimensions_panel().rows() == 2);
+}
+
+TEST_CASE("dimensions on the Geometry tab for a 3D tensor deck: the lines and labels in the preview; an edit redraws it (DC9)", "[app][window][dimensions]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write_deck("mos3d", mos3d_deck)));
+    w->execute(Command::tab_geometry);
+    REQUIRE(pump_until([&] { return w->preview() && has_label(*w, "Oxide = 2 nm"); }));
+    CHECK(shown(w->viewport().hwnd()));
+    CHECK_FALSE(shown(w->geometry_page().hwnd()));
+    const auto* f = field_scene(*w);
+    REQUIRE(f);
+    CHECK(std::ranges::any_of(f->lines, [](const auto& b) { return b.name == "dimensions" && b.on_top; }));
+    DimensionsPanel& panel = w->geometry_page().dimensions_panel();
+    REQUIRE(panel.rows() == 2);
+    std::vector<double> ms;
+    for (int k = 0; k < 6; ++k) {
+        const std::string tox = std::to_string(3 + k % 2) + "nm";
+        const std::string label = "Oxide = " + std::to_string(3 + k % 2) + " nm";
+        const auto t0 = std::chrono::steady_clock::now();
+        REQUIRE(panel.commit(0, tox));
+        REQUIRE(pump_until([&] { return has_label(*w, label); }, 30.0));
+        ms.push_back(1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    }
+    std::printf("DC9: 3D tensor panel edit to refreshed preview: median %.0f ms\n", median(ms));
+    CHECK(median(ms) <= 1000.0);
+}
+
+TEST_CASE("dimensions in the 2D editor: a panel edit to the redrawn canvas (DC9)", "[app][window][dimensions]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write_deck("mos2d_speed", mos2d)));
+    pump();
+    w->execute(Command::tab_geometry);
+    GeometryPage& page = w->geometry_page();
+    REQUIRE(page.view_only());
+    std::vector<double> ms;
+    for (int k = 0; k < 10; ++k) {
+        const auto t0 = std::chrono::steady_clock::now();
+        REQUIRE(page.dimensions_panel().commit(0, std::to_string(21 + k % 2) + "nm"));
+        REQUIRE(page.render() >= 0.0);
+        ms.push_back(1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    }
+    std::printf("DC9: 2D panel edit to redrawn canvas: median %.0f ms\n", median(ms));
+    CHECK(median(ms) <= 300.0);
+}

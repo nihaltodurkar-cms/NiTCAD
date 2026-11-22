@@ -373,6 +373,8 @@ private:
     void solid_status(const std::string& text) override;
     [[nodiscard]] render::Renderer* solid_renderer() override;
     void update_geometry_page();  // which of the two pages the Geometry tab shows
+    // Unit 26n (DT2): the Geometry tab shows the device preview (the viewport) for a deck neither editor draws.
+    [[nodiscard]] bool geometry_preview() const;
     // StartPage::Host and RunPage::Host
     void start_command(int command) override;
     void start_recent(std::size_t index) override;
