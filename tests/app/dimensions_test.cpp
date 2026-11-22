@@ -219,3 +219,108 @@ patch = body
     REQUIRE(out);
     CHECK(changed(deck, *out) == std::vector<std::string>{"Lg = 25nm  # Gate length"});
 }
+
+// --- Task 2: dimension spans (DT2) ----------------------------------------------------------------------------------
+
+namespace {
+
+bool near(double a, double b) { return std::abs(a - b) <= 1e-12 + 1e-9 * std::abs(b); }
+
+const std::string pn1d = R"([parameters]
+Ln = 0.8um  # n side
+Lp = 1.2um  # p side
+
+[mesh]
+type = tensor
+x = linspace(0, $Ln, 81) + linspace($Ln, $Ln + $Lp, 121)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant 1e18 x=0:$Ln
+profile = acceptor constant 1e16
+
+[contact cathode]
+kind = ohmic
+patch = x_min
+
+[contact anode]
+kind = ohmic
+patch = x_max
+
+[equilibrium]
+)";
+
+const std::string mos3d = R"([parameters]
+tox = 2nm  # Oxide
+L = 100nm
+
+[mesh]
+type = tensor
+x = linspace(0, $L, 11)
+y = linspace(0, 40nm, 9) + linspace(40nm, 40nm + $tox, 3)
+z = linspace(0, 30nm, 4)
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 $L  40nm 40nm + $tox  0 30nm
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[equilibrium]
+)";
+
+}  // namespace
+
+TEST_CASE("dimension spans: a length's line is the shortest extent it changes with one end fixed", "[app][dimensions]") {
+    SECTION("2D: the gate length on the gate contact") {
+        const auto s = dims::dimension_spans(mos2d, "Lg");
+        REQUIRE(s.size() == 1);
+        CHECK(s[0].axis == 0);
+        CHECK(near(s[0].lo, 5e-6));
+        CHECK(near(s[0].hi, 7e-6));
+        CHECK(s[0].source == "contact gate");
+        CHECK(near(s[0].at[0], 5e-6));
+        CHECK(near(s[0].at[1], 4.2e-6));
+    }
+    SECTION("2D: a derived edge, the gate's far side") {
+        const auto s = dims::dimension_spans(mos2d, "x_d");
+        REQUIRE(s.size() == 1);
+        CHECK(s[0].source == "contact gate");
+        CHECK(near(s[0].hi, 7e-6));
+    }
+    SECTION("a number has no line") { CHECK(dims::dimension_spans(mos2d, "Nsd").empty()); }
+    SECTION("an unknown name has none") { CHECK(dims::dimension_spans(mos2d, "nope").empty()); }
+    SECTION("1D: the p side from the mesh's second piece") {
+        const auto s = dims::dimension_spans(pn1d, "Lp");
+        REQUIRE(s.size() == 1);
+        CHECK(s[0].axis == 0);
+        CHECK(near(s[0].lo, 0.8e-4));
+        CHECK(near(s[0].hi, 2.0e-4));
+        CHECK(s[0].source == "mesh x");
+    }
+    SECTION("1D: the n side from the doping window (before the mesh at a tie)") {
+        const auto s = dims::dimension_spans(pn1d, "Ln");
+        REQUIRE(s.size() == 1);
+        CHECK(near(s[0].hi, 0.8e-4));
+        CHECK(s[0].source == "doping 1");
+    }
+    SECTION("3D: the oxide thickness along y on the oxide box") {
+        const auto s = dims::dimension_spans(mos3d, "tox");
+        REQUIRE(s.size() == 1);
+        CHECK(s[0].axis == 1);
+        CHECK(near(s[0].lo, 4e-6));
+        CHECK(near(s[0].hi, 4.2e-6));
+        CHECK(s[0].source == "region oxide");
+        CHECK(near(s[0].at[2], 0.0));
+    }
+}

@@ -7,6 +7,7 @@
 // truth (VQ13).
 #pragma once
 
+#include <array>
 #include <expected>
 #include <string>
 #include <string_view>
@@ -41,5 +42,18 @@ struct Dimension {
 // the largest 1-2-5 multiple of the lattice step (0.1 nm) not above a tenth of its value, never below one lattice step,
 // in the unit it was written in. A derived row (a sum or a reference) is not stepped: its expression back.
 [[nodiscard]] std::string step_dimension(const Dimension& d, int notches);
+
+// Where a length dimension shows as a line (DT2): the deck substituted at p and at p + δ (δ a hundredth of |p|, at
+// least one lattice step); among the extents of region and contact boxes (and a generate3d domain), [doping] windows
+// (`x=a:b`) and the [mesh] axes' linspace pieces, a candidate changes its length by ±δ with exactly one end moving.
+// One span per axis, the shortest candidate (ties: boxes, then doping windows, then mesh pieces, each in deck order).
+// None for a number, an unknown name, or a deck that does not substitute; polygons and prisms give none (slice 0).
+struct Span {
+    int axis = 0;               // 0 x, 1 y, 2 z
+    double lo = 0.0, hi = 0.0;  // cm along the axis, at the deck's value
+    std::array<double, 3> at{};  // cm: the lo end; the other two coordinates place the line (a box's low corner)
+    std::string source;         // "region oxide", "contact gate", "mesh x", "doping 2" (1-based profile index)
+};
+[[nodiscard]] std::vector<Span> dimension_spans(std::string_view deck_text, std::string_view name);
 
 }  // namespace NiTCAD::app::dims
