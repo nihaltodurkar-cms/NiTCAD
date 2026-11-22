@@ -212,7 +212,8 @@ private:
 
     // A drag or a drawing in progress.
     enum class Drag { none, orbit, pan, move, axis, plane, face, vertex, contact_move, base, height, polygon, contact, measure, array,
-                      cut, taper, extrude, inset, inset_depth, radius, implant, junction, max_size, refine };
+                      cut, taper, extrude, inset, inset_depth, radius, implant, junction, max_size, refine,
+                      implant_window, implant_lateral, level, refine_height, refine_size };
     Drag drag_ = Drag::none;
     bool button_ = false;  // the left button is down
     solid::Model m_start_;
@@ -293,6 +294,14 @@ private:
     std::optional<solid::Volume> pending_volume_;
     [[nodiscard]] bool doping_press(const solid::Pick& p, double x, double y);
     void doping_step(double x, double y);
+    [[nodiscard]] bool text_drag() const noexcept;  // a slice 4 drag (its line pending_text_)
+    void finish_text_drag();
+    void on_up_text();
+    [[nodiscard]] std::optional<solid::P3> face_point(double x, double y) const;
+    solid::Box3 window_;           // the implant's window on the face
+    solid::Coord face_at_ = 0;     // the implanted face's plane
+    solid::Coord implant_depth_ = 0, lateral_ = 0;
+    double level_from_ = 1e18;
     bool commit_text(const std::string& out);
 };
 

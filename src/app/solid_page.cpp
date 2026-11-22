@@ -942,7 +942,17 @@ std::string SolidPage::chip_value() const {
             (e && res_q_ > 0 ? std::format(", about {:.0f} nodes", node_estimate(*e, static_cast<double>(drag_s_) * 1e-8, static_cast<double>(res_q_) * 1e-8)) : std::string());
         break;
     }
-    case Drag::refine: v = "size " + chip_length(refine_size_) + " (wheel)"; break;
+    case Drag::implant_window: {
+        const Box3 b = normalized(a_, b_);
+        const int u = (normal_.axis + 1) % 3, w = (normal_.axis + 2) % 3;
+        v = "window " + chip_length(b.hi[u] - b.lo[u]) + " × " + chip_length(b.hi[w] - b.lo[w]) + " (a click: the whole face)";
+        break;
+    }
+    case Drag::implant_lateral: v = "lateral " + chip_length(lateral_) + ", peak depth " + chip_length(implant_depth_); break;
+    case Drag::level: v = std::format("{} {:.0e} (drag up or down; D)", donor_ ? "donor" : "acceptor", level_); break;
+    case Drag::refine: v = "size " + chip_length(refine_size_) + " (then the height, then the size)"; break;
+    case Drag::refine_height: v = "height " + chip_length(height_) + ", size " + chip_length(refine_size_) + " (wheel)"; break;
+    case Drag::refine_size: v = "size " + chip_length(refine_size_) + " (up or down, or wheel)"; break;
     case Drag::inset: v = "margin " + chip_length(margin_); break;
     case Drag::inset_depth: v = "margin " + chip_length(margin_) + ", depth " + chip_length(drag_s_); break;
     case Drag::radius: v = "radius " + chip_length(radius_) + (preview_.solids.empty() ? std::string(", sides under 6 s") : std::format(", {} sides", preview_.solids.front().polygon.size())); break;
@@ -959,7 +969,7 @@ std::string SolidPage::chip_value() const {
 }
 
 void SolidPage::after_drag_step(double x, double y) {
-    if (drag_ == Drag::implant || drag_ == Drag::junction || drag_ == Drag::max_size || drag_ == Drag::refine) return;  // doping_step
+    if (text_drag()) return;  // doping_step
     if (auto next = pending()) {
         // As commit_model writes it: a tied coordinate moved edits its parameter (MT8, MC4).
         if (m_start_.parameters == next->parameters && !next->parameters.empty()) tie_edits(m_start_, *next);
@@ -984,7 +994,8 @@ void SolidPage::end_drag_ui() {
 bool SolidPage::on_char(wchar_t c) {
     const bool scalar = drag_ == Drag::axis || drag_ == Drag::face || drag_ == Drag::height || drag_ == Drag::cut || drag_ == Drag::taper ||
                         drag_ == Drag::extrude || drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius ||
-                        drag_ == Drag::implant || drag_ == Drag::junction || drag_ == Drag::max_size;
+                        drag_ == Drag::implant || drag_ == Drag::junction || drag_ == Drag::max_size ||
+                        drag_ == Drag::implant_lateral || drag_ == Drag::refine_height || drag_ == Drag::refine_size;
     const bool two = drag_ == Drag::move || drag_ == Drag::plane || drag_ == Drag::base || drag_ == Drag::array;
     // Slice 4 (MT9): D swaps the doping tools' dopant, during a drag too.
     if ((c == L'd' || c == L'D') && modeller::group_of(mode_) == modeller::Group::doping && mode_ != modeller::Mode::none) {
@@ -1062,6 +1073,11 @@ void SolidPage::finish_height() {
 }
 
 void SolidPage::apply_drag() {
+    if (text_drag()) {  // slice 4: a release's phase as released, else the line written
+        if (drag_ == Drag::implant_window || drag_ == Drag::refine) on_up_text();
+        else finish_text_drag();
+        return;
+    }
     switch (drag_) {
     case Drag::height: finish_height(); return;
     case Drag::inset_depth: finish_inset(); return;
@@ -1078,10 +1094,6 @@ void SolidPage::apply_drag() {
     case Drag::vertex:
     case Drag::contact_move:
     case Drag::base:
-    case Drag::implant:
-    case Drag::junction:
-    case Drag::max_size:
-    case Drag::refine:
     case Drag::contact: on_up(last_x_, last_y_); return;
     default: return;
     }
@@ -1442,6 +1454,10 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
         finish_inset();
         return;
     }
+    if (drag_ == Drag::implant || drag_ == Drag::implant_lateral || drag_ == Drag::refine_height || drag_ == Drag::refine_size) {
+        (void)doping_press({}, x, y);  // slice 4: the click ends the phase
+        return;
+    }
     entry_.clear();
     typed_axis_ = -1;
     drag_d_ = {};
@@ -1706,11 +1722,11 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         if (!v) return dragged;
         return *v >= 0 && dragged < 0 ? -*v : *v;
     };
+    if (text_drag()) {  // slice 4
+        doping_step(x, y);
+        return;
+    }
     switch (drag_) {
-    case Drag::implant:
-    case Drag::junction:
-    case Drag::max_size:
-    case Drag::refine: doping_step(x, y); return;
     case Drag::orbit:
         v_.camera.azimuth_deg -= static_cast<float>(dx * 0.4);
         v_.camera.elevation_deg = std::clamp(v_.camera.elevation_deg + static_cast<float>(dy * 0.4), -89.0f, 89.0f);
@@ -1942,6 +1958,21 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
 
 // --- Slice 4 (MT9, MT10): the Doping and Mesh tools, each writing one deck line ---------------------------------------
 
+bool SolidPage::text_drag() const noexcept {
+    switch (drag_) {
+    case Drag::implant_window:
+    case Drag::implant:
+    case Drag::implant_lateral:
+    case Drag::junction:
+    case Drag::level:
+    case Drag::max_size:
+    case Drag::refine:
+    case Drag::refine_height:
+    case Drag::refine_size: return true;
+    default: return false;
+    }
+}
+
 bool SolidPage::commit_text(const std::string& out) {
     const std::string text = host_.solid_deck();
     if (out.empty() || out == text) return false;
@@ -1950,9 +1981,60 @@ bool SolidPage::commit_text(const std::string& out) {
     return true;
 }
 
-bool SolidPage::doping_press(const Pick& p, double x, double y) {
+// The pending line written and the drag ended (a phase's click, a release, Enter).
+void SolidPage::finish_text_drag() {
+    const std::string out = pending_text_;
+    drag_ = Drag::none;
+    button_ = false;
+    if (GetCapture() == canvas_) ReleaseCapture();
+    pending_text_.clear();
+    pending_volume_.reset();
+    end_drag_ui();
+    if (!out.empty()) commit_text(out);
+    update_inspector();
+    invalidate();
+}
+
+namespace {
+
+// A level on the 1, 2, 5 steps: `steps` of them from 10^0 (3 a decade).
+double level_step(int steps) {
+    static constexpr double m[] = {1.0, 2.0, 5.0};
+    const int d = steps >= 0 ? steps / 3 : -((-steps + 2) / 3);
+    return m[steps - 3 * d] * std::pow(10.0, d);
+}
+
+int level_steps(double level) {
+    const double l = std::log10(level);
+    const double d = std::floor(l + 1e-9);
+    const double f = l - d;
+    const int k = f < std::log10(1.5) ? 0 : f < std::log10(3.5) ? 1 : 2;
+    return 3 * static_cast<int>(d) + k;
+}
+
+}  // namespace
+
+bool SolidPage::doping_press(const Pick& pressed, double x, double y) {
     using modeller::Mode;
-    const auto dopant = [&] { return donor_ ? device::Dopant::donor : device::Dopant::acceptor; };
+    // A phase's click: the next phase, or the line the phase shows written (a typed value already in it).
+    if (drag_ == Drag::implant) {
+        entry_.clear();
+        drag_ = Drag::implant_lateral;
+        doping_step(x, y);
+        return true;
+    }
+    if (drag_ == Drag::implant_lateral || drag_ == Drag::refine_size) {
+        finish_text_drag();
+        return true;
+    }
+    if (drag_ == Drag::refine_height) {
+        entry_.clear();
+        drag_ = Drag::refine_size;
+        press_y_ = y;
+        size_from_ = static_cast<double>(refine_size_);
+        doping_step(x, y);
+        return true;
+    }
     pending_text_.clear();
     pending_volume_.reset();
     drag_s_ = 0;
@@ -1976,17 +2058,23 @@ bool SolidPage::doping_press(const Pick& p, double x, double y) {
         begin_drag(Drag::refine);
         return true;
     }
-    const bool on_face = (p.kind == PickKind::face || (p.kind == PickKind::handle && p.handle == HandleKind::face)) && p.solid.solid >= 0;
-    if (!on_face) return false;
-    if (mode_ == Mode::profile) {
-        sel_ = {{p.solid}, -1};
-        const auto out = solid::add_profile(host_.solid_deck(), solid::region_profile(m_, p.solid, dopant(), level_));
-        if (!out) {
-            host_.solid_status(out.error());
-            return true;
-        }
-        host_.solid_status(modeller::deck_line(host_.solid_deck(), *out));
-        commit_text(*out);
+    // The Doping tools take a solid's face under the handles (a picked solid's gizmo moves nothing here).
+    const Pick p = pressed.kind == PickKind::face && pressed.solid.solid >= 0 ? pressed : pick(m_, v_, x, y, {});
+    const bool on_face = p.kind == PickKind::face && p.solid.solid >= 0;
+    if (!on_face) {
+        if (pressed.solid.solid < 0 && p.solid.solid < 0) return false;  // the background: MT1's navigation
+        host_.solid_status("Press a solid's face.");
+        return true;  // a solid's edge or handle: nothing moves
+    }
+    ref_ = p.solid;
+    index_ = p.index;
+    origin_ = p.at;
+    sel_ = {{p.solid}, -1};
+    if (mode_ == Mode::profile) {  // MT9: a drag up or down sets the level (1, 2, 5 a decade); a click keeps it
+        press_y_ = y;
+        level_from_ = level_;
+        begin_drag(Drag::level);
+        doping_step(x, y);
         return true;
     }
     const Solid* s = solid_at(m_, p.solid);
@@ -1995,62 +2083,178 @@ bool SolidPage::doping_press(const Pick& p, double x, double y) {
         host_.solid_status("A slanted face takes no implant or junction; press another face.");
         return true;
     }
-    ref_ = p.solid;
-    index_ = p.index;
     normal_ = *n;
-    origin_ = p.at;
-    sel_ = {{p.solid}, -1};
+    if (mode_ == Mode::implant) {  // MT9: a window dragged on the face, then the depth, then the lateral spread
+        face_at_ = quanta_of(origin_)[n->axis];
+        a_ = b_ = face_point(x, y).value_or(quanta_of(origin_));
+        lateral_ = 0;
+        begin_drag(Drag::implant_window);
+        doping_step(x, y);
+        return true;
+    }
     start_s_ = along_axis(m_, v_, x, y, origin_, n->axis);
-    begin_drag(mode_ == Mode::implant ? Drag::implant : Drag::junction);
+    begin_drag(Drag::junction);
     return true;
+}
+
+// The point under (x, y) on the implanted face's plane, snapped as the work plane's are; none off the plane.
+std::optional<P3> SolidPage::face_point(double x, double y) const {
+    const int a = normal_.axis;
+    const auto p = on_plane(m_start_, v_, x, y, a, static_cast<double>(face_at_) / static_cast<double>(per_um));
+    if (!p) return std::nullopt;
+    P3 raw = quanta_of(*p);
+    raw[a] = face_at_;
+    P3 out = snap(m_start_, {a, face_at_}, raw, snap_tolerance(m_start_, v_, *p), std::nullopt, grid()).p;
+    out[a] = face_at_;
+    return out;
+}
+
+void SolidPage::on_up_text() {
+    switch (drag_) {
+    case Drag::implant_window: {
+        button_ = false;
+        if (GetCapture() == canvas_) ReleaseCapture();
+        // The window (the whole face for a click), then the depth along the face's normal through its centre.
+        const Solid* s = solid_at(m_start_, ref_);
+        if (!s) {
+            cancel();
+            return;
+        }
+        Box3 face = s->bounds();
+        face.lo[normal_.axis] = face.hi[normal_.axis] = face_at_;
+        Box3 w = normalized(a_, b_);
+        const int u = (normal_.axis + 1) % 3, v = (normal_.axis + 2) % 3;
+        if (w.lo[u] == w.hi[u] || w.lo[v] == w.hi[v]) w = face;
+        window_ = w;
+        V3 c{};
+        for (int k = 0; k < 3; ++k) c[static_cast<std::size_t>(k)] = 0.5 * static_cast<double>(w.lo[k] + w.hi[k]) / static_cast<double>(per_um);
+        origin_ = c;
+        start_s_ = c[static_cast<std::size_t>(normal_.axis)];
+        implant_depth_ = 0;
+        entry_.clear();
+        drag_ = Drag::implant;
+        doping_step(last_x_, last_y_);
+        return;
+    }
+    case Drag::refine: {
+        button_ = false;
+        if (GetCapture() == canvas_) ReleaseCapture();
+        const int n = v_.plane.normal, u = (n + 1) % 3, w = (n + 2) % 3;
+        if (a_[u] == b_[u] || a_[w] == b_[w]) {
+            cancel();
+            return;
+        }
+        height_ = grid();
+        entry_.clear();
+        drag_ = Drag::refine_height;
+        doping_step(last_x_, last_y_);
+        return;
+    }
+    case Drag::implant:
+    case Drag::implant_lateral:
+    case Drag::refine_height:
+    case Drag::refine_size: return;  // a phase ended by a click, not a release
+    default: finish_text_drag(); return;
+    }
 }
 
 void SolidPage::doping_step(double x, double y) {
     const auto dopant = donor_ ? device::Dopant::donor : device::Dopant::acceptor;
     std::expected<std::string, std::string> out = std::unexpected(std::string());
     pending_volume_.reset();
+    const auto typed = entry_.value();
+    const auto implant = [&] {
+        const auto p = solid::implant_profile(normal_, face_at_, window_, implant_depth_, lateral_, dopant, level_);
+        out = solid::add_profile(text_seen_, p);
+        pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, p), solid::doping_color(donor_, level_)};
+    };
     switch (drag_) {
-    case Drag::implant:
-    case Drag::junction: {
+    case Drag::level: {
+        const double px = 30.0 * dpi_ / 96.0;  // a 1, 2, 5 step every 30 px
+        level_ = std::clamp(level_step(level_steps(level_from_) + static_cast<int>(std::lround((press_y_ - y) / px))), 1e12, 1e22);
+        const auto p = solid::region_profile(m_start_, ref_, dopant, level_);
+        out = solid::add_profile(text_seen_, p);
+        pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, p), solid::doping_color(donor_, level_)};
+        break;
+    }
+    case Drag::implant_window: {
+        if (const auto q = face_point(x, y)) b_ = *q;
+        const Solid* s = solid_at(m_start_, ref_);
+        if (!s) break;
+        // Kept on the face.
+        const Box3 f = s->bounds();
+        for (int k = 0; k < 3; ++k) {
+            if (k == normal_.axis) continue;
+            b_[k] = std::clamp(b_[k], f.lo[k], f.hi[k]);
+            a_[k] = std::clamp(a_[k], f.lo[k], f.hi[k]);
+        }
+        pending_volume_ = solid::Volume{normalized(a_, b_), solid::doping_color(donor_, level_, 0.5f)};
+        break;
+    }
+    case Drag::implant: {
         const Coord raw = quantize(along_axis(m_start_, v_, x, y, origin_, normal_.axis) - start_s_) * -normal_.sign;  // into the solid
-        const auto typed = entry_.value();
+        implant_depth_ = drag_s_ = typed ? std::abs(*typed) : std::max<Coord>(0, raw);
+        if (drag_s_ > 0) implant();
+        break;
+    }
+    case Drag::implant_lateral: {
+        // The distance on the face's plane from the window out to the pointer.
+        Coord out_by = 0;
+        if (const auto q = face_point(x, y)) {
+            for (int k = 0; k < 3; ++k) {
+                if (k == normal_.axis) continue;
+                out_by = std::max({out_by, window_.lo[k] - (*q)[k], (*q)[k] - window_.hi[k]});
+            }
+        }
+        lateral_ = drag_s_ = typed ? std::abs(*typed) : out_by;
+        if (implant_depth_ > 0) implant();
+        break;
+    }
+    case Drag::junction: {
+        const Coord raw = quantize(along_axis(m_start_, v_, x, y, origin_, normal_.axis) - start_s_) * -normal_.sign;
         drag_s_ = typed ? std::abs(*typed) : std::max<Coord>(0, raw);
         const Solid* s = solid_at(m_start_, ref_);
         if (!s || drag_s_ <= 0) break;
         const Coord at = quanta_of(origin_)[normal_.axis];
         Box3 window = s->bounds();
         window.lo[normal_.axis] = window.hi[normal_.axis] = at;
-        if (drag_ == Drag::implant) {
-            const auto p = solid::implant_profile(normal_, at, window, drag_s_, 0, dopant, level_);
-            out = solid::add_profile(text_seen_, p);
-            pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, p), solid::doping_color(donor_, level_)};
-        } else {
-            const auto p = solid::junction_profile(profiles_, normal_, at, window, drag_s_, dopant, level_);
-            if (!p) {
-                out = std::unexpected(p.error());
-                break;
-            }
-            out = solid::add_profile(text_seen_, *p);
-            pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, *p), solid::doping_color(donor_, level_)};
+        const auto p = solid::junction_profile(profiles_, normal_, at, window, drag_s_, dopant, level_);
+        if (!p) {
+            out = std::unexpected(p.error());
+            break;
         }
+        out = solid::add_profile(text_seen_, *p);
+        pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, *p), solid::doping_color(donor_, level_)};
         break;
     }
     case Drag::max_size: {
         // Up doubles it every 100 px (at 96 dpi), down halves it; a typed value is the size.
         const double px = 100.0 * dpi_ / 96.0;
-        const auto typed = entry_.value();
         drag_s_ = typed ? std::abs(*typed) : std::max<Coord>(1, static_cast<Coord>(std::llround(size_from_ * std::pow(2.0, (press_y_ - y) / px) * 1e8)));
         if (drag_s_ > 0) out = solid::set_mesh_length(text_seen_, "max_size", drag_s_);
         break;
     }
-    case Drag::refine: {
-        if (const auto q = plane_point(x, y)) b_ = *q;
+    case Drag::refine:
+    case Drag::refine_height:
+    case Drag::refine_size: {
         const int n = v_.plane.normal;
+        if (drag_ == Drag::refine) {
+            if (const auto q = plane_point(x, y)) b_ = *q;
+        } else if (drag_ == Drag::refine_height) {
+            const V3 corner = um_of(b_);
+            height_ = typed ? *typed : quantize(along_axis(m_, v_, x, y, corner, n) - corner[static_cast<std::size_t>(n)]);
+            if (height_ == 0) height_ = grid();
+        } else {
+            // Up doubles the size every 100 px, down halves it; or typed.
+            const double px = 100.0 * dpi_ / 96.0;
+            refine_size_ = typed ? std::abs(*typed) : std::max<Coord>(1, static_cast<Coord>(std::llround(size_from_ * std::pow(2.0, (press_y_ - y) / px))));
+        }
         Box3 b = normalized(a_, b_);
-        b.lo[n] = m_.domain.lo[n];
-        b.hi[n] = m_.domain.hi[n];
-        const solid::SizeBox3 sb{b, refine_size_};
-        out = solid::add_size_box(text_seen_, sb);
+        if (drag_ != Drag::refine) {
+            b.lo[n] = std::clamp(std::min(v_.plane.offset, v_.plane.offset + height_), m_.domain.lo[n], m_.domain.hi[n]);
+            b.hi[n] = std::clamp(std::max(v_.plane.offset, v_.plane.offset + height_), m_.domain.lo[n], m_.domain.hi[n]);
+            out = solid::add_size_box(text_seen_, {b, refine_size_});
+        }
         pending_volume_ = solid::Volume{b, {0.55f, 0.55f, 0.60f, 0.22f}};
         break;
     }
@@ -2065,6 +2269,10 @@ void SolidPage::doping_step(double x, double y) {
 }
 
 void SolidPage::on_up(double /*x*/, double /*y*/) {  // the release's place: no step uses it
+    if (text_drag()) {  // slice 4
+        on_up_text();
+        return;
+    }
     button_ = false;
     if (drag_ != Drag::base && drag_ != Drag::inset && drag_ != Drag::radius) end_drag_ui();
     if (GetCapture() == canvas_) ReleaseCapture();
@@ -2077,19 +2285,6 @@ void SolidPage::on_up(double /*x*/, double /*y*/) {  // the release's place: no 
         start_s_ = origin_[static_cast<std::size_t>(normal_.axis)];
         drag_s_ = 0;
         m_ = m_start_;
-        invalidate();
-        return;
-    }
-    case Drag::implant:
-    case Drag::junction:
-    case Drag::max_size:
-    case Drag::refine: {  // slice 4: the line the drag shows, written
-        const std::string out = pending_text_;
-        drag_ = Drag::none;
-        pending_text_.clear();
-        pending_volume_.reset();
-        if (!out.empty()) commit_text(out);
-        update_inspector();
         invalidate();
         return;
     }
@@ -2179,7 +2374,8 @@ bool SolidPage::on_key(UINT key, bool shift, bool ctrl) {
     const bool typing = drag_ == Drag::axis || drag_ == Drag::face || drag_ == Drag::height || drag_ == Drag::move || drag_ == Drag::plane ||
                         drag_ == Drag::base || drag_ == Drag::array || drag_ == Drag::cut || drag_ == Drag::taper || drag_ == Drag::extrude ||
                         drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius || drag_ == Drag::implant ||
-                        drag_ == Drag::junction || drag_ == Drag::max_size;
+                        drag_ == Drag::junction || drag_ == Drag::max_size || drag_ == Drag::implant_lateral || drag_ == Drag::refine_height ||
+                        drag_ == Drag::refine_size;
     if (typing && ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') || (key >= VK_NUMPAD0 && key <= VK_DIVIDE) ||
                    key == VK_OEM_PERIOD || key == VK_OEM_MINUS || key == VK_BACK)) {
         return true;
@@ -2355,7 +2551,7 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
             if (drag_ != Drag::none) on_move(last_x_, last_y_, false, false);
             return 0;
         }
-        if (drag_ == Drag::refine) {
+        if (drag_ == Drag::refine || drag_ == Drag::refine_height || drag_ == Drag::refine_size) {
             refine_size_ = std::max<Coord>(1, GET_WHEEL_DELTA_WPARAM(w) > 0 ? refine_size_ * 2 : refine_size_ / 2);
             on_move(last_x_, last_y_, false, false);
             return 0;

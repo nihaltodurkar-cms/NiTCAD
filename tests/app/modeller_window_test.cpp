@@ -1345,36 +1345,63 @@ TEST_CASE("app window modeller: Region profile, Implant, Junction, Max size and 
     };
     using NiTCAD::device::Dopant;
 
-    // Region profile: the wheel up a decade (1e19), D to acceptors, a click on A.
+    // Region profile: the wheel up a decade (1e19), D to acceptors, then a press on A dragged up two 1-2-5 steps
+    // (60 px): 5e19.
     page.set_mode(modeller::Mode::profile);
     CHECK(page.group() == modeller::Group::doping);
     {
         auto [px, at] = face_or_handle(page, a, 5);
         wheel(c, px[0], px[1], 120);
         type(c, L"d");
-        const auto want = solid::add_profile(texts.back(), solid::region_profile(page.model(), a, Dopant::acceptor, 1e19));
+        const auto want = solid::add_profile(texts.back(), solid::region_profile(page.model(), a, Dopant::acceptor, 5e19));
         REQUIRE(want);
         send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
-        send(c, WM_LBUTTONUP, 0, px[0], px[1]);
-        step(*want, "");
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, px[0], px[1] - 30);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, px[0], px[1] - 60);
+        INFO("chip: " << page.chip());
+        CHECK(has(page.chip(), "acceptor 5e+19"));
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, px[0], px[1] - 60);
+        step(*want, shown);
     }
-    // Implant into A's top (z = 0.5um), the peak 30nm in (typed).
+    // Implant into A's top (z = 0.5um): a window dragged on the face (x 0.05..0.15um, y 0.05..0.25um), released; the
+    // peak 30nm in (typed), a click; the lateral spread 10nm (typed), a click.
     page.set_mode(modeller::Mode::implant);
     {
         auto [px, at] = face_or_handle(page, a, 5);
-        const auto to = page.screen_of_um({at[0], at[1], at[2] - 0.05});
-        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
-        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+        const auto w0 = page.screen_of_um({0.05, 0.05, 0.5}), w1 = page.screen_of_um({0.15, 0.25, 0.5});
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, w0[0], w0[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, w1[0], w1[1]);
         INFO("chip: " << page.chip());
+        CHECK(has(page.chip(), "window 0.1"));
+        send(c, WM_LBUTTONUP, 0, w1[0], w1[1]);
+        const auto to = page.screen_of_um({0.1, 0.15, 0.45});
+        send(c, WM_MOUSEMOVE, 0, to[0], to[1]);
         CHECK(has(page.chip(), "peak depth "));
-        CHECK(has(page.chip(), "acceptor 1e+19"));
+        CHECK(has(page.chip(), "acceptor 5e+19"));
         type(c, L"0.03");
-        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, to[0], to[1]);
         send(c, WM_LBUTTONUP, 0, to[0], to[1]);
-        const solid::Box3 window{{0, 0, 5000}, {2000, 3000, 5000}};
-        const auto want = solid::add_profile(texts.back(), solid::implant_profile({2, 1}, 5000, window, 300, 0, Dopant::acceptor, 1e19));
+        CHECK(w->deck().text() == texts.back());  // not yet: the lateral spread
+        send(c, WM_MOUSEMOVE, 0, to[0] + 5, to[1]);
+        type(c, L"0.01");
+        CHECK(has(page.chip(), "lateral 0.01"));
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, to[0] + 5, to[1]);
+        send(c, WM_LBUTTONUP, 0, to[0] + 5, to[1]);
+        const solid::Box3 window{{500, 500, 5000}, {1500, 2500, 5000}};
+        const auto want = solid::add_profile(texts.back(), solid::implant_profile({2, 1}, 5000, window, 300, 100, Dopant::acceptor, 5e19));
         REQUIRE(want);
         step(*want, shown);
+    }
+    // A press on A's edge in Implant moves nothing (the tool takes faces; a drag would move A in Select).
+    {
+        const auto px = must_find(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::edge && p.solid == a; }, "an edge of A");
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, px[0] + 30, px[1] + 20);
+        send(c, WM_LBUTTONUP, 0, px[0] + 30, px[1] + 20);
+        CHECK(w->deck().text() == texts.back());
+        page.render();
     }
     // Junction from a face looking up: refused, the deck as it was.
     page.set_mode(modeller::Mode::junction);
@@ -1403,23 +1430,32 @@ TEST_CASE("app window modeller: Region profile, Implant, Junction, Max size and 
         REQUIRE(want);
         step(*want, shown);
     }
-    // Refine box: a rectangle on the work plane (z = 0.4um), through the domain along z; the wheel doubles its size
-    // from max_size / 4.
+    // Refine box: a rectangle on the work plane (z = 0.4um), released; its height 0.1um (typed), a click; its size
+    // 0.02um (typed), a click.
     page.set_mode(modeller::Mode::refine);
     {
         const auto p0 = page.screen_of_um({0.5, 0.1, 0.4}), p1 = page.screen_of_um({0.9, 0.5, 0.4});
         send(c, WM_LBUTTONDOWN, MK_LBUTTON, p0[0], p0[1]);
         send(c, WM_MOUSEMOVE, MK_LBUTTON, p1[0], p1[1]);
-        wheel(c, p1[0], p1[1], 120);
-        INFO("chip: " << page.chip());
-        CHECK(has(page.chip(), "size 0.06"));
-        const std::string shown = page.live_line();
         send(c, WM_LBUTTONUP, 0, p1[0], p1[1]);
+        send(c, WM_MOUSEMOVE, 0, p1[0], p1[1] - 10);
+        type(c, L"0.1");
+        INFO("chip: " << page.chip());
+        CHECK(has(page.chip(), "height 0.1"));
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, p1[0], p1[1] - 10);
+        send(c, WM_LBUTTONUP, 0, p1[0], p1[1] - 10);
+        CHECK(w->deck().text() == texts.back());  // not yet: the size
+        send(c, WM_MOUSEMOVE, 0, p1[0], p1[1] - 20);
+        type(c, L"0.02");
+        CHECK(has(page.chip(), "size 0.02"));
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, p1[0], p1[1] - 20);
+        send(c, WM_LBUTTONUP, 0, p1[0], p1[1] - 20);
         const auto boxes = solid::size_boxes(w->deck().text());
         REQUIRE(boxes.size() == 1);
-        CHECK(boxes[0].size == 600);
-        CHECK(boxes[0].box.lo.z == 0);
-        CHECK(boxes[0].box.hi.z == 6000);
+        CHECK(boxes[0].size == 200);
+        CHECK(boxes[0].box.lo.z == 4000);
+        CHECK(boxes[0].box.hi.z == 5000);
         CHECK(boxes[0].box.hi.x > boxes[0].box.lo.x);
         const auto want = solid::add_size_box(texts.back(), boxes[0]);
         REQUIRE(want);
@@ -1576,19 +1612,31 @@ TEST_CASE("app window modeller: a FinFET drawn by window messages builds and run
         }
         return -1;
     };
-    // A Gaussian source/drain implant: donors (the tools' start) at 1e20, into each fin's top, the peak 10nm in.
+    // A Gaussian source/drain implant, the gate masked: donors (the tools' start) at 1e20, two windows on each fin's
+    // top (x 0..0.04um and 0.08..0.12um, the face's width), the peak 10nm in, the lateral spread 2nm.
     page.set_mode(modeller::Mode::implant);
     wheel(c, 300, 300, 120);  // 1e19
     wheel(c, 300, 300, 120);  // 1e20
     for (const solid::SolidRef f : fins) {
-        auto [px, at] = face_or_handle(page, f, top_of(f));
-        const auto to = page.screen_of_um({at[0], at[1], at[2] - 0.01});
-        const std::string before = deck();
-        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
-        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
-        type(c, L"0.01");
-        send(c, WM_LBUTTONUP, 0, to[0], to[1]);
-        CHECK(deck() != before);
+        for (const auto [x0, x1] : {std::pair{0.0, 0.04}, std::pair{0.08, 0.12}}) {
+            auto [px, at] = face_or_handle(page, f, top_of(f));
+            const double y0 = at[1] - 0.009, y1 = at[1] + 0.009;  // inside the flat top (0.02um wide after the fillet)
+            const auto p = page.screen_of_um({x0 + (x0 == 0.0 ? 0.002 : 0.0), y0, at[2]}),
+                       q = page.screen_of_um({x1 - (x1 == 0.12 ? 0.002 : 0.0), y1, at[2]});
+            REQUIRE(solid::pick(page.model(), page.view(), std::round(p[0]), std::round(p[1]), page.selection()).solid == f);
+            const std::string before = deck();
+            send(c, WM_LBUTTONDOWN, MK_LBUTTON, p[0], p[1]);
+            send(c, WM_MOUSEMOVE, MK_LBUTTON, q[0], q[1]);
+            send(c, WM_LBUTTONUP, 0, q[0], q[1]);
+            type(c, L"0.01");
+            send(c, WM_LBUTTONDOWN, MK_LBUTTON, q[0], q[1]);
+            send(c, WM_LBUTTONUP, 0, q[0], q[1]);
+            type(c, L"0.002");
+            send(c, WM_LBUTTONDOWN, MK_LBUTTON, q[0], q[1]);
+            send(c, WM_LBUTTONUP, 0, q[0], q[1]);
+            CHECK(deck() != before);
+            CHECK(has(deck(), "lateral=2e-07cm\n"));
+        }
     }
     // The fins' background: acceptors 1e17 (Region profile).
     page.set_mode(modeller::Mode::profile);
@@ -1601,7 +1649,7 @@ TEST_CASE("app window modeller: a FinFET drawn by window messages builds and run
         send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
         send(c, WM_LBUTTONUP, 0, px[0], px[1]);
     }
-    CHECK(solid::profiles(deck()).size() == 4);
+    CHECK(solid::profiles(deck()).size() == 6);
     // Contacts: source and drain on the x faces over the fins, the gate on the top over the oxide box.
     page.set_mode(modeller::Mode::none);
     page.set_section({});

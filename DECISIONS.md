@@ -2203,6 +2203,26 @@ generator refuses).
 - Limits: a junction is made only from a face looking down an axis (the deck's erfc falls along its axis); the
   junction's background is taken at the window's centre only; profiles are drawn only while the Doping group is open;
   the profile tools are 3D only (the 2D editor has no Doping group tools yet, MQ6 allows it).
+
+**Slice 4 follow-up (2026-11-22, owner "do the follow ups").** Three of the recorded deviations built as MT9 and
+MT10 give them: Implant is a window dragged on the face (snapped on the face's plane as on the work plane, kept on the
+face; a click without a drag takes the whole face), released, then the peak depth (moved or typed) and a click, then
+the lateral spread (the distance out from the window on the face, or typed) and a click writing the line. Region
+profile is a press on a solid dragged up or down for the level, on the 1, 2, 5 steps (3 a decade, one every 30 px;
+a click keeps the level; the wheel still steps decades and D swaps the dopant). Refine box is a rectangle dragged on
+the work plane, released, then its height along the plane's normal (moved or typed) and a click, then its size (up
+doubles, down halves, or typed; the wheel too) and a click writing the `[mesh] box` line. Enter writes any phase's
+line as it stands. A press in a Doping tool picks a solid's face under the handles (a picked solid's gizmo moved it
+before: found by the new window test) and never falls back to moving (a press on empty background still navigates, MT1). MC10 now masks the gate: two windows on each
+fin's top (x 0..0.04um and 0.08..0.12um), the peak 10nm in, lateral 2nm: source and drain only, six profiles; built,
+13 359 nodes, equilibrium 2.0 s.
+- Window `[doping]` 135 assertions in 2 cases (an edge press in Implant moving nothing; each phase's chip, the deck unchanged until the last click, the line
+  shown the line written, one undo step); app 49 059 in 124; window `[modeller]`, `[solid]`, `[geometry]` 1604 in 31.
+- MC11: 7/7 caught (~/mut-gv/s26m4b.sh, three rerun by hand with fixed patterns): the level drag doing nothing, the
+  window always the face, the lateral spread not applied, the depth click ending the implant, the refine height
+  ignored, the window off the face's grid, a press on an edge falling back to moving (survived first: the edge-press
+  test added).
+- Still a miss: Interface layers (no `layer` key for a layered deck without a generator change).
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
