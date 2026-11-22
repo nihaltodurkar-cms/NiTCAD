@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <format>
 #include <map>
 #include <random>
@@ -27,6 +28,15 @@ constexpr int trial_stride = 1;
 #else
 constexpr int trial_stride = 20;
 #endif
+
+// True on the hosted CI runner: the environment variable CI set, as GitHub Actions sets it.
+bool on_ci() {
+    char* value = nullptr;
+    std::size_t length = 0;
+    const bool ci = _dupenv_s(&value, &length, "CI") == 0 && value != nullptr && *value != '\0';
+    std::free(value);
+    return ci;
+}
 
 LayeredSolid box3(double x0, double x1, double y0, double y1, double z0, double z1, std::int32_t region) {
     LayeredSolid s;
@@ -305,9 +315,11 @@ TEST_CASE("mesh layered3d: 100 random boxes resolve within 50 ms (SE5)", "[mesh]
     }
     std::ranges::sort(ms);
     WARN(std::format("SE5: 100 random boxes resolved in {:.1f} ms (median of 3), {} volumes, {} facets", ms[1], volumes, facets));
-    // Release only (owner, 2026-11-19, as KG6): the unoptimised Debug build records the time.
+    // Release only (owner, 2026-11-19, as KG6): the unoptimised Debug build records the time. The CI runner
+    // records it too (owner, 2026-11-22, as WG1): there it took 137.5 ms on fd6a64a, four tests sharing its
+    // four cores; this workstation is the gate.
 #ifdef NDEBUG
-    CHECK(ms[1] <= 50.0);
+    if (!on_ci()) CHECK(ms[1] <= 50.0);
 #endif
 }
 

@@ -653,7 +653,10 @@ TEST_CASE("app solid: 200 random edits, undone one by one, give the deck back by
         }
         REQUIRE(done == 200);
         WARN("SE5: " << (extruded ? "converted FinFET" : "well") << " deck, mean write " << write_ms / done << " ms over " << done << " edits");
-        CHECK(write_ms / done <= 2.0);
+        // Release only, as KG6 (owner, 2026-11-19): CI's Debug runner wrote 3.57 ms (fd6a64a); there it is recorded.
+#ifdef NDEBUG
+        CHECK(write_ms / done <= 2.0);  // SE5
+#endif
         for (std::size_t k = texts.size() - 1; k > 0; --k) {
             auto t = h.undo(text);
             REQUIRE(t);
