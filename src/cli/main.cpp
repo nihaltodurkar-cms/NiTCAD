@@ -3,6 +3,11 @@
 //   nitcad check <deck>   parse and build the deck, print what it describes, solve nothing
 //   nitcad run <deck>     build the deck, run its analysis, write its outputs, and print the run's
 //                         provenance (Unit 42)
+//   check and run take [--set <name>=<value>]...: a [parameters] value overridden, as if written in the deck
+//                         (Unit 26n, DT6; deck/dimension_sweep.hpp); the deck file is not edited
+//   nitcad sweep <deck> <name>=<values> [--set <name>=<value>]...
+//                         the deck run once per value (`20nm, 30nm` or `20nm : 45nm : 5nm`), each run's
+//                         outputs in <deck stem>_sweep_<name>/<name>=<value>/ (Unit 26n, DT6)
 //   nitcad plot <deck or result file> ... --out <image.png>
 //                         draw a view or a curve of a deck's results (Unit 25a; plot.hpp)
 //   nitcad verify [--tier fast|full|nightly] [--id <id>] [--report <file>]
@@ -26,12 +31,16 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <expected>
+#include <filesystem>
 #include <format>
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "NiTCAD/deck/build.hpp"
+#include "NiTCAD/deck/dimension_sweep.hpp"
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/solve/provenance.hpp"
@@ -54,7 +63,9 @@ BOOL WINAPI on_console_event(DWORD event) {
 }
 
 int usage() {
-    std::fputs("usage: nitcad check <deck>\n       nitcad run <deck>\n"
+    std::fputs("usage: nitcad check <deck> [--set <name>=<value>]...\n"
+               "       nitcad run <deck> [--set <name>=<value>]...\n"
+               "       nitcad sweep <deck> <name>=<values> [--set <name>=<value>]...\n"
                "       nitcad plot <deck or result file> [options] --out <image.png>\n"
                "       nitcad verify [--tier fast|full|nightly] [--id <id>] [--report <file>]\n"
                "                     [--mkl <mkl_rt.dll>] [--threads <n>]\n"
@@ -253,30 +264,12 @@ void print_adapt(const NiTCAD::results::AdaptReport& a) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    if (argc == 2 && std::string_view(argv[1]) == "--version") {
-        print_build(NiTCAD::solve::provenance());
-        return 0;
-    }
-    if (argc >= 2 && std::string_view(argv[1]) == "plot") return NiTCAD::cli::plot(argc, argv);
-    if (argc >= 2 && std::string_view(argv[1]) == "learn") return NiTCAD::cli::learn(argc, argv);
-    if (argc >= 2 && std::string_view(argv[1]) == "compare") return NiTCAD::cli::compare(argc, argv);
-    if (argc >= 2 && std::string_view(argv[1]) == "verify") {
-        return NiTCAD::cli::verify(argc, argv, NiTCAD::verify::benchmark::benchmarks());
-    }
-    if (argc != 3) return usage();
-    const std::string_view command = argv[1];
-    if (command != "check" && command != "run") return usage();
-    const auto deck = NiTCAD::deck::read(argv[2]);
-    if (!deck) return fail(deck.error());
-    const auto plan = NiTCAD::deck::build(*deck);
-    if (!plan) return fail(plan.error());
-    describe(*plan);
-    if (command == "check") return 0;
+namespace {
 
-    SetConsoleCtrlHandler(on_console_event, TRUE);
+// Build, run and report one plan: the exit status of `nitcad run`.
+int run_plan(const NiTCAD::deck::Plan& plan) {
     NiTCAD::solve::RunControl control{.stop = stop.get_token(), .progress = {}};
-    const bool tracing = plan->analysis == NiTCAD::deck::Analysis::trace;
+    const bool tracing = plan.analysis == NiTCAD::deck::Analysis::trace;
     control.progress = [tracing](const NiTCAD::solve::Progress& p) {
         if (!p.converged) return;
         using NiTCAD::solve::Phase;
@@ -294,7 +287,7 @@ int main(int argc, char** argv) {
         }
         std::fflush(stdout);
     };
-    const auto report = NiTCAD::deck::run(*plan, control);
+    const auto report = NiTCAD::deck::run(plan, control);
     if (!report) return fail(report.error());
     if (report->skipped_points > 0) {
         std::printf("restart: %zu point(s) already done\n", report->skipped_points);
@@ -313,12 +306,12 @@ int main(int argc, char** argv) {
     // wall time.
     print_provenance(report->sweep ? report->sweep->run.provenance : NiTCAD::solve::provenance());
     if (report->sweep && report->sweep->stopped) {
-        if (plan->analysis == NiTCAD::deck::Analysis::trace) {
+        if (plan.analysis == NiTCAD::deck::Analysis::trace) {
             std::fprintf(stderr, "nitcad: the trace stopped after %zu point(s): %s\n",
                          report->sweep->points.size(), report->sweep->stopped->message.c_str());
         } else {
             std::fprintf(stderr, "nitcad: the sweep stopped after %zu of %zu point(s): %s\n",
-                         report->sweep->points.size(), plan->points.size() - report->skipped_points,
+                         report->sweep->points.size(), plan.points.size() - report->skipped_points,
                          report->sweep->stopped->message.c_str());
         }
         return 2;
@@ -332,7 +325,7 @@ int main(int argc, char** argv) {
     }
     if (report->small_signal && report->small_signal->stopped) {
         std::fprintf(stderr, "nitcad: the small-signal run stopped after %zu of %zu point(s): %s\n",
-                     report->small_signal->points.size(), plan->points.size() - report->skipped_points,
+                     report->small_signal->points.size(), plan.points.size() - report->skipped_points,
                      report->small_signal->stopped->message.c_str());
         return 2;
     }
@@ -342,4 +335,111 @@ int main(int argc, char** argv) {
         return 3;
     }
     return 0;
+}
+
+// `--set name=value` pairs from argv[from..]. Errors: anything else, a `--set` without its pair.
+std::expected<std::vector<NiTCAD::deck::Override>, std::string> overrides_of(int argc, char** argv, int from) {
+    std::vector<NiTCAD::deck::Override> out;
+    for (int i = from; i < argc; ++i) {
+        if (std::string_view(argv[i]) != "--set" || i + 1 == argc) return std::unexpected("expected --set <name>=<value>");
+        auto o = NiTCAD::deck::parse_override(argv[++i]);
+        if (!o) return std::unexpected(o.error());
+        out.push_back(std::move(*o));
+    }
+    return out;
+}
+
+int usage_error(const std::string& what) {
+    std::fprintf(stderr, "nitcad: %s\n", what.c_str());
+    return usage();
+}
+
+// nitcad sweep <deck> <name>=<values> [--set <name>=<value>]... (Unit 26n, DT6): the deck run once per value of one
+// parameter, each run's outputs in its own folder beside the deck. Every value is checked before the first run.
+// Exit status: 0 every run done; 1 a value's build or run failed (the runs before it kept); 2 stopped (Ctrl+C after
+// the current run, or a run stopped early); 3 a run's [adapt] result not certified where required (the rest still
+// run); 64 usage, an unknown parameter or a value of the wrong kind.
+int sweep(int argc, char** argv) {
+    if (argc < 4) return usage();
+    const std::filesystem::path deck_path = argv[2];
+    const auto deck = NiTCAD::deck::read(deck_path);
+    if (!deck) return fail(deck.error());
+    const auto params = NiTCAD::deck::parameters(*deck);
+    if (!params) return fail(params.error());
+    const auto swept = NiTCAD::deck::parse_override(argv[3]);
+    if (!swept) return usage_error(swept.error());
+    const auto held = overrides_of(argc, argv, 4);
+    if (!held) return usage_error(held.error());
+    const auto p = std::ranges::find(*params, swept->name, &NiTCAD::deck::Parameter::name);
+    if (p == params->end()) return usage_error(std::format("{}: no parameter '{}' in [parameters]", deck->source, swept->name));
+    const auto values = NiTCAD::deck::sweep_values(swept->value, p->length);
+    if (!values) return usage_error(std::format("{}: {}", swept->name, values.error()));
+    std::vector<NiTCAD::deck::Deck> decks;
+    for (const std::string& v : *values) {
+        std::vector<NiTCAD::deck::Override> o = *held;
+        o.push_back({.name = swept->name, .value = v});
+        auto d = NiTCAD::deck::with_overrides(*deck, o);
+        if (!d) return usage_error(d.error().message);
+        decks.push_back(std::move(*d));
+    }
+    const std::filesystem::path folder = NiTCAD::deck::sweep_directory(deck_path, swept->name);
+    int status = 0;
+    for (std::size_t k = 0; k < decks.size(); ++k) {
+        if (stop.stop_requested()) {
+            std::fprintf(stderr, "nitcad: the sweep of %s stopped after %zu of %zu value(s)\n", swept->name.c_str(), k,
+                         decks.size());
+            return 2;
+        }
+        const std::string& v = (*values)[k];
+        const std::filesystem::path point = NiTCAD::deck::sweep_point_directory(folder, swept->name, v);
+        std::printf("sweep %s = %s (%zu of %zu): %s\n", swept->name.c_str(), v.c_str(), k + 1, decks.size(),
+                    point.string().c_str());
+        std::fflush(stdout);
+        auto plan = NiTCAD::deck::build(decks[k]);
+        if (!plan) return fail(plan.error());
+        plan->outputs = NiTCAD::deck::with_outputs_in(std::move(plan->outputs), decks[k].directory, point);
+        std::error_code ec;
+        std::filesystem::create_directories(point, ec);
+        if (ec) {
+            std::fprintf(stderr, "nitcad: cannot create %s: %s\n", point.string().c_str(), ec.message().c_str());
+            return 1;
+        }
+        describe(*plan);
+        const int s = run_plan(*plan);
+        if (s == 1 || s == 2) return s;
+        if (s == 3) status = 3;
+    }
+    return status;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--version") {
+        print_build(NiTCAD::solve::provenance());
+        return 0;
+    }
+    if (argc >= 2 && std::string_view(argv[1]) == "plot") return NiTCAD::cli::plot(argc, argv);
+    if (argc >= 2 && std::string_view(argv[1]) == "learn") return NiTCAD::cli::learn(argc, argv);
+    if (argc >= 2 && std::string_view(argv[1]) == "compare") return NiTCAD::cli::compare(argc, argv);
+    if (argc >= 2 && std::string_view(argv[1]) == "verify") {
+        return NiTCAD::cli::verify(argc, argv, NiTCAD::verify::benchmark::benchmarks());
+    }
+    SetConsoleCtrlHandler(on_console_event, TRUE);
+    if (argc >= 2 && std::string_view(argv[1]) == "sweep") return sweep(argc, argv);
+    if (argc < 3) return usage();
+    const std::string_view command = argv[1];
+    if (command != "check" && command != "run") return usage();
+    const auto overrides = overrides_of(argc, argv, 3);
+    if (!overrides) return usage_error(overrides.error());
+    const auto read = NiTCAD::deck::read(argv[2]);
+    if (!read) return fail(read.error());
+    if (const auto params = NiTCAD::deck::parameters(*read); !params) return fail(params.error());
+    const auto deck = NiTCAD::deck::with_overrides(*read, *overrides);
+    if (!deck) return usage_error(deck.error().message);
+    const auto plan = NiTCAD::deck::build(*deck);
+    if (!plan) return fail(plan.error());
+    describe(*plan);
+    if (command == "check") return 0;
+    return run_plan(*plan);
 }

@@ -737,7 +737,8 @@ add_library(nitcad_deck STATIC
   src/deck/parameters.cpp
   src/deck/syntax.cpp
   src/deck/build.cpp
-  src/deck/run.cpp)
+  src/deck/run.cpp
+  src/deck/dimension_sweep.cpp)
 add_library(NiTCAD::deck ALIAS nitcad_deck)
 target_include_directories(nitcad_deck PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_deck PUBLIC NiTCAD::base NiTCAD::io NiTCAD::solve)
@@ -746,6 +747,7 @@ add_executable(nitcad_deck_test
   tests/deck/syntax_test.cpp
   tests/deck/build_test.cpp
   tests/deck/parameters_test.cpp
+  tests/deck/dimension_sweep_test.cpp
   tests/deck/run_test.cpp
   tests/deck/analyses_test.cpp
   tests/deck/analyses_run_test.cpp
