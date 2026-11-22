@@ -500,9 +500,13 @@ TEST_CASE("app window solid: orbiting and dragging with 100 solids take at most 
     SendMessageW(page.canvas(), WM_LBUTTONUP, 0, MAKELPARAM(gx + 62, gy));
     std::printf("SE5: 100 solids on WARP: orbit median %.2f ms (max %.2f), drag median %.2f ms (max %.2f); the scene builds' median %.2f ms\n", median(orbit),
                 *std::ranges::max_element(orbit), median(drag), *std::ranges::max_element(drag), median(build));
-    // Release only (owner, 2026-11-19, as KG6): the unoptimised Debug build records the time.
+    // Release only (owner, 2026-11-19, as KG6): the unoptimised Debug build records the time. The CI runner
+    // records it too (owner, 2026-11-22, as KG6 (b) and WG1): there WARP drew the orbit in 71 ms on fd6a64a,
+    // four tests sharing its four cores; this workstation is the gate.
 #ifdef NDEBUG
-    CHECK(median(orbit) <= 16.0);
-    CHECK(median(drag) <= 16.0);
+    if (!app_test::on_ci()) {
+        CHECK(median(orbit) <= 16.0);
+        CHECK(median(drag) <= 16.0);
+    }
 #endif
 }
