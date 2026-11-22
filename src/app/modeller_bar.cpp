@@ -139,15 +139,31 @@ void ModellerBar::size_bar() {
     const int n = static_cast<int>(tools_.size());
     const int room = static_cast<int>(viewport_.width()) - 2 * scaled(8, dpi_) - 2 - pad;
     if (n > 0 && room > 0 && n * (bw + pad / 2) > room) bw = std::max(scaled(48, dpi_), room / n - pad / 2);
-    int x = pad;
-    for (HWND h : tools_) {
-        MoveWindow(h, x, pad, bw, bh, TRUE);
-        x += bw + pad / 2;
+    // Too narrow even then (a small window at 200 %): the buttons wrap into rows.
+    const int per_row = n == 0 ? 1 : std::clamp((room - pad) / (bw + pad / 2), 1, n);
+    int right = pad;
+    for (int k = 0; k < n; ++k) {
+        const int x = pad + (k % per_row) * (bw + pad / 2);
+        MoveWindow(tools_[static_cast<std::size_t>(k)], x, pad + (k / per_row) * (bh + pad / 2), bw, bh, TRUE);
+        right = std::max(right, x + bw + pad / 2);
     }
-    const int w = std::max(x + pad, scaled(300, dpi_));
-    const int top = tools_.empty() ? pad : pad + bh + pad / 2;
-    MoveWindow(hint_, pad, top, w - 2 * pad, 2 * line, TRUE);
-    const int h = top + 2 * line + pad;
+    const int rows = n == 0 ? 0 : (n + per_row - 1) / per_row;
+    // The hint is 300 px wide at 96 dpi, narrowed to the viewport's room (wrapping onto more lines).
+    const int w = std::max(right + pad, room > 0 ? std::min(scaled(300, dpi_), room + pad) : scaled(300, dpi_));
+    const int top = pad + rows * (bh + pad / 2);
+    int lines = 2;
+    if (const HDC dc = GetDC(hint_)) {
+        const HGDIOBJ old = font_ ? SelectObject(dc, font_) : nullptr;
+        const std::wstring text = win32::widen(line_);
+        RECT t{0, 0, w - 2 * pad, 0}, one{0, 0, w - 2 * pad, 0};
+        DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &t, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        DrawTextW(dc, L"M", 1, &one, DT_CALCRECT | DT_NOPREFIX);
+        if (one.bottom > 0) lines = std::max(lines, static_cast<int>((t.bottom + one.bottom - 1) / one.bottom));
+        if (old) SelectObject(dc, old);
+        ReleaseDC(hint_, dc);
+    }
+    MoveWindow(hint_, pad, top, w - 2 * pad, lines * line, TRUE);
+    const int h = top + lines * line + pad;
     RECT r{};
     GetWindowRect(bar_, &r);
     if (r.right - r.left != w + 2 || r.bottom - r.top != h + 2) SetWindowPos(bar_, nullptr, 0, 0, w + 2, h + 2, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);

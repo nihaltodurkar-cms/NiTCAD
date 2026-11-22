@@ -2224,6 +2224,18 @@ fin's top (x 0..0.04um and 0.08..0.12um), the peak 10nm in, lateral 2nm: source 
   test added).
 - Still a miss: Interface layers (no `layer` key for a layered deck without a generator change).
 
+**PR #116's first CI run (2026-11-22): two failures, fixed.** MC3: at 200 % the bar was wider than the view on
+the runner's 1024 x 768 screen (a 525 px view, the bar 602 px: the hint's 300 px at 96 dpi a floor). The hint now
+narrows to the view's room and wraps onto as many lines as it takes, and the buttons wrap into rows when even their
+48 px floor leaves no room. MC3 now runs at three window sizes (as opened, 1024 x 768, 800 x 600: 48 placements; the
+old bar fails at 1024 x 768 exactly as on CI); 800 x 600 at 200 % is left out (a 301 x 195 px view holds no bar in
+any layout: a limit). The test's check of the bar's place is now to 1e-9 px (the page places in its panel's
+coordinates; the new sizes reached "above" placements, differing by rounding). MC9 slice 3's tied drag frame took
+1.055 ms on the runner: recorded there, gated on this workstation (0.769 ms), as SE5 (owner, 2026-11-22). Window
+`[modeller]`, `[solid]`, `[geometry]` 1722 in 31; app 49 058 in 124. Seen once: MC2's L key ignored in one full run
+while the owner typed (the page reads Ctrl from the physical keyboard, GetKeyState); it passed in the next full run and
+3 of 3 alone: a test hazard, not changed.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays

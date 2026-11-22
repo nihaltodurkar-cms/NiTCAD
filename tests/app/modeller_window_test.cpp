@@ -376,32 +376,42 @@ TEST_CASE("app window modeller: picks open their groups; the bar lies inside the
     page.set_group(modeller::Group::solid);
     CHECK(page.tool() == SolidPage::Tool::select);
 
-    // The bar's place for a small box (drawn, selected): three dpi, six directions.
+    // The bar's place for a small box (drawn, selected): three window sizes (CI's screen is 1024 x 768, its view too
+    // narrow for the bar's 300 px at 200 % before), three dpi, six directions.
     const solid::SolidRef box = draw_box(*w, page);
     REQUIRE(page.select_region(page.model().regions[static_cast<std::size_t>(box.region)].name));
     int corners = 0, total = 0;
-    for (const int dpi : {96, 144, 192}) {
-        HFONT font = win32::ui_font(dpi), bold = win32::ui_font(dpi, true);
-        page.set_dpi(dpi, font, bold);
-        for (int v = 0; v < 6; ++v) {
-            page.named_view(v);
-            REQUIRE(page.render() >= 0.0);
-            RECT r{};
-            GetClientRect(c, &r);
-            const modeller::Box view{0, 0, double(r.right), double(r.bottom)};
-            const modeller::Placement p = page.bar_placement();
-            const auto s = page.selection_bounds();
-            REQUIRE(s);
-            INFO("dpi " << dpi << ", view " << v << ": bar " << p.bar.left << ' ' << p.bar.top << ' ' << p.bar.right << ' ' << p.bar.bottom);
-            CHECK(p.bar.inside(view));
-            CHECK(p.bar == modeller::place_bar(view, *s, p.bar.width(), p.bar.height(), MulDiv(8, dpi, 96)).bar);
-            if (p.corner) ++corners;
-            else CHECK_FALSE(p.bar.overlaps(*s));
-            ++total;
+    for (const auto& [ww, wh] : {std::pair{0, 0}, std::pair{1024, 768}, std::pair{800, 600}}) {
+        if (ww > 0) SetWindowPos(w->hwnd(), nullptr, 0, 0, ww, wh, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        pump();
+        for (const int dpi : {96, 144, 192}) {
+            if (ww == 800 && dpi == 192) continue;  // a 301 x 195 px view: no room for the bar at 200 % in any layout
+            HFONT font = win32::ui_font(dpi), bold = win32::ui_font(dpi, true);
+            page.set_dpi(dpi, font, bold);
+            for (int v = 0; v < 6; ++v) {
+                page.named_view(v);
+                REQUIRE(page.render() >= 0.0);
+                RECT r{};
+                GetClientRect(c, &r);
+                const modeller::Box view{0, 0, double(r.right), double(r.bottom)};
+                const modeller::Placement p = page.bar_placement();
+                const auto s = page.selection_bounds();
+                REQUIRE(s);
+                INFO("window " << ww << 'x' << wh << " (view " << r.right << 'x' << r.bottom << "), dpi " << dpi << ", view " << v
+                               << ": bar " << p.bar.left << ' ' << p.bar.top << ' ' << p.bar.right << ' ' << p.bar.bottom);
+                CHECK(p.bar.inside(view));
+                // The page places in its panel's coordinates (the canvas below the strip): equal to rounding.
+                const modeller::Box e = modeller::place_bar(view, *s, p.bar.width(), p.bar.height(), MulDiv(8, dpi, 96)).bar;
+                CHECK(std::max({std::abs(p.bar.left - e.left), std::abs(p.bar.top - e.top), std::abs(p.bar.right - e.right),
+                                std::abs(p.bar.bottom - e.bottom)}) <= 1e-9);
+                if (p.corner) ++corners;
+                else CHECK_FALSE(p.bar.overlaps(*s));
+                ++total;
+            }
+            page.set_dpi(96, nullptr, nullptr);
+            DeleteObject(font);
+            DeleteObject(bold);
         }
-        page.set_dpi(96, nullptr, nullptr);
-        DeleteObject(font);
-        DeleteObject(bold);
     }
     std::printf("MC3: the bar in the corner for %d of %d placements (the selection leaving no side room)\n", corners, total);
     CHECK(corners < total);

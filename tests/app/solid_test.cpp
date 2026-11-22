@@ -24,6 +24,7 @@
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/mesh/complex.hpp"
 #include "NiTCAD/mesh/generate.hpp"
+#include "fixtures.hpp"
 
 using namespace NiTCAD::app::solid;
 
@@ -1746,7 +1747,9 @@ TEST_CASE("parameters: a tied drag frame with 100 tied solids adds at most 1 ms 
     REQUIRE(move_face(m, {1, 0}, 1, 40));
     tie_edits(*m0, m);
     for (int k = 0; k < 100; ++k) CHECK(m.regions[static_cast<std::size_t>(k) + 1].solids[0].box.hi.x - m.regions[static_cast<std::size_t>(k) + 1].solids[0].box.lo.x == 80);
-    CHECK(ms[ms.size() / 2] <= 1.0);
+    // The CI runner records it (owner, 2026-11-22, as SE5 and KG6 (b)): there it took 1.055 ms on PR #116, four tests
+    // sharing its four cores; this workstation is the gate.
+    if (!app_test::on_ci()) CHECK(ms[ms.size() / 2] <= 1.0);
 }
 
 // --- Unit 26m slice 4 (MT9, MT10, MC8): doping and mesh tools -------------------------------------------------------
