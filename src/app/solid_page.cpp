@@ -1454,7 +1454,8 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
     last_y_ = y;
     if (m_.mesh == MeshKind::unsupported) return;
     const bool editable = m_.editable();
-    if (tool_ == Tool::select && dimension_down(x, y)) return;  // Unit 26n (DT2): a dimension line first
+    // Unit 26n (DT2): a dimension line, unless a handle of the selection is under the pointer (handles win).
+    if (tool_ == Tool::select && pick(m_, v_, x, y, sel_).kind != PickKind::handle && dimension_down(x, y)) return;
     const auto refuse_edit = [&] {
         host_.solid_status("An extrude3d deck is edited once converted: Convert, in the Geometry section.");
     };
