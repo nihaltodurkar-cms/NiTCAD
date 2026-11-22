@@ -2332,6 +2332,33 @@ layered conversion may be refused for thin-oxide FinFETs by the 3D generator's r
 run whole decks serially, so a 3D sweep of five values costs five runs (the 18-min FinFET is not a library default:
 DC4's node limits keep defaults quick).
 
+**Slice 0 record (2026-11-23, branch `app/device-templates`, commits ee43bc8..HEAD, local only):** DT1 and DT2 as far
+as slice 0 goes.
+
+- **Built.** `app/dimensions` (rows from `[parameters]`, one-line edits keeping key and comment, the wheel's 1-2-5
+  ladder, spans found by substituting at p and p + δ and diffing boxes, doping windows and linspace pieces, marks,
+  `substituted_text`); text labels in field scenes (renderer D2D overlay); the dimensions panel in the Geometry
+  inspector (Enter commits, Esc restores, wheel steps, refusals shown red under the row, disabled with the message
+  while the deck does not parse). The 2D editor and the 3D modeller host the panel and draw the lines (2D: 12 px off
+  the extent, before the rulers; 3D: on-top line batches with labels); a line is selected and dragged to change its
+  value (one undo). The 3D inspector's parameters text box is replaced by the panel. Decks neither editor draws (1D,
+  3D tensor) show the device preview in the canvas's place with the panel beside it; a 3D preview draws the lines.
+- **Measured.** DC9 on this machine (Release): 2D panel edit → redrawn canvas median 2 ms (≤ 300 ms); 3D tensor
+  panel edit → refreshed preview median 433 ms (≤ 1 s). DC11: 10 of 11 mutants killed (two after adding tests); the
+  survivor (the panel's own unparsed-deck guard) is equivalent — `set_dimension` refuses the same decks. DC12: the
+  model has no Win32 headers. DC1: `nitcad_deck_test "[deck]~[perf]"` 14468/14469 — the one failure is the hidden 26l benchmark "reduced FinFET as layered generate3d", which searches LF text in `decks/finfet_3d_reduced.deck` and this Windows checkout has it CRLF (`core.autocrlf = true`); the branch changes no deck, example or deck test. Targeted suites: `[dimensions]`, `[solid]~[perf]`,
+  `[geometry]~[perf]`, `[modeller]~[perf]` pass; full Release/Debug suites not run (owner's word needed).
+- **Rulings.** A bare number typed for a length takes the row's unit, so `1e20` on a length is `1e20nm` (the refusal
+  test uses `20 nm nm`). A stepped number is written in shortest scientific form. A span is the shortest candidate
+  with exactly one end moving; ties: boxes, then doping windows, then mesh pieces. A parametric 2D deck (shapes with
+  `$` references) is shown view only from its substituted text: lines, drag and panel work, shape tools refuse with a
+  status message. A selection's handles win over dimension lines in 3D; in 2D lines sit beyond the handles' reach.
+  The line/label scene code is shared (`solid::add_dimension_marks`).
+- **Limitations (recorded).** 1D decks show the panel but no lines (no layer bar yet). Polygons and prisms give no
+  spans. A preview line selected in the panel re-highlights at the next refresh only; preview lines are not draggable.
+  A dimension used only in doping gets a line only through its `x=a:b` window. A line on a continued (`\`) deck line
+  is not substituted (view only refused, the editor's message stands).
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
