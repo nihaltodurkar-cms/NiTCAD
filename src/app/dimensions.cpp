@@ -188,7 +188,9 @@ std::string step_dimension(const Dimension& d, int notches) {
     if (d.expr.find('$') != std::string::npos || notches == 0) return d.expr;
     if (!d.length) {
         if (!bare_number(d.expr)) return d.expr;
-        return std::format("{}", d.value * std::pow(10.0, notches / 10.0));
+        char buf[32];
+        const auto r = std::to_chars(buf, buf + sizeof buf, d.value * std::pow(10.0, notches / 10.0), std::chars_format::scientific);
+        return std::string(buf, r.ptr);  // shortest round trip, as a doping level is written
     }
     const std::string_view unit = unit_of(d.expr);
     if (unit.empty()) return d.expr;
