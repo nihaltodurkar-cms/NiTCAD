@@ -1,6 +1,8 @@
 // The 3D solid modeller's model (solid.hpp; DECISIONS.md Unit 26l, SD3).
 #include "NiTCAD/app/solid.hpp"
 
+#include "NiTCAD/app/dimensions.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -466,7 +468,12 @@ std::expected<std::string, std::string> write_model(std::string_view text, const
             if (at == ps->entries.end()) {
                 e.after.emplace(ps->entries.empty() ? -1 : static_cast<int>(ps->entries.size()) - 1, param_line(p));
             } else if (std::string(trim(at->value)) != p.expr) {
-                e.replace[static_cast<std::size_t>(at - ps->entries.begin())] = param_line(p);
+                // Unit 26n NQ1: the line's label comment kept.
+                std::string_view rest = text;
+                for (int k = 1; k < at->line; ++k) rest.remove_prefix(std::min(rest.size(), rest.find('\n') + 1));
+                std::string_view raw = rest.substr(0, rest.find('\n'));
+                if (raw.ends_with('\r')) raw.remove_suffix(1);
+                e.replace[static_cast<std::size_t>(at - ps->entries.begin())] = dims::with_value(raw, p.expr);
             }
         }
         w.change(*ps, w.rewrite(*ps, e));

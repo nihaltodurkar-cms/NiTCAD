@@ -1063,6 +1063,7 @@ set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
 # The logic, plain C++ under test (26-1): documents, the run controller, the workspace, view settings,
 # the menus' deck sections, the per-user state.
 add_library(nitcad_app STATIC
+  src/app/dimensions.cpp
   src/app/document.cpp
   src/app/run_controller.cpp
   src/app/workspace.cpp
@@ -1105,7 +1106,8 @@ add_executable(nitcad_app_test
   tests/app/compare_test.cpp
   tests/app/integration_test.cpp
   tests/app/geometry_test.cpp
-  tests/app/solid_test.cpp tests/app/solid_view_test.cpp tests/app/modeller_test.cpp)
+  tests/app/solid_test.cpp tests/app/solid_view_test.cpp tests/app/modeller_test.cpp
+  tests/app/dimensions_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
 # The view tests compare the app's images with nitcad plot's (WG4's choices).
 add_dependencies(nitcad_app_test nitcad)
