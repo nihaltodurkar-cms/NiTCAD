@@ -103,6 +103,8 @@ TEST_CASE("new device window: Cancel writes nothing; a second Create of the same
     REQUIRE(d);
     d->select(family_index(*d, "PN diode (1D)"));
     CHECK(d->name() == "pn_diode_1d");  // the family's own name by default
+    CHECK(d->text() == read_file(d->families()[d->selected()].example.path));  // its own deck, not the first family's
+    CHECK(d->panel().rows() == 4);  // Ln, Lp, Nd, Na
     CHECK(d->folder() == out);          // the options' folder
     d->cancel();
     pump();
