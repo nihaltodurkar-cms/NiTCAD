@@ -1366,10 +1366,8 @@ void MainWindow::select_tab(int tab) {
             break;
         }
         geometry_->reload();
-        if (geometry_preview()) {  // Unit 26n (DT2): the preview in the canvas's place
-            layout();
-            refresh();
-        }
+        layout();  // Unit 26n (DT2): the page read again decides between the canvas and the preview
+        if (geometry_preview()) refresh();
         SetFocus(geometry_->canvas());
         // GD9: a deck not checked since it was opened is checked now (an edit's check is on its way otherwise).
         if (geometry_->check() == GeometryPage::Check::pending && !live_.pending() && live_edits_ == edits_) {
@@ -2718,7 +2716,9 @@ void MainWindow::update_geometry_page() {
 }
 
 bool MainWindow::geometry_preview() const {
-    return tab_ == tab_geometry && !solid_shown_ && geometry_ && !geometry_->geometry().editable() && !geometry_->can_start();
+    // Not for a deck that does not parse: the page shows why, and the preview would be the last good deck.
+    return tab_ == tab_geometry && !solid_shown_ && geometry_ && !geometry_->geometry().editable() && !geometry_->can_start() &&
+           !geometry_->message().starts_with("The deck does not parse");
 }
 
 void MainWindow::geometry_selected(const std::string&) {}

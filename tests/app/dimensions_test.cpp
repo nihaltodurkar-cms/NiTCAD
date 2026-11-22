@@ -363,3 +363,49 @@ TEST_CASE("dimensions: the deck's text with every reference written out, line fo
     CHECK(after.find('$') == std::string::npos);
     CHECK_FALSE(dims::substituted_text("[parameters]\nLg = 20nm\n\n[region a]\nbox = $nope 1nm 0 1nm\n"));
 }
+
+TEST_CASE("dimension spans: an extent whose both ends move is no line, even when its length changes by δ", "[app][dimensions]") {
+    const std::string deck = R"([parameters]
+W = 10nm
+
+[mesh]
+type = tensor
+x = linspace(0, 100nm, 11)
+y = linspace(0, 10nm, 3)
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = $W $W + $W  0 10nm
+
+[equilibrium]
+)";
+    CHECK(dims::dimension_spans(deck, "W").empty());
+}
+
+TEST_CASE("dimension marks: a length whose low end moves grows toward -axis", "[app][dimensions]") {
+    const std::string deck = R"([parameters]
+W = 20nm  # Width
+
+[mesh]
+type = tensor
+x = linspace(0, 100nm, 11)
+y = linspace(0, 10nm, 3)
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 100nm - $W 100nm  0 10nm
+
+[equilibrium]
+)";
+    const auto marks = dims::dimension_marks(deck);
+    REQUIRE(marks.size() == 1);
+    CHECK(near(marks[0].a[0], 8e-6));
+    CHECK(near(marks[0].b[0], 1e-5));
+    CHECK(marks[0].grows == -1);
+}

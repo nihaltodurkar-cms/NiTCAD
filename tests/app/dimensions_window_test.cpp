@@ -436,3 +436,20 @@ TEST_CASE("dimensions in the 2D editor: a panel edit to the redrawn canvas (DC9)
     std::printf("DC9: 2D panel edit to redrawn canvas: median %.0f ms\n", median(ms));
     CHECK(median(ms) <= 300.0);
 }
+
+TEST_CASE("dimensions: a deck that does not parse keeps the editor's message on the Geometry tab, not a stale preview", "[app][window][dimensions]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write_deck("mos2d_broken", mos2d)));
+    pump();
+    const std::string text = w->deck().text();
+    const auto at = text.find("[mesh]");
+    REQUIRE(at != std::string::npos);
+    SendMessageW(w->deck().editor(), EM_SETSEL, at, at + 6);
+    SendMessageW(w->deck().editor(), EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"[mesh"));
+    pump();
+    w->execute(Command::tab_geometry);
+    pump();
+    CHECK(w->geometry_page().message().starts_with("The deck does not parse"));
+    CHECK(shown(w->geometry_page().hwnd()));
+    CHECK_FALSE(shown(w->viewport().hwnd()));
+}
