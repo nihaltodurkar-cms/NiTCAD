@@ -2393,6 +2393,45 @@ as slice 0 goes.
   IsDialogMessage). Browse… is not driven by the tests. A thumbnail shows region boxes only (polygons and mesh
   files: the background). DC10's full interaction (with Sweep…) waits for the sweep slice.
 
+**Slice 3 record (2026-11-23, branch `app/device-templates`, commits 1029021..HEAD, local only):** DT6 and DT7, taken
+before slice 2 (Unlock) on the owner's word ("start the next slice (sweeps)").
+
+- **Built.** `deck/dimension_sweep` (no `app`): `parse_override`, `with_overrides` (the parameter's line rewritten,
+  key, spacing, comment and CR kept, the text parsed again with the deck's source and directory; a wrong kind is
+  refused naming the parameter), `sweep_values` (a list kept as written, or `first : last : step` in first's unit),
+  the sweep's folders and `with_outputs_in`. The CLI: `check`/`run <deck> --set name=value` (repeatable) and
+  `nitcad sweep <deck> name=values [--set ...]`, every value checked before the first run. `RunController::start_sweep`
+  runs the values one after another into their folders. In the app, each dimension row not derived from others has
+  Sweep…; its dialog reads the values (a bare number taking the row's unit), says how many runs and where, and Run
+  starts the sweep on the editor's text (an untitled deck saved first, as F5). When it is done the runs load
+  (`app/sweep_results`), `figures.csv` is written beside them and the Curves tab shows "sweep: curves" (one curve
+  per run, viridis in sweep order, legend `Lg = 20 nm`) and "sweep: <figure> vs <name>" for each of Unit 24's
+  figures. `figure_curve` now holds the figures' choice of curve, shared by `extracted_figures` and the overlay.
+- **Measured.** DC5: `nitcad sweep pn Lp=1um,1.5um` writes, per value, a device file and table byte-identical to
+  `nitcad run` on a copy with the value written in, and a sweep file identical once its provenance is cleared (times
+  differ by nature); `--set` likewise; an unknown name or a wrong kind exits 64 naming the parameter, and no folder is
+  made. The GUI sweep's sweep files equal the CLI's to the bit (fields, currents, record). DC10 (hidden
+  `[.sweep_dc10]`, Release, WARP): New device ▸ FinFET (bulk, 3D), Lg = 30 nm and Wfin = 8 nm in the panel, Sweep…
+  Lg = 20, 30 nm, Run: two runs, two overlaid curves, `figures.csv` with two rows; 43.5 s. DC11: 12 of 12 mutants
+  killed (two rewritten after their first form did not compile). DC12: the override and sweep code is in `deck`
+  and `cli`; `app/sweep_results` has no Win32 header. Targeted suites pass: `[dimension_sweep]`, `[sweep_results]`,
+  `[sweep_run]`, `[sweep]`, the run controller's, the dimensions, New device, window, geometry, modeller and solid
+  window files, `run_test`, `parameters_test`, `syntax_test`, `workspace_test`, `compare_test`, `view_settings_test`.
+  Full Release/Debug suites not run (owner's word needed).
+- **Rulings.** Stop stops the current value's run at the solver's next safe point (its completed part written) and
+  runs no further value, rather than waiting out the whole value (a 3D value can take many minutes); any run that
+  stops early ends the sweep, as `nitcad sweep` exits 2. A sweep takes literal values only, and refuses a value
+  given twice (two values would share a folder). A derived row has no Sweep… (it follows others). On the CLI a length
+  needs its unit; in the dialog a bare number takes the row's. Any `--set` refusal is a usage error (64); a deck whose
+  own parameters do not resolve fails as before (1). Lengths in `figures.csv` and on the figure plots are in nm.
+  The overlay draws the curve the figures read (a gate sweep: the contact carrying most current; else the swept
+  contact's own), on a log axis when the Curves tab's is. Opening a deck or a plain run clears the sweep views.
+- **Limitations (recorded).** `nitcad sweep` writes no `figures.csv` (the figures are extracted in `app`; DC12 keeps
+  the CLI's sweep driver out of it). The overlay takes sweep files only: a small-signal deck (the MOS capacitor's
+  C–V) or a transient loads but shows no overlay curve. The sweep views are rebuilt from the folders only right after
+  a sweep in the window; reopening a deck does not find an earlier sweep. The dialog has no dialog keys (as New
+  device's).
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
