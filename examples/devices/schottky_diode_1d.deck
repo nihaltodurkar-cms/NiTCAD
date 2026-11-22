@@ -1,0 +1,46 @@
+# Schottky diode (1D)
+# A metal contact on n-type silicon with an ohmic back contact, swept from -1 V to +0.4 V.
+#
+# Thermionic emission at the metal for both carriers (Unit 48), with the effective Richardson constants of
+# Sze & Ng for silicon (110 and 30 A cm^-2 K^-2). Image-force lowering and tunnelling are not modelled
+# (ARCHITECTURE.md 11.3), so the reverse current stays flat. The mesh is fine near the barrier.
+
+[parameters]
+# group: Main
+L = 2um  # Silicon length
+Nd = 1e16  # Donors (cm^-3)
+phi_b = 0.7  # Electron barrier (eV)
+# group: Mesh
+Lf = 0.2um  # Fine-mesh depth
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, $Lf, 201) + linspace($Lf, $L, 181)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant $Nd
+
+[contact anode]
+kind = schottky
+patch = x_min
+barrier = $phi_b
+richardson_n = 110
+richardson_p = 30
+
+[contact cathode]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact anode = -1 : 0.4 : 0.05
+
+[output]
+sweep = schottky_diode_1d.nitsweep
+device = schottky_diode_1d.nitdev
+table = schottky_diode_1d.csv

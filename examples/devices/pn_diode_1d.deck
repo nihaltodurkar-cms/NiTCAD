@@ -1,0 +1,41 @@
+# PN diode (1D)
+# A silicon pn junction swept forward: the band diagram and the I-V curve, every size a named dimension.
+#
+# An n+ side (a diffused erfc profile, 50 % at the junction) on a p-type body. Change a dimension in the
+# Geometry tab's panel; run it (F5), then look at the band diagram and the current (Curves).
+
+[parameters]
+# group: Main
+Ln = 0.8um  # n side length
+Lp = 1.2um  # p side length
+Nd = 1e18  # n side donors (cm^-3)
+Na = 1e16  # p side acceptors (cm^-3)
+# group: Junction
+wj = 50nm  # Junction grading width
+
+[mesh]
+type = tensor
+x = linspace(0, $Ln, 161) + linspace($Ln, $Ln + $Lp, 241)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor erfc $Nd axis=x center=$Ln width=$wj
+profile = acceptor constant $Na
+
+[contact cathode]
+kind = ohmic
+patch = x_min
+
+[contact anode]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact anode = 0 : 0.7 : 0.05
+
+[output]
+sweep = pn_diode_1d.nitsweep
+device = pn_diode_1d.nitdev
+table = pn_diode_1d.csv
