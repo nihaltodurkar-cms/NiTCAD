@@ -204,7 +204,8 @@ void runs_at_defaults(const app::Example& e, const fs::path& dir) {
         if (f.name == "Threshold (max gm)") vt = f.value;
         if (f.name == "Subthreshold swing") ss = f.value;
     }
-    const bool transistor = e.path.filename().string().find("fet") != std::string::npos;
+    const std::string stem = e.path.stem().string();
+    const bool transistor = stem.find("mosfet") != std::string::npos || stem.find("finfet") != std::string::npos;  // DC4
     if (transistor) {
         line += std::format(", V_th {:.3f} V, SS {:.1f} mV/dec", vt, ss);
         CHECK(std::isfinite(vt));
@@ -216,16 +217,94 @@ void runs_at_defaults(const app::Example& e, const fs::path& dir) {
 
 }  // namespace
 
-TEST_CASE("library: the 1D and 2D decks run to completion at their defaults (DC4)", "[.library]") {
+TEST_CASE("library: the 1D and 2D decks run to completion at their defaults (DC4)", "[.library_runs]") {
     const fs::path dir = app_test::scratch("library_run");
     for (const app::Example& e : library()) {
         if (build(read_file(e.path)).dimension < 3) runs_at_defaults(e, dir);
     }
 }
 
-TEST_CASE("library: the 3D decks run to completion at their defaults (DC4)", "[.library3d]") {
+TEST_CASE("library: the 3D decks run to completion at their defaults (DC4)", "[.library_runs3d]") {
     const fs::path dir = app_test::scratch("library_run_3d");
     for (const app::Example& e : library()) {
         if (build(read_file(e.path)).dimension == 3) runs_at_defaults(e, dir);
+    }
+}
+
+TEST_CASE("library: the 2D MOSFET at Lg + 1 nm equals the deck written out by hand (DC3)", "[app][library]") {
+    const std::string text = read_file(devices_dir / "mosfet_2d.deck");
+    const auto rows = dims::read_dimensions(text);
+    REQUIRE(rows);
+    const auto lg = std::ranges::find_if(*rows, [](const dims::Dimension& r) { return r.name == "Lg"; });
+    REQUIRE(lg != rows->end());
+    REQUIRE(lg->expr == "1um");
+    const auto moved = dims::set_dimension(text, "Lg", "1.001um");
+    REQUIRE(moved);
+    const std::string by_hand = R"([mesh]
+type = tensor
+x = linspace(0, 0.5um, 11) + linspace(0.5um, 1.501um, 51) + linspace(1.501um, 2.001um, 11)
+y = linspace(0, 0.8um, 17) + linspace(0.8um, 0.99um, 39) + linspace(0.99um, 1um, 6)
+straddle y = 0.99um 0.5nm
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 2.001um  0.99um 1um
+
+[doping]
+profile = acceptor constant 1e17
+profile = donor gaussian 1e20 axis=y center=0.99um width=0.1um x=0:0.55um lateral=20nm
+profile = donor gaussian 1e20 axis=y center=0.99um width=0.1um x=1.451um:2.001um lateral=20nm
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  0.8um 0.985um
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = 2.001um 2.001um  0.8um 0.985um
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = 0.5um 1.501um  1um 1um
+electrode = metal
+work_function = 4.1
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[equilibrium]
+)";
+    const auto da = deck::parse(*moved), db = deck::parse(by_hand);
+    REQUIRE(da);
+    REQUIRE(db);
+    const auto pa = deck::build(*da), pb = deck::build(*db);
+    REQUIRE(pa);
+    INFO((pb ? std::string() : pb.error().message));
+    REQUIRE(pb);
+    const auto& a = pa->device;
+    const auto& b = pb->device;
+    const auto close = [](double x, double y) { return std::abs(x - y) <= 1e-12 * std::max({std::abs(x), std::abs(y), 1e-6}); };
+    REQUIRE(a.mesh().node_count() == b.mesh().node_count());
+    int coords = 0, regions = 0, doping = 0;
+    for (std::size_t k = 0; k < a.mesh().node_count(); ++k) {
+        for (int c = 0; c < 3; ++c) coords += !close(a.mesh().points()[k][c], b.mesh().points()[k][c]);
+        regions += a.node_region()[k] != b.node_region()[k];
+        doping += !close(a.donors()[k], b.donors()[k]) || !close(a.acceptors()[k], b.acceptors()[k]);
+    }
+    CHECK(coords == 0);
+    CHECK(regions == 0);
+    CHECK(doping == 0);
+    for (const auto& c : b.contacts()) {
+        CAPTURE(c.name);
+        const auto* ca = a.find_contact(c.name);
+        REQUIRE(ca);
+        CHECK(ca->nodes == c.nodes);
     }
 }
