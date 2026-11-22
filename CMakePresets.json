@@ -11,7 +11,8 @@
       "architecture": { "value": "x64", "strategy": "external" },
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
-        "VCPKG_HOST_TRIPLET": "x64-windows-static-md"
+        "VCPKG_HOST_TRIPLET": "x64-windows-static-md",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       },
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
     },

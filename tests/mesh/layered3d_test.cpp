@@ -380,7 +380,7 @@ Measures measures(const PolyhedralGeometry& c) {
 
 TEST_CASE("mesh layered3d: the reduced FinFET drawn as layers equals its extrusion's volumes and patch areas (SE2)",
           "[mesh][layered3d]") {
-    // decks/finfet_3d_reduced.deck: axis x, stations 0, 30, 55, 85 nm; cells in (y, z).
+    // tests/decks/finfet_3d_reduced.deck: axis x, stations 0, 30, 55, 85 nm; cells in (y, z).
     const double nm = 1e-7;
     ExtrudedGeometry x;
     x.axis = 0;

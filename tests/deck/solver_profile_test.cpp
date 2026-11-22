@@ -386,7 +386,7 @@ TEST_CASE("solver profile: the phase split of a Newton iteration (Unit 58 SD1)",
                 false);
     }
     SECTION("tensor FinFET deck") {
-        profile(deck_case("tensor FinFET deck", fs::path(NITCAD_DECKS_DIR) / "finfet_3d.deck"),
+        profile(deck_case("tensor FinFET deck", fs::path(NITCAD_DECKS_DIR) / ".." / "tests" / "decks" / "finfet_3d_fine.deck"),
                 false);
     }
 }

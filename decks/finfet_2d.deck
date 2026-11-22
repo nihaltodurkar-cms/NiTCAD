@@ -1,0 +1,94 @@
+# 2D double-gate FinFET
+# An n-channel FinFET cut at mid-height of its fin (top view): a 10 nm wide silicon fin from source
+# to drain, gated on both sidewalls by a 25 nm metal gate over 1.5 nm HfO2 on a 0.5 nm SiO2
+# interfacial layer, nitride spacers beside the gate, n+ source and drain with a 3 nm underlap.
+# The transfer curve Id-Vg at Vd = 50 mV; the Results tab gives V_th and the swing.
+#
+# Axes (nm): x along the fin, source (0) to drain (85), gate 30-55; y across it: HfO2 0-1.5,
+# interfacial 1.5-2, fin 2-12, interfacial 12-12.5, HfO2 12.5-14 (gates at y = 0 and y = 14).
+#
+# Mesh (medium, 2,624 nodes): 1 nm under the gate and at the junctions, 2.5 nm in source and
+# drain; 0.5 nm across the fin, 0.25 nm in the gate stack; every interface straddled.
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 20nm, 9) + linspace(20nm, 65nm, 46) + linspace(65nm, 85nm, 9)
+y = linspace(0, 1.5nm, 7) + linspace(1.5nm, 2nm, 3) + linspace(2nm, 12nm, 21) + linspace(12nm, 12.5nm, 3) + linspace(12.5nm, 14nm, 7)
+straddle x = 30nm 0.5nm
+straddle x = 55nm 0.5nm
+straddle y = 1.5nm 0.1nm
+straddle y = 2nm 0.1nm
+straddle y = 12nm 0.1nm
+straddle y = 12.5nm 0.1nm
+
+# The nitride spacers are the background.
+[region spacer]
+material = insulator
+eps_r = 7.5
+
+[region hfo2]
+material = insulator
+eps_r = 22
+box = 30nm 55nm  0 14nm
+
+[region interfacial]
+material = sio2
+box = 30nm 55nm  1.5nm 12.5nm
+
+[region silicon]
+material = silicon
+box = 0 85nm  2nm 12nm
+
+[doping]
+profile = acceptor constant 1e16
+profile = donor constant 1e20 axis=y x=-10nm:27nm lateral=2nm
+profile = donor constant 1e20 axis=y x=58nm:95nm lateral=2nm
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  2nm 12nm
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = 85nm 85nm  2nm 12nm
+
+[contact gate_left]
+kind = electrode
+patch = y_min
+box = 30nm 55nm  0 0
+electrode = metal
+work_function = 4.4
+
+[contact gate_right]
+kind = electrode
+patch = y_max
+box = 30nm 55nm  14nm 14nm
+electrode = metal
+work_function = 4.4
+
+[interface silicon interfacial]
+fixed_charge = 5e10
+
+[models]
+fermi_dirac = on
+field_mobility = on
+electron_mobility = masetti
+
+[solver]
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate_left = 0 : 0.8 : 0.05
+contact gate_right = 0 : 0.8 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = finfet_2d.nitsweep
+device = finfet_2d.nitdev
+table = finfet_2d.csv

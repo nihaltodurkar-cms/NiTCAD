@@ -1,0 +1,47 @@
+# 1D MOSFET gate stack
+# A vertical cut through the channel of an n-channel MOSFET: metal gate, 5 nm SiO2, p-type silicon
+# (1e17 cm^-3), the body contact at the bottom. The gate is swept from accumulation through depletion
+# into strong inversion; the Device view shows the band bending and the inversion electrons at the
+# surface, the Curves tab the gate charge.
+#
+# The quasi-static solve (equations = equilibrium_poisson): carriers in thermal equilibrium with the
+# grounded body and source, as in the channel of a long MOSFET. A 1D cut has no source, so drift-
+# diffusion could not supply the inversion layer (ARCHITECTURE.md 6.4).
+#
+# Mesh (medium): 0.5 nm in the oxide, 1 nm in the first 50 nm of silicon, 10 nm below.
+
+[mesh]
+type = tensor
+x = linspace(0, 5nm, 11) + linspace(5nm, 55nm, 51) + linspace(55nm, 1um, 95)
+straddle x = 5nm 0.2nm
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 5nm
+
+[doping]
+profile = acceptor constant 1e17
+
+[contact gate]
+kind = electrode
+patch = x_min
+electrode = metal
+work_function = 4.1
+
+[contact body]
+kind = ohmic
+patch = x_max
+
+[solver]
+equations = equilibrium_poisson
+
+[sweep]
+contact gate = -1.5 : 1.5 : 0.05
+
+[output]
+sweep = mosfet_1d.nitsweep
+device = mosfet_1d.nitdev
+table = mosfet_1d.csv

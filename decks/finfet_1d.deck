@@ -1,0 +1,61 @@
+# 1D bulk FinFET, vertical cut through the top gate
+# A cut down the middle of a bulk n-channel FinFET's fin, under the gate: metal gate | 1.5 nm HfO2 |
+# 0.5 nm SiO2 interfacial layer | a 40 nm silicon fin (p-type, 1e16 cm^-3) | a punch-through stop
+# (1e18 cm^-3 at the fin's base) | the p-type substrate (rising to 1e17 cm^-3) and its body contact.
+# The gate is swept into inversion; the Device view shows the top channel and the band bending down
+# the fin, the Curves tab the gate charge.
+#
+# The quasi-static solve (equations = equilibrium_poisson): carriers in thermal equilibrium with the
+# grounded source and body, as in the channel; a 1D cut has no source of its own. (A cut across the
+# fin, gate | fin | gate, has no ohmic contact at all: a floating region the device check rejects.)
+#
+# Mesh (medium): 0.25 nm in the gate stack, 0.5 nm in the fin's top 10 nm, 1 nm down the fin, 5 nm in
+# the substrate; every interface straddled.
+
+[mesh]
+type = tensor
+x = linspace(0, 1.5nm, 7) + linspace(1.5nm, 2nm, 3) + linspace(2nm, 12nm, 21) + linspace(12nm, 42nm, 31) + linspace(42nm, 0.5um, 93)
+straddle x = 1.5nm 0.1nm
+straddle x = 2nm 0.1nm
+
+# The high-k layer, then the interfacial oxide; silicon from 2 nm on.
+[region silicon]
+material = silicon
+
+[region hfo2]
+material = insulator
+eps_r = 22
+box = 0 1.5nm
+
+[region interfacial]
+material = sio2
+box = 1.5nm 2nm
+
+[doping]
+profile = acceptor constant 1e16
+profile = acceptor gaussian 1e18 axis=x center=42nm width=8nm
+profile = acceptor gaussian 1e17 axis=x center=0.5um width=0.4um
+
+[contact gate]
+kind = electrode
+patch = x_min
+electrode = metal
+work_function = 4.4
+
+[contact body]
+kind = ohmic
+patch = x_max
+
+[models]
+fermi_dirac = on
+
+[solver]
+equations = equilibrium_poisson
+
+[sweep]
+contact gate = -0.5 : 1 : 0.05
+
+[output]
+sweep = finfet_1d.nitsweep
+device = finfet_1d.nitdev
+table = finfet_1d.csv

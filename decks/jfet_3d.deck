@@ -1,0 +1,66 @@
+# 3D JFET
+# The 2D JFET (jfet_2d.deck) 1 um wide: Id-Vg at a drain bias of 0.1 V, the gates swept together from
+# -2 V (pinched off; pinch-off near -0.7 V in 2D) to 0.3 V; the fields in 3D (Device view: slice
+# plane or clipping box).
+#
+# An n channel (2e16 cm^-3) between a p+ buried bottom gate and a 1 um p+ top gate across the width,
+# n+ source and drain diffusions at the ends.
+#
+# Mesh (medium, refined where pinch-off is set): 50 nm along x under the gate and its edges, 100 nm
+# at the ends; 100 nm in the bottom gate, 50 nm through the channel, 20 nm in the top 0.3 um; 200 nm
+# across the width (the device is uniform across it); 9,720 nodes. GMRES with ILUT (single thread);
+# PARDISO with the MKL runtime (see [solver]).
+
+[mesh]
+type = tensor
+x = linspace(0, 0.8um, 9) + linspace(0.8um, 2.2um, 29) + linspace(2.2um, 3um, 9)
+y = linspace(0, 0.4um, 5) + linspace(0.4um, 1.2um, 17) + linspace(1.2um, 1.5um, 16)
+z = linspace(0, 1um, 6)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant 2e16
+profile = acceptor gaussian 1e19 axis=y center=0 width=0.2um
+profile = acceptor gaussian 1e19 axis=y center=1.5um width=0.1um x=1um:2um lateral=50nm
+profile = donor gaussian 1e20 axis=y center=1.5um width=0.3um x=0:0.4um lateral=50nm
+profile = donor gaussian 1e20 axis=y center=1.5um width=0.3um x=2.6um:3um lateral=50nm
+
+[contact source]
+kind = ohmic
+patch = y_max
+box = 0 0.4um  1.5um 1.5um  0 1um
+
+[contact drain]
+kind = ohmic
+patch = y_max
+box = 2.6um 3um  1.5um 1.5um  0 1um
+
+[contact gate_top]
+kind = ohmic
+patch = y_max
+box = 1um 2um  1.5um 1.5um  0 1um
+
+[contact gate_bottom]
+kind = ohmic
+patch = y_min
+
+[solver]
+backend = gmres_ilut
+# With the MKL runtime instead:
+# backend = pardiso
+# mkl = <path to mkl_rt.3.dll>
+# threads = 6
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate_top = -2 : 0.3 : 0.1
+contact gate_bottom = -2 : 0.3 : 0.1
+contact drain = 0.1
+
+[output]
+sweep = jfet_3d.nitsweep
+device = jfet_3d.nitdev
+table = jfet_3d.csv

@@ -149,7 +149,10 @@ More examples:
 | `examples/mosfet_2d.deck` | 2D n-MOSFET, Id–Vg with threshold and swing |
 | `examples/mosfet_3d.deck` | 3D n-MOSFET, gate sweep at 0.5 V drain bias |
 | `decks/schottky_diode_1d.deck` | 1D Schottky diode, −1 V to +0.4 V |
-| `decks/finfet_3d.deck` | 3D tri-gate SOI FinFET (large; use PARDISO) |
+| `decks/mosfet_1d.deck`, `mosfet_2d.deck`, `mosfet_3d.deck` | n-MOSFET: the gate swept from accumulation to inversion in 1D, Id–Vg at 50 mV in 2D and 3D |
+| `decks/jfet_1d.deck`, `jfet_2d.deck`, `jfet_3d.deck` | n-JFET: the gate junction in reverse bias in 1D, Id–Vg at 0.1 V in 2D and 3D |
+| `decks/finfet_1d.deck`, `finfet_2d.deck` | n-FinFET: a 1D cut under the top gate, a 2D double-gate top view |
+| `decks/finfet_3d.deck` | 3D tri-gate SOI FinFET, Id–Vg at 50 mV (22,011 nodes; PARDISO with the MKL runtime is faster) |
 | `benchmarks/resistivity/` | Resistor decks for validation against published resistivity data (NBS SP 400-64) |
 
 The deck language is described in `ARCHITECTURE.md` 6.5 (input) and 6.6 (results). Press Ctrl+C during a run to

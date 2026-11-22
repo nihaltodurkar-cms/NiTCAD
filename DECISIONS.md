@@ -3431,6 +3431,18 @@ Seconds (build + solve), GMRES products and held memory:
   line of the `[gmres]`/`[amg]` cases and of the whole linalg binary (25 lines) appears unchanged on the branch,
   which only adds the `cpr_amg` lines. The full Release and Debug suites have not run (owner's word needed; no Debug build by
   standing rule). Nothing pushed.
+
+### The decks of decks/ redone (2026-11-22, owner's deck set)
+
+The owner's new set in `decks/`: MOSFET, JFET and FinFET decks in 1D, 2D and 3D, the 3D FinFET halved to a medium
+22,011-node mesh on GMRES-ILUT (PARDISO optional), the Schottky diode kept. The decks the tests and the recorded
+figures were written against are frozen in `tests/decks/`, unchanged: `finfet_3d_fine.deck` (decks/finfet_3d.deck
+until this change, 45,375 nodes: MG7, GC14, QC12, the solver profile and FC9/UC8's coarse and 2x meshes), and
+`finfet_3d_reduced`, `_shaped`, `_swept` and `_shaped_swept` (moved). Every record above naming
+`decks/finfet_3d*.deck` means those files; the closed units' archives in `docs/decisions/` are left verbatim.
+`deck build: the decks of decks/ build` reads and builds all ten decks (nodes, contacts, points); the
+review found the old 45,375 check red against the new deck.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

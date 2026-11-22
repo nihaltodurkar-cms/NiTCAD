@@ -259,8 +259,8 @@ TEST_CASE("quantum confinement: the MOSFET examples, reflected, small signal, re
                 t_off3, t_on3,
                 on3.points.back().terminal_current[1] / off3.points.back().terminal_current[1]);
 
-    // QC12: the distance search on the FinFET deck's device (45,375 nodes).
-    const deck::Plan fin = example(fs::path(NITCAD_DECKS_DIR) / "finfet_3d.deck");
+    // QC12: the distance search on the FinFET deck's device (tests/decks/finfet_3d_fine.deck, 45,375 nodes).
+    const deck::Plan fin = example(fs::path(NITCAD_DECKS_DIR) / ".." / "tests" / "decks" / "finfet_3d_fine.deck");
     auto m = fin.options.models;
     m.quantum_confinement = mlda;
     const auto t0 = std::chrono::steady_clock::now();

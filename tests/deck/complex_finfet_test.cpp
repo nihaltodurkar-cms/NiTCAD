@@ -1,15 +1,15 @@
 // FC9 and FC10 (DECISIONS.md Unit 53; owner rulings SQ1, SQ2, 2026-10-30): the two extruded FinFET
 // decks solved. Hidden, hours in Release with PARDISO (NITCAD_MKL the path of mkl_rt.3.dll); run by
 // tag.
-// - [.fc9] FC9: decks/finfet_3d_reduced.deck (generated) against a coarse tensor mesh of
-//   finfet_3d.deck's layout and its 2x refined reference. For I_D at every V_G above the current
+// - [.fc9] FC9: tests/decks/finfet_3d_reduced.deck (generated) against a coarse tensor mesh of
+//   finfet_3d_fine.deck's layout and its 2x refined reference. For I_D at every V_G above the current
 //   resolution, V_T, max g_m and the swing: |Q_gen - Q_ref| <= 1.5 |Q_tensor - Q_ref| + f, f the
 //   reference's Richardson estimate |Q_ref - Q_tensor| / (2^2 - 1) (the box method's second order);
 //   and the generated mesh at most the coarse tensor mesh's nodes. FQ2's pre-stated failure path:
 //   the generated mesh has about 30 times those nodes (SQ1), so the case is [!shouldfail] with its
 //   measurement, the threshold unchanged.
 // - [.fc_digests]: the two decks' mesh digests (SQ9).
-// - [.fc10] FC10: decks/finfet_3d_shaped.deck meshes, is certified, and its sweep converges at
+// - [.fc10] FC10: tests/decks/finfet_3d_shaped.deck meshes, is certified, and its sweep converges at
 //   every point; nodes, slivers, mesh and solve times printed (no accuracy gate).
 #include <catch2/catch_test_macros.hpp>
 
@@ -47,7 +47,7 @@ std::string mkl_path() {
 }
 
 std::string read_deck(const char* name) {
-    std::ifstream in(std::filesystem::path(NITCAD_DECKS_DIR) / name);
+    std::ifstream in(std::filesystem::path(NITCAD_DECKS_DIR) / ".." / "tests" / "decks" / name);
     std::stringstream ss;
     ss << in.rdbuf();
     return ss.str();
@@ -63,12 +63,12 @@ void replace_once(std::string& text, const std::string& from, const std::string&
 
 std::string pardiso(const std::string& mkl) { return "backend = pardiso\nmkl = " + mkl + "\nthreads = 6\n"; }
 
-// finfet_3d.deck's mesh lines: the coarse mesh halves every linspace's cells (its straddles as the
+// finfet_3d_fine.deck's mesh lines: the coarse mesh halves every linspace's cells (its straddles as the
 // deck's; two interfaces 0.5 nm apart allow at most 1/3 nm), the reference is the deck's lines with
 // the straddles halved, so the reference is the coarse mesh refined twice everywhere but at the
 // straddled pairs, which narrow by half from the deck's.
 std::string tensor_text(bool reference, const std::string& mkl) {
-    std::string t = read_deck("finfet_3d.deck");
+    std::string t = read_deck("finfet_3d_fine.deck");
     replace_once(t, "# backend = pardiso\n", pardiso(mkl));
     if (reference) {
         for (const char* axis : {"x = 30nm", "x = 55nm", "y = 20nm"}) {

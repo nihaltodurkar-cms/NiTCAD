@@ -1,4 +1,4 @@
-# Unit 57 (DECISIONS.md GE1 iii, GG2): decks/finfet_3d_swept.deck reduced to two gate points (0 and 0.1 V).
+# Unit 57 (DECISIONS.md GE1 iii, GG2): tests/decks/finfet_3d_swept.deck reduced to two gate points (0 and 0.1 V).
 
 [device]
 temperature = 300

@@ -1,0 +1,39 @@
+# 1D JFET gate junction
+# A vertical cut through an n-channel JFET under its gate: the p+ gate (1e19 cm^-3) on an n channel
+# (2e16 cm^-3) over an n+ layer that carries the channel's contact. The gate junction is swept into
+# reverse bias: the depletion region spreads into the channel (Device view: the electrons and the
+# potential), the gate leakage is the reverse current (Curves).
+#
+# Mesh (medium): 5 nm across the junction, 10 nm elsewhere.
+
+[mesh]
+type = tensor
+x = linspace(0, 0.2um, 21) + linspace(0.2um, 0.6um, 81) + linspace(0.6um, 2um, 141)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor gaussian 1e19 axis=x center=0 width=0.1um
+profile = donor constant 2e16
+profile = donor gaussian 1e19 axis=x center=2um width=0.2um
+
+[contact gate]
+kind = ohmic
+patch = x_min
+
+[contact channel]
+kind = ohmic
+patch = x_max
+
+[solver]
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate = -4 : 0.4 : 0.1
+
+[output]
+sweep = jfet_1d.nitsweep
+device = jfet_1d.nitdev
+table = jfet_1d.csv

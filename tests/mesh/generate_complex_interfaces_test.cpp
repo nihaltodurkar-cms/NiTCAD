@@ -237,7 +237,7 @@ TEST_CASE("complex interfaces: a 60.5 degree sector at a trace (FC6)", "[mesh][c
 // so at the station between them the liner's U-shaped ring is a non-convex piece beside the fill's coplanar
 // piece, both against the first section's region, with oblique (about 104 and 256 degree) corners.
 // Face vertices there lie a few hundredths of s outside the ring's outer edge; the decomposition
-// bound alone fails P4b here (mutant checked), as in decks/finfet_3d_shaped.deck (1.1 s in its
+// bound alone fails P4b here (mutant checked), as in tests/decks/finfet_3d_shaped.deck (1.1 s in its
 // miniature); the grown polygons bound it (DECISIONS.md, Unit 53, the coarser offsets).
 TEST_CASE("complex interfaces: a tapered liner ring at a gate edge (P4b, the shaped deck's corner)", "[mesh][complex_interfaces]") {
     const double s = 0.16;

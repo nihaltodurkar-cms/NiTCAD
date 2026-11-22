@@ -837,7 +837,7 @@ namespace {
 // The FinFET deck of decks/ with its three gates tunnelling through the interfacial SiO2 (the
 // built-in band data) and the HfO2 (GR10); with mkl, PARDISO on 6 threads.
 std::string finfet_text(bool tunnelling, const char* mkl = nullptr) {
-    std::ifstream in(std::filesystem::path(NITCAD_DECKS_DIR) / "finfet_3d.deck");
+    std::ifstream in(std::filesystem::path(NITCAD_DECKS_DIR) / ".." / "tests" / "decks" / "finfet_3d_fine.deck");
     std::stringstream ss;
     ss << in.rdbuf();
     std::string text = ss.str();

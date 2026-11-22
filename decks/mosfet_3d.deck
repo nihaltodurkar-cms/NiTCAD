@@ -1,0 +1,71 @@
+# 3D MOSFET
+# The 2D MOSFET (mosfet_2d.deck) 1 um wide: the transfer curve Id-Vg at a drain bias of 50 mV, its
+# fields in 3D (Device view: slice plane or clipping box).
+#
+# A 2 x 1 x 1 um p-type body (1e17 cm^-3), 10 nm oxide, n+ source and drain, a 1 um metal gate across
+# the width (work function 4.1 eV). Threshold about 0.4 V.
+#
+# Mesh (medium, 8,525 nodes): 50 nm along the channel, 100 nm in source and drain; 16 nm in the top
+# 190 nm of silicon, 3.3 nm in the oxide; 100 nm across the width. GMRES with ILUT (single thread)
+# solves it in a few minutes; with the MKL runtime PARDISO is faster (see [solver]).
+
+[mesh]
+type = tensor
+x = linspace(0, 0.5um, 6) + linspace(0.5um, 1.5um, 21) + linspace(1.5um, 2um, 6)
+y = linspace(0, 0.8um, 9) + linspace(0.8um, 0.99um, 13) + linspace(0.99um, 1um, 4)
+z = linspace(0, 1um, 11)
+straddle y = 0.99um 1nm
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 2um  0.99um 1um  0 1um
+
+[doping]
+profile = acceptor constant 1e17
+profile = donor gaussian 1e20 axis=y center=0.99um width=0.1um x=0:0.55um lateral=20nm
+profile = donor gaussian 1e20 axis=y center=0.99um width=0.1um x=1.45um:2um lateral=20nm
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  0.8um 0.985um  0 1um
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = 2um 2um  0.8um 0.985um  0 1um
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = 0.5um 1.5um  1um 1um  0 1um
+electrode = metal
+work_function = 4.1
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[models]
+field_mobility = on
+
+[solver]
+backend = gmres_ilut
+# With the MKL runtime instead:
+# backend = pardiso
+# mkl = <path to mkl_rt.3.dll>
+# threads = 6
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate = 0 : 1.5 : 0.1
+contact drain = 0.05
+
+[output]
+sweep = mosfet_3d.nitsweep
+device = mosfet_3d.nitdev
+table = mosfet_3d.csv

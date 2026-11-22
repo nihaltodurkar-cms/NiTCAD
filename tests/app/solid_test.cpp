@@ -141,6 +141,8 @@ std::string read_file(const std::filesystem::path& p) {
 }
 
 std::string deck_file(const char* name) { return read_file(std::filesystem::path(NITCAD_DECKS_DIR) / name); }
+// The frozen FinFET decks the tests were written against (decks/ holds the user-facing set; DECISIONS.md, the decks move).
+std::string test_deck_file(const char* name) { return read_file(std::filesystem::path(NITCAD_DECKS_DIR) / ".." / "tests" / "decks" / name); }
 
 // The text with CRLF line ends made LF (the decks may be checked out either way).
 std::string lf(std::string t) {
@@ -283,8 +285,8 @@ TEST_CASE("app solid: decks read; without edits the text comes back byte for byt
         if (c == '\n') crlf += '\r';
         crlf += c;
     }
-    for (const std::string& text : {well_deck, mos_deck, extruded_mos_deck, crlf, deck_file("finfet_3d_reduced.deck"),
-                                    deck_file("finfet_3d_shaped.deck"), deck_file("finfet_3d_swept.deck"), deck_file("finfet_3d_shaped_swept.deck")}) {
+    for (const std::string& text : {well_deck, mos_deck, extruded_mos_deck, crlf, test_deck_file("finfet_3d_reduced.deck"),
+                                    test_deck_file("finfet_3d_shaped.deck"), test_deck_file("finfet_3d_swept.deck"), test_deck_file("finfet_3d_shaped_swept.deck")}) {
         const Model m = must_read(text);
         INFO(m.why);
         REQUIRE(m.mesh != MeshKind::unsupported);
@@ -373,7 +375,7 @@ TEST_CASE("app solid: an edit rewrites only geometry lines, and the deck still b
 
 TEST_CASE("app solid: an extrude3d deck reads as prisms, exact, and converts to a layered deck (SQ5, SE3)", "[app][solid]") {
     SECTION("the reduced FinFET") {
-        const std::string text = deck_file("finfet_3d_reduced.deck");
+        const std::string text = test_deck_file("finfet_3d_reduced.deck");
         Model m = must_read(text);
         REQUIRE(m.mesh == MeshKind::extruded);
         CHECK(m.convert_why == "");
@@ -419,7 +421,7 @@ TEST_CASE("app solid: an extrude3d deck reads as prisms, exact, and converts to 
         check_partition(must_read(out));
     }
     SECTION("a swept extrusion's keys are dropped with the sweep") {
-        const std::string text = deck_file("finfet_3d_swept.deck");
+        const std::string text = test_deck_file("finfet_3d_swept.deck");
         Model m = must_read(text);
         CHECK(m.swept);
         const auto note = convert_to_layered(m);
@@ -432,7 +434,7 @@ TEST_CASE("app solid: an extrude3d deck reads as prisms, exact, and converts to 
         CHECK(strip(must_read(out)) == strip(m));
     }
     SECTION("the shaped FinFET (slanted fin cells) converts and resolves through the slanted kernel (slice 4, SD6)") {
-        const std::string text = deck_file("finfet_3d_shaped.deck");
+        const std::string text = test_deck_file("finfet_3d_shaped.deck");
         Model m = must_read(text);
         const auto note = convert_to_layered(m);
         REQUIRE(note);
@@ -466,13 +468,13 @@ TEST_CASE("app solid: an extrude3d deck reads as prisms, exact, and converts to 
         }
     }
     SECTION("a void in the extrusion is refused with why") {
-        std::string text = lf(deck_file("finfet_3d_reduced.deck"));
+        std::string text = lf(test_deck_file("finfet_3d_reduced.deck"));
         text.replace(text.find("extrude = fin 0:85nm"), 20, "extrude = fin 0:55nm");
         Model m = must_read(text);
         CHECK(m.convert_why == "cell 'fin' is void in section 2 (a layered deck fills its domain)");
         CHECK(convert_to_layered(m).error() == m.convert_why);
         CHECK(m.mesh == MeshKind::extruded);
-        text = lf(deck_file("finfet_3d_reduced.deck"));
+        text = lf(test_deck_file("finfet_3d_reduced.deck"));
         text.replace(text.find("extrude = box 0:85nm\n"), 21, "");
         CHECK(must_read(text).convert_why.starts_with("region 'buried_oxide' holds no cell"));
     }
@@ -556,7 +558,7 @@ TEST_CASE("app solid: the edits, refused where they would leave a solid invalid"
 
 TEST_CASE("app solid: 200 random edits, undone one by one, give the deck back byte for byte (SE4, SE5)", "[app][solid]") {
     for (const bool extruded : {false, true}) {
-        const std::string start = extruded ? deck_file("finfet_3d_reduced.deck") : well_deck;
+        const std::string start = extruded ? test_deck_file("finfet_3d_reduced.deck") : well_deck;
         std::mt19937 rng(extruded ? 26u : 12u);
         const auto pick = [&](int n) { return std::uniform_int_distribution<int>(0, n - 1)(rng); };
         std::string text = start;

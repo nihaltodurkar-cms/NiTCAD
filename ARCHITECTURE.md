@@ -2230,7 +2230,7 @@ interface fits both direct and iterative backends stays unproven until one is re
   uses) and the 2026.1 runtime of a local conda environment; since 2026-11-15 CI and the local runtime use oneMKL
   2026.2.1 (Build 20260915; the full Release suite, 219 tests, passes on it, and the measured differences below
   shift within their tolerances: 4 threads against 1 3.7e-11, the coupled system 7.8e-12, complex 1.8e-13). The
-  FinFET deck (`decks/finfet_3d.deck`, PARDISO on 6 threads, same build) runs in 481 s on 2026.2.1 and 465 s on
+  FinFET deck (`tests/decks/finfet_3d_fine.deck`, PARDISO on 6 threads, same build) runs in 481 s on 2026.2.1 and 465 s on
   2026.1; the 17 points' terminal currents agree to 2.3e-11 relative (1e-14 or better from point 4 on), and point 0
   takes one bias substep on 2026.2.1 where 2026.1 takes none.
   NiTCAD stays MIT; MKL is an optional, separately licensed
@@ -2388,7 +2388,7 @@ DECISIONS.md LS1–LS6, LQ1–LQ4, LQ3a, LG1–LG8):**
   in `BackendCounts::stage2_retries`. Real only, needs labels and `backend = gmres`; deck `preconditioner = cpr_amg`.
   Bit-identical for every thread count.
 - **Measured (MD5).** On the 3D diode at one thread, one Newton step's linear solve takes 0.15–0.26× GMRES-ILUT's time
-  from 24k to 1.03M unknowns (21.5 s against 82.1 s at 1.03M) with 0.71× its memory. On `decks/finfet_3d.deck`'s
+  from 24k to 1.03M unknowns (21.5 s against 82.1 s at 1.03M) with 0.71× its memory. On `tests/decks/finfet_3d_fine.deck`'s
   17-point sweep at 6 threads, `gmres` + `cpr_amg` takes 224 s against PARDISO's 526 s, with the same currents to
   7.6e-11. **Limits:** GMRES products still grow 3.8× over the diode series (22 → 83; no strength test met 1.5× at
   every size), and six threads give at most 1.98× (70³) because the build is serial; at 30³ six threads are slower,
@@ -2560,7 +2560,7 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
     the generator, crossings straddled by columns; corner blocks where two layers meet, right-angle (one tensor
     lattice, exact) or mitred at the bisector for 60°–120° (P4b judges the bends). U14's layers are unchanged.
   - Deck `extrude3d` with `sweep = on`, `lines`, `straddle`, `layer`; io, run record (the swept digest) and the
-    application as for Unit 53. `decks/finfet_3d_swept.deck` (8,300 nodes) and `decks/finfet_3d_shaped_swept.deck`
+    application as for Unit 53. `tests/decks/finfet_3d_swept.deck` (8,300 nodes) and `tests/decks/finfet_3d_shaped_swept.deck`
     (71,188 nodes) mesh in seconds.
   - Gates: UC1–UC6 and UC9–UC12 met (cost 1.17e5 nodes in 8.0 s). **UC7 fails** H1 at one level (0.86 against 0.9:
     the unlayered HfO₂ bends), accepted as a limitation. **UC8 fails** (the reduced FinFET against the tensor
@@ -3768,7 +3768,7 @@ GE1–GE7, GG1–GG9; accepted by the owner 2026-11-18):**
   differentiation (6.12.3), a public extension API, the natural-test norm (Unit 59).
 
 **Missing nanoscale models (found 2026-10-23; planned, no unit named):**
-- **How found.** `decks/finfet_3d.deck` simulates a tri-gate SOI FinFET: 10 nm fin, 25 nm gate, 0.77 nm EOT. Its
+- **How found.** `tests/decks/finfet_3d_fine.deck` (the 45,375-node deck of decks/ until 2026-11-22) simulates a tri-gate SOI FinFET: 10 nm fin, 25 nm gate, 0.77 nm EOT. Its
   linear Id–Vg (Vd = 50 mV; 45,375 nodes, PARDISO on 6 threads, 18 min) converges at all 17 points and conserves
   current. Swing (about 65 mV/dec) and V_th (about 0.23 V) are plausible. The on-current and the exact V_th are not
   predictive at this size: four models a commercial simulator applies to such a device are absent. Each would be
@@ -3884,8 +3884,8 @@ GE1–GE7, GG1–GG9; accepted by the owner 2026-11-18):**
 - **Proposed order.** Items 1–3 first, enough for a straight fin with its gate stack wrapped on three sides, gated
   against the tensor FinFET deck where the shapes coincide; items 4 and 5 next. Not yet approved as a unit.
 - **Built as Unit 53** (DECISIONS.md FD1–FD15, FC1–FC14; on `mesh/finfet-geometry`, 2026-10-31; 6.11): items 1–4.
-  The deck's `extrude3d` (cells × stations); `decks/finfet_3d_reduced.deck` (the tensor deck's shape) and
-  `decks/finfet_3d_shaped.deck` (tapered fin, wrapped stack, spacers, raised source and drain, STI/BOX) mesh at
+  The deck's `extrude3d` (cells × stations); `tests/decks/finfet_3d_reduced.deck` (the tensor deck's shape) and
+  `tests/decks/finfet_3d_shaped.deck` (tapered fin, wrapped stack, spacers, raised source and drain, STI/BOX) mesh at
   s = 0.08 nm to about 3e5 nodes, certified (P4, P6).
   - FC10 met: the shaped deck's 0–0.8 V sweep converges at all 17 points (288,729 nodes; mesh 454 s, sweep 3,099 s
     with PARDISO on 6 threads).

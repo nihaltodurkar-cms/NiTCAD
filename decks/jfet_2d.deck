@@ -1,0 +1,57 @@
+# 2D JFET
+# An n-channel junction FET in cross-section: the transfer curve Id-Vg at a drain bias of 0.1 V.
+#
+# A 3 x 1.5 um silicon die: an n channel (2e16 cm^-3) between a p+ bottom gate (a buried layer, 1e19
+# cm^-3 at y = 0) and a 1 um p+ top gate (1e19 cm^-3, 0.1 um deep) diffused from the surface; n+
+# source and drain diffusions at the ends. The two gates are swept together from -2 V
+# (pinched off; pinch-off is near -0.7 V) to a slightly forward 0.3 V; the Curves tab shows Id-Vg.
+#
+# Mesh (medium, 4,180 nodes): 40 nm along x; 50 nm in the lower die, 10 nm in its top 0.3 um.
+
+[mesh]
+type = tensor
+x = linspace(0, 3um, 76)
+y = linspace(0, 1.2um, 25) + linspace(1.2um, 1.5um, 31)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant 2e16
+profile = acceptor gaussian 1e19 axis=y center=0 width=0.2um
+profile = acceptor gaussian 1e19 axis=y center=1.5um width=0.1um x=1um:2um lateral=50nm
+profile = donor gaussian 1e20 axis=y center=1.5um width=0.3um x=0:0.4um lateral=50nm
+profile = donor gaussian 1e20 axis=y center=1.5um width=0.3um x=2.6um:3um lateral=50nm
+
+[contact source]
+kind = ohmic
+patch = y_max
+box = 0 0.4um  1.5um 1.5um
+
+[contact drain]
+kind = ohmic
+patch = y_max
+box = 2.6um 3um  1.5um 1.5um
+
+[contact gate_top]
+kind = ohmic
+patch = y_max
+box = 1um 2um  1.5um 1.5um
+
+[contact gate_bottom]
+kind = ohmic
+patch = y_min
+
+[solver]
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate_top = -2 : 0.3 : 0.1
+contact gate_bottom = -2 : 0.3 : 0.1
+contact drain = 0.1
+
+[output]
+sweep = jfet_2d.nitsweep
+device = jfet_2d.nitdev
+table = jfet_2d.csv

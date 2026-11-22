@@ -800,18 +800,31 @@ TEST_CASE("deck build: minority_floor (Unit 50, RD2)", "[deck]") {
     CHECK_FALSE(must(diode_deck + "[solver]\nminority_floor = off\n").options.minority_floor);
 }
 
-// The decks of decks/ (heavy devices, not in the app's examples): each still reads and builds as
-// the deck format evolves. Built, not run (the FinFET sweep takes about 18 min with PARDISO).
-TEST_CASE("deck build: the FinFET deck of decks/ builds") {
-    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d.deck");
-    if (!d) FAIL(d.error().message);
-    const auto p = deck::build(*d);
-    if (!p) FAIL(p.error().message);
-    CHECK(p->device.mesh().node_count() == 45375);
-    CHECK(p->device.contacts().size() == 6);
-    CHECK(p->points.size() == 17);
-    CHECK(p->options.models.fermi_dirac);
-    CHECK(p->options.models.surface_mobility == assemble::SurfaceMobility::off);
+// The decks of decks/ (the user-facing set): each still reads and builds as the deck format evolves. Built, not
+// run. The frozen FinFET decks the older tests and recorded figures use are in tests/decks/ (finfet_3d_fine.deck
+// the 45 375-node deck of decks/ before 2026-11-22).
+TEST_CASE("deck build: the decks of decks/ build") {
+    struct Expect {
+        const char* name;
+        std::size_t nodes, contacts, points;
+    };
+    for (const Expect& e : {Expect{"finfet_1d.deck", 153, 2, 31}, Expect{"finfet_2d.deck", 2624, 4, 17}, Expect{"finfet_3d.deck", 22011, 6, 17},
+                            Expect{"jfet_1d.deck", 241, 2, 45}, Expect{"jfet_2d.deck", 4180, 4, 24}, Expect{"jfet_3d.deck", 9720, 4, 24},
+                            Expect{"mosfet_1d.deck", 156, 2, 61}, Expect{"mosfet_2d.deck", 4331, 4, 31}, Expect{"mosfet_3d.deck", 8525, 4, 16},
+                            Expect{"schottky_diode_1d.deck", 381, 2, 29}}) {
+        CAPTURE(e.name);
+        const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / e.name);
+        if (!d) FAIL(d.error().message);
+        const auto p = deck::build(*d);
+        if (!p) FAIL(p.error().message);
+        CHECK(p->device.mesh().node_count() == e.nodes);
+        CHECK(p->device.contacts().size() == e.contacts);
+        CHECK(p->points.size() == e.points);
+        if (std::string_view(e.name) == "finfet_3d.deck") {
+            CHECK(p->options.models.fermi_dirac);
+            CHECK(p->options.models.surface_mobility == assemble::SurfaceMobility::off);
+        }
+    }
 }
 
 // Unit 53 (DECISIONS.md FD13, FC11): the sectioned extrusion.
@@ -1148,7 +1161,7 @@ TEST_CASE("deck build: the swept FinFET decks mesh and are certified", "[.benchm
     for (const auto& [name, axis_lines] :
          {std::pair{"finfet_3d_swept.deck", std::size_t{25}}, std::pair{"finfet_3d_shaped_swept.deck", std::size_t{37}}}) {
         CAPTURE(name);
-        const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / name);
+        const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / ".." / "tests" / "decks" / name);
         if (!d) FAIL(d.error().message);
         const auto p = deck::build(*d);
         if (!p) FAIL(p.error().message);
@@ -1169,7 +1182,7 @@ TEST_CASE("deck build: the swept FinFET decks mesh and are certified", "[.benchm
 // Unit 53 slice 5: the extruded FinFET deck of decks/ meshes and is certified (P4 and P6). About twenty
 // minutes in Release, so hidden; run it by name.
 TEST_CASE("deck build: the reduced extruded FinFET deck meshes and is certified", "[.benchmark][deck][extrude]") {
-    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_reduced.deck");
+    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / ".." / "tests" / "decks" / "finfet_3d_reduced.deck");
     if (!d) FAIL(d.error().message);
     const auto p = deck::build(*d);
     if (!p) FAIL(p.error().message);
@@ -1185,7 +1198,7 @@ TEST_CASE("deck build: the reduced extruded FinFET deck meshes and is certified"
 // The tapered deck (FC10's mesh): certified since the owner's ruling on slice 5 (DECISIONS.md: the P4b bound at the
 // interfacial ring's oblique corners). About twenty minutes in Release, so hidden; run it by name.
 TEST_CASE("deck build: the shaped extruded FinFET deck meshes and is certified", "[.benchmark][deck][extrude]") {
-    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_shaped.deck");
+    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / ".." / "tests" / "decks" / "finfet_3d_shaped.deck");
     if (!d) FAIL(d.error().message);
     const auto p = deck::build(*d);
     if (!p) FAIL(p.error().message);
@@ -1272,13 +1285,14 @@ prism = z 0 1um, 0 0, 1um 0, 1um 1um
 )", "t.deck:6: prism is for a layered generate3d mesh (layered = on)");
 }
 
-// Unit 26l (SE2): the reduced FinFET written as layers (decks/finfet_3d_reduced.deck's [mesh] and regions redrawn as
+// Unit 26l (SE2): the reduced FinFET written as layers (tests/decks/finfet_3d_reduced.deck's [mesh] and regions redrawn as
 // boxes); the complex's volumes and patch areas equal the extrusion's (the mesh test). Meshing takes about twenty
 // minutes in Release, so hidden; run it by name.
 TEST_CASE("deck build: the reduced FinFET as layered generate3d meshes and is certified (Unit 26l)", "[.benchmark][deck][layered3d]") {
-    std::ifstream in(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_reduced.deck", std::ios::binary);
+    std::ifstream in(fs::path(NITCAD_DECKS_DIR) / ".." / "tests" / "decks" / "finfet_3d_reduced.deck", std::ios::binary);
     REQUIRE(in);
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::erase(text, '\r');  // a checkout may give CRLF line ends (core.autocrlf)
     const auto mesh_at = text.find("[mesh]"), mesh_end = text.find("[region buried_oxide]");
     text.replace(mesh_at, mesh_end - mesh_at, R"([mesh]
 type = generate3d
