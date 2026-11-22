@@ -146,6 +146,9 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
     add(c_convert, L"BUTTON", L"Convert to layered generate3d", WS_TABSTOP | BS_PUSHBUTTON);
     add(c_overlap, L"BUTTON", L"Fills only empty space (overlap = fill)", WS_TABSTOP | BS_AUTOCHECKBOX);
     add(c_resolution, L"BUTTON", L"Use the largest interface_resolution", WS_TABSTOP | BS_PUSHBUTTON);  // MT12
+    add(c_params_label, L"STATIC", L"Parameters (name = value; $name in solids)", SS_LEFT);  // MT8
+    add(c_params, L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, WS_EX_CLIENTEDGE);
+    add(c_params_apply, L"BUTTON", L"Apply parameters", WS_TABSTOP | BS_PUSHBUTTON);
     for (const int c : {c_material, c_draw}) {
         for (const std::string& mat : choices_of("region", "material")) SendMessageW(control(c), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(win32::widen(mat).c_str()));
     }
@@ -233,6 +236,9 @@ void SolidPage::layout_inspector() {
     pair(c_kind_label, c_kind, MulDiv(160, dpi_, 96));
     line(c_convert);
     line(c_resolution);
+    line(c_params_label);
+    line(c_params, MulDiv(80, dpi_, 96));
+    line(c_params_apply);
     y += pad;
     pair(c_draw_label, c_draw, MulDiv(200, dpi_, 96));
     pair(c_plane_label, c_plane, MulDiv(90, dpi_, 96));
@@ -297,8 +303,43 @@ void SolidPage::apply_text(const std::string& text) {
     invalidate();
 }
 
+std::string SolidPage::parameters_text() const {
+    std::string out;
+    for (const solid::Param& p : m_.parameters) out += (out.empty() ? "" : "\r\n") + p.name + " = " + p.expr;
+    return out;
+}
+
+bool SolidPage::apply_parameters(const std::string& lines) {
+    if (!m_.editable()) return false;
+    Model next = m_;
+    std::istringstream in(lines);
+    for (std::string line; std::getline(in, line);) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto eq = line.find('=');
+        const auto trim = [](std::string s) {
+            const auto a = s.find_first_not_of(" \t"), b = s.find_last_not_of(" \t");
+            return a == std::string::npos ? std::string{} : s.substr(a, b - a + 1);
+        };
+        if (trim(line).empty()) continue;
+        if (eq == std::string::npos) {
+            host_.solid_status("Parameters: '" + line + "' is not name = value");
+            return false;
+        }
+        const std::string name = trim(line.substr(0, eq)), expr = trim(line.substr(eq + 1));
+        const auto it = std::ranges::find(next.parameters, name, &solid::Param::name);
+        if (it != next.parameters.end() && it->expr == expr) continue;
+        if (const auto r = solid::set_parameter(next, name, expr); !r) {
+            host_.solid_status("Parameters: " + r.error());
+            return false;
+        }
+    }
+    return commit_model(std::move(next));
+}
+
 bool SolidPage::commit_model(Model next) {
     const std::string text = host_.solid_deck();
+    // MT8: a coordinate the edit moved that a parameter ties edits the parameter (every tied face following).
+    if (const auto was = read_model(text); was && was->parameters == next.parameters) tie_edits(*was, next);
     auto out = write_model(text, next);
     if (!out) {
         host_.solid_status(out.error());
@@ -845,7 +886,10 @@ std::string SolidPage::chip_value() const {
     case Drag::plane:
     case Drag::vertex:
     case Drag::contact_move: v = offset(drag_d_); break;
-    case Drag::face: v = "push " + chip_length(drag_s_); break;
+    case Drag::face:
+        v = "push " + chip_length(drag_s_);
+        if (naming_ >= 0) v += ", named $" + naming_name_ + (naming_ == 0 ? " (new; N: next)" : " (N: next)");
+        break;
     case Drag::array: v = offset(drag_d_) + std::format(" × {} (wheel)", array_count_); break;
     case Drag::base:
     case Drag::contact: {
@@ -900,7 +944,9 @@ std::string SolidPage::chip_value() const {
 }
 
 void SolidPage::after_drag_step(double x, double y) {
-    if (const auto next = pending()) {
+    if (auto next = pending()) {
+        // As commit_model writes it: a tied coordinate moved edits its parameter (MT8, MC4).
+        if (m_start_.parameters == next->parameters && !next->parameters.empty()) tie_edits(m_start_, *next);
         auto out = write_model(text_seen_, *next);
         live_line_ = out ? modeller::deck_line(text_seen_, *out) : out.error();
         host_.solid_status(live_line_);
@@ -924,6 +970,28 @@ bool SolidPage::on_char(wchar_t c) {
                         drag_ == Drag::extrude || drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius;
     const bool two = drag_ == Drag::move || drag_ == Drag::plane || drag_ == Drag::base || drag_ == Drag::array;
     if (!scalar && !two) return false;
+    // MT8: N names the dragged extent (a new parameter, then each existing length one in turn), while nothing is
+    // typed (once a number is, n is its unit's).
+    if (drag_ == Drag::face && entry_.empty() && (c == L'n' || c == L'N')) {
+        const Solid* s = solid_at(m_start_, ref_);
+        const bool along = s && (s->kind == SolidKind::box || index_ < 2);  // a box's face or a prism's cap
+        if (!along) return true;
+        std::vector<std::string> lengths;
+        for (const solid::Param& p : m_start_.parameters) {
+            if (p.length) lengths.push_back(p.name);
+        }
+        naming_ = naming_ + 1 > static_cast<int>(lengths.size()) ? 0 : naming_ + 1;
+        if (naming_ == 0) {
+            for (int k = 1;; ++k) {
+                naming_name_ = "L" + std::to_string(k);
+                if (std::ranges::find(m_start_.parameters, naming_name_, &solid::Param::name) == m_start_.parameters.end()) break;
+            }
+        } else {
+            naming_name_ = lengths[static_cast<std::size_t>(naming_ - 1)];
+        }
+        on_move(last_x_, last_y_, false, false);
+        return true;
+    }
     if (c == L'\b') {
         if (!entry_.backspace()) return true;
     } else if (!entry_.type(c)) {
@@ -1139,7 +1207,8 @@ void SolidPage::update_inspector() {
          false);
     for (int k = 0; k < 12; ++k) show({c_x0_label + k}, false);
     const bool usable = m_.mesh != MeshKind::unsupported;
-    show({c_resolution}, m_.editable());
+    show({c_resolution, c_params_label, c_params, c_params_apply}, m_.editable());
+    if (GetFocus() != control(c_params)) set(c_params, parameters_text());
     show({c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset, c_section_label, c_section, c_cut_label, c_cut, c_translucent},
          usable);
     SendMessageW(control(c_plane), CB_SETCURSEL, static_cast<WPARAM>(v_.plane.normal), 0);
@@ -1230,6 +1299,10 @@ bool SolidPage::commit(int c) {
         convert();
         return true;
     }
+    if (c == c_params_apply) {
+        apply_parameters(text(c_params));
+        return true;
+    }
     if (c == c_resolution) {
         use_automatic_resolution();
         return true;
@@ -1313,6 +1386,7 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
         drag_ = d;
         button_ = true;
         m_start_ = m_;
+        naming_ = -1;
         SetCapture(canvas_);
     };
     if (space_ || tool_ == Tool::pan) {
@@ -1662,6 +1736,7 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         Model next = m_start_;
         drag_s_ = typed_or(quantize(along_axis(m_start_, v_, x, y, origin_, axis_) - start_s_));
         move_face(next, ref_, index_, drag_s_);
+        if (naming_ >= 0) static_cast<void>(name_extent(next, ref_, index_ ^ 1, index_, naming_name_));  // MT8: N
         with_drag(std::move(next));
         return;
     }
@@ -2027,7 +2102,7 @@ LRESULT CALLBACK SolidPage::inspector_proc(HWND hwnd, UINT message, WPARAM w, LP
         if (message == WM_COMMAND) {
             const int c = LOWORD(w) - self->inspector_id_;
             const int code = HIWORD(w);
-            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert || c == c_overlap || c == c_resolution)) ||
+            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert || c == c_overlap || c == c_resolution || c == c_params_apply)) ||
                 (code == CBN_SELCHANGE && (c == c_material || c == c_kind || c == c_draw || c == c_axis || c == c_plane || c == c_section))) {
                 self->commit(c);
                 return 0;

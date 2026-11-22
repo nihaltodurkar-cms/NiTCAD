@@ -2229,14 +2229,20 @@ std::expected<Plan, base::Error> Builder::run() {
 
 }  // namespace
 
+// Unit 26m MT8: the parameters substituted first, so the build reads values as written out (the plan keeps no view
+// into the deck it read; [adapt] keeps the deck as given and substitutes again per pass).
 std::expected<Plan, base::Error> build(const Deck& deck) {
-    auto plan = Builder(deck, nullptr).run();
+    const auto read = substituted(deck);
+    if (!read) return std::unexpected(read.error());
+    auto plan = Builder(*read, nullptr).run();
     if (plan && plan->adapt) plan->adapt->deck = std::make_shared<const Deck>(deck);
     return plan;
 }
 
 std::expected<Plan, base::Error> build(const Deck& deck, const solve::MeshRefinement& refinement) {
-    return Builder(deck, &refinement).run();
+    const auto read = substituted(deck);
+    if (!read) return std::unexpected(read.error());
+    return Builder(*read, &refinement).run();
 }
 
 solve::AdaptableMesh adaptable(Plan plan) {

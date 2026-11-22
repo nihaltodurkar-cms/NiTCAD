@@ -116,6 +116,10 @@ public:
     // The largest s the layout allows (cm; +inf without interfaces), or why none does.
     [[nodiscard]] std::expected<double, std::string> automatic_resolution() const;
     bool use_automatic_resolution();  // written to the deck's interface_resolution (on the quantum, rounded down)
+    // Unit 26m MT8: the inspector's parameters, a `name = value` line each; applied: each changed or new one set (every
+    // tied face following), one undo step. False (the status says why, nothing written) when one does not resolve.
+    [[nodiscard]] std::string parameters_text() const;
+    bool apply_parameters(const std::string& lines);
 
     // State, for the tests.
     [[nodiscard]] const solid::Model& model() const noexcept { return m_; }
@@ -158,7 +162,7 @@ public:
         c_x0_label, c_x0, c_x1_label, c_x1, c_y0_label, c_y0, c_y1_label, c_y1, c_z0_label, c_z0, c_z1_label, c_z1,
         c_axis_label, c_axis, c_from_label, c_from, c_to_label, c_to, c_vertices_label, c_vertices, c_apply,
         c_kind_label, c_kind, c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset,
-        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_overlap, c_resolution, c_count
+        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_overlap, c_resolution, c_params_label, c_params, c_params_apply, c_count
     };
     [[nodiscard]] HWND control(int c) const;
 
@@ -214,6 +218,10 @@ private:
     solid::Model m_start_;
     solid::SolidRef ref_;
     int index_ = -1;  // the handle's axis, plane normal, face or vertex
+    // MT8: N during a face drag, with nothing typed, names the extent it drags: -1 not named, 0 a new parameter
+    // (naming_name_), k > 0 the k-th existing length parameter.
+    int naming_ = -1;
+    std::string naming_name_;
     int axis_ = 2;    // the axis a drag runs along, or the normal of the plane it runs in
     solid::V3 origin_{};
     double start_s_ = 0.0;

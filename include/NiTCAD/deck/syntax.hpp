@@ -64,4 +64,41 @@ struct Deck {
 // A value without its surrounding double quotes, if it has them.
 [[nodiscard]] std::string unquote(std::string_view value);
 
+// Named parameters (Unit 26m MT8, MQ1 (a)). A [parameters] section (once, no name) holds `name = value`, the value a
+// length (a number with nm, um or cm), a number (no unit), or a sum of other parameters and lengths. In [mesh],
+// [region], [contact] and [doping] a value may then hold references: `$name`, or a sum `$a + $b`, `$a - 5nm`,
+// `5nm + $a` of lengths (a unitless literal there is cm, DK5; a number parameter in a sum is an error). An operator has
+// spaces on both sides or on neither (`$a - 5nm`, `$a-5nm`): `$a -5nm` is two values, the second negative. A lone
+// reference is replaced by its parameter's text as written (the same bits as the value written out); a sum by its
+// value in cm, written shortest round-trip (`2.5e-06cm`).
+struct Parameter {
+    std::string name;
+    std::string text;     // the value as written, or for a sum its value written out
+    double value = 0.0;   // in cm for a length
+    bool length = false;  // a length (else a number)
+    int line = 0;
+};
+
+// The deck's parameters, each resolved (references among them followed). Errors (invalid_input, on the line): a
+// second [parameters] or a name on it, a bad or repeated name, a value neither a length nor a number, an undefined
+// name, a cycle, a number in a sum.
+[[nodiscard]] std::expected<std::vector<Parameter>, base::Error> parameters(const Deck& deck);
+
+// One value's references replaced (the rules above); the error without a location.
+[[nodiscard]] std::expected<std::string, std::string> substitute(std::string_view value,
+                                                                 const std::vector<Parameter>& params);
+
+// The deck with every reference replaced and [parameters] removed: what the build reads (deck::build calls it). A
+// reference outside [mesh], [region], [contact] and [doping] is an error on its line.
+[[nodiscard]] std::expected<Deck, base::Error> substituted(const Deck& deck);
+
+// A value's words split at blanks and commas, a sum (`$a + $b`, `$a-5nm`, by the rules above) kept as one word:
+// how the modeller reads a solid's coordinates with their references.
+[[nodiscard]] std::vector<std::string_view> value_words(std::string_view value);
+
+// The parameters of `entries` (a [parameters] section's), resolved as `parameters` does: for the modeller, which
+// edits them. Errors as parameters', located with `source`.
+[[nodiscard]] std::expected<std::vector<Parameter>, base::Error> resolve_parameters(const std::vector<Entry>& entries,
+                                                                                    const std::string& source = "<text>");
+
 }  // namespace NiTCAD::deck

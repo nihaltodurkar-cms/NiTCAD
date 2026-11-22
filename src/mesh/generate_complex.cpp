@@ -1260,12 +1260,22 @@ std::expected<double, base::Error> largest_meshable_resolution(const PolyhedralG
         bad = good;
         good *= 0.8;
     }
-    if (bad == 0.0) return good;  // largest_resolution's s builds
-    while (bad / good > 1.0 + rel) {
-        const double mid = std::sqrt(good * bad);
-        const auto b = builds(mid);
+    if (bad != 0.0) {
+        while (bad / good > 1.0 + rel) {
+            const double mid = std::sqrt(good * bad);
+            const auto b = builds(mid);
+            if (!b) return std::unexpected(b.error());
+            (*b ? good : bad) = mid;
+        }
+    }
+    // Meshing is not monotone in s once the certificate counts: 1 % above the bracket's good may still build. Climb by
+    // 1 % while it does, so 1 % above the s returned does not build (bounded: above largest_resolution's s the rules
+    // refuse, without placing a node).
+    for (;;) {
+        const auto b = builds(good * 1.01);
         if (!b) return std::unexpected(b.error());
-        (*b ? good : bad) = mid;
+        if (!*b) break;
+        good *= 1.01;
     }
     return good;
 }

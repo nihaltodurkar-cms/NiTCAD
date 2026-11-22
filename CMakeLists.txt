@@ -727,6 +727,7 @@ endif()
 
 # --- deck layer (the text input deck, its meaning and the batch runner; Unit 31) ----------
 add_library(nitcad_deck STATIC
+  src/deck/parameters.cpp
   src/deck/syntax.cpp
   src/deck/build.cpp
   src/deck/run.cpp)
@@ -737,6 +738,7 @@ target_link_libraries(nitcad_deck PUBLIC NiTCAD::base NiTCAD::io NiTCAD::solve)
 add_executable(nitcad_deck_test
   tests/deck/syntax_test.cpp
   tests/deck/build_test.cpp
+  tests/deck/parameters_test.cpp
   tests/deck/run_test.cpp
   tests/deck/analyses_test.cpp
   tests/deck/analyses_run_test.cpp

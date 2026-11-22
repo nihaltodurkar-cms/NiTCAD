@@ -230,7 +230,7 @@ TEST_CASE("app window modeller: the 3D camera free and fixed, Reset view, the st
     REQUIRE(page.camera_fixed());
     page.render();
     const render::Camera fixed = page.view().camera;
-    for (const auto [down, up, keys] : {std::tuple{WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON}, std::tuple{WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON},
+    for (const auto& [down, up, keys] : {std::tuple{WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON}, std::tuple{WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON},
                                         std::tuple{WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON}}) {
         send(c, down, keys, x, y);
         send(c, WM_MOUSEMOVE, keys, x + 40, y + 25);
@@ -298,7 +298,7 @@ TEST_CASE("app window modeller: the 2D camera free and fixed; Shift keeps the ru
     page.set_view(geo::View{200.0, 50.0, 450.0, 96});
     SendMessageW(c, WM_KEYDOWN, 'L', 0);
     REQUIRE(page.camera_fixed());
-    for (const auto [down, up, keys] : {std::tuple{WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON}, std::tuple{WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON},
+    for (const auto& [down, up, keys] : {std::tuple{WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON}, std::tuple{WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON},
                                         std::tuple{WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON}}) {
         send(c, down, keys, x, y);
         send(c, WM_MOUSEMOVE, keys, x + 40, y + 25);
@@ -1203,4 +1203,115 @@ TEST_CASE("app window modeller: slice 2's per-frame work adds at most 1 ms with 
     CHECK(copy[copy.size() / 2] <= 1.0);
     CHECK(fillet[fillet.size() / 2] <= 1.0);
 #endif
+}
+
+// --- Unit 26m slice 3 (MT8, MC7, MC4): parameters in the window -----------------------------------------------------
+
+TEST_CASE("app window modeller: parameters in the inspector, a tied face dragged, N naming an extent (MC4, MC7, MT8)",
+          "[app][window][modeller][parameters]") {
+    const std::string tied = R"([parameters]
+x0 = 30nm
+Lg = 20nm
+
+[mesh]
+type = generate3d
+layered = on
+domain = 0 100nm 0 60nm 0 14nm
+patch body = 0 0 0  100nm 60nm 0
+max_size = 0.05um
+interface_resolution = 2nm
+
+[region si]
+material = silicon
+
+[region gate]
+material = sio2
+box = $x0 $x0 + $Lg 40nm 50nm 0 14nm
+
+[region cap]
+material = sio2
+box = $x0 $x0 + $Lg 50nm 60nm 0 14nm
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[equilibrium]
+)";
+    auto [w, pp] = open_3d("params3d", tied);
+    SolidPage& page = *pp;
+    const HWND c = page.canvas();
+    const std::string original = w->deck().text();
+    constexpr solid::Coord nm = 10;
+    const auto model = [&] {
+        const auto m = solid::read_model(w->deck().text());
+        REQUIRE(m);
+        return *m;
+    };
+    CHECK(page.parameters_text() == "x0 = 30nm\r\nLg = 20nm");
+
+    // MC7: Lg changed in the inspector moves every tied face; one undo step.
+    REQUIRE(page.apply_parameters("x0 = 30nm\r\nLg = 25nm\r\n"));
+    CHECK(has(w->deck().text(), "\nLg = 25nm\n"));
+    CHECK(has(w->deck().text(), "box = $x0 $x0 + $Lg 40nm 50nm 0 14nm\n"));
+    CHECK(model().regions[1].solids[0].box.hi.x == 55 * nm);
+    CHECK(model().regions[2].solids[0].box.hi.x == 55 * nm);
+    CHECK_FALSE(page.apply_parameters("Lg = $Lg"));  // a cycle: nothing written
+    CHECK(has(w->deck().text(), "\nLg = 25nm\n"));
+    REQUIRE(page.undo());
+    CHECK(w->deck().text() == original);
+
+    // A tied face dragged (the gate's x_max, typed 5nm): its parameter moves, the cap's tied face follows; the line
+    // shown is the first line written (MC4).
+    REQUIRE(page.select_region("gate"));
+    page.set_section({2, 100});  // open the top: the domain's faces hide what lies inside (26l)
+    page.render();
+    const solid::SolidRef gate{1, 0};
+    auto f = face_handle(page, gate, 1);
+    const auto step = page.screen_of_um({0.06, 0.045, 0.007}), at = page.screen_of_um({0.05, 0.045, 0.007});
+    std::string before = w->deck().text();
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, f[0], f[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, f[0] + 0.5 * (step[0] - at[0]), f[1] + 0.5 * (step[1] - at[1]));
+    type(c, L"5nm");
+    const std::string shown = page.live_line();
+    SendMessageW(c, WM_KEYDOWN, VK_RETURN, 0);
+    send(c, WM_LBUTTONUP, 0, f[0], f[1]);
+    std::string after = w->deck().text();
+    CHECK(shown == modeller::deck_line(before, after));
+    CHECK(has(after, "\nLg = " + NiTCAD::app::geo::format_length(25 * nm) + "\n"));
+    CHECK(has(after, "box = $x0 $x0 + $Lg 40nm 50nm 0 14nm\n"));
+    CHECK(model().regions[2].solids[0].box.hi.x == 55 * nm);
+    REQUIRE(page.undo());
+    CHECK(w->deck().text() == original);
+
+    // N during a face drag (the gate's z_max), nothing typed: a new parameter L1 of the gate's height, its top
+    // written `0 + $L1`; the chip says so.
+    page.render();
+    f = face_handle(page, gate, 5);
+    before = w->deck().text();
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, f[0], f[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, f[0], f[1] + 1);
+    type(c, L"n");
+    CHECK(has(page.chip(), "named $L1 (new"));
+    // N again: each existing length parameter in turn, then a new one again.
+    type(c, L"n");
+    CHECK(has(page.chip(), "named $x0 (N: next)"));
+    type(c, L"n");
+    CHECK(has(page.chip(), "named $Lg (N: next)"));
+    type(c, L"n");
+    CHECK(has(page.chip(), "named $L1 (new"));
+    type(c, L"-0.002");  // down: the domain ends at 14nm
+    const std::string named = page.live_line();
+    SendMessageW(c, WM_KEYDOWN, VK_RETURN, 0);
+    send(c, WM_LBUTTONUP, 0, f[0], f[1]);
+    after = w->deck().text();
+    CHECK(named == modeller::deck_line(before, after));
+    CHECK(has(after, "\nLg = 20nm\nL1 = " + NiTCAD::app::geo::format_length(12 * nm) + "\n"));
+    CHECK(has(after, "0 0 + $L1\n"));
+    CHECK(model().regions[1].solids[0].box.hi.z == 12 * nm);
+    REQUIRE(page.undo());
+    CHECK(w->deck().text() == original);
 }

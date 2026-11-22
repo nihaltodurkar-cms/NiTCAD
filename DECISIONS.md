@@ -2091,6 +2091,62 @@ automatic s (rounded down to the quantum) as one edit and reports the node estim
   not during drags. Arrays keep clear on the first copy's offset only. MC13's 500-layout test is hidden (it meshes
   every layout; about an hour on 6 processes).
 
+
+**Slice 2 follow-up (2026-11-22, owner "fix").** The automatic s climbs after its search: while 1 % above still builds,
+s rises by 1 % (bounded: above largest_resolution's s the rules refuse, without placing a node). MC13 rerun (500
+layouts, 6 processes): accepted 301, all meshing (0 false accepts), **0 meshing at 1.01 s (was 4)**; false refusals
+still 4 (layouts 124, 381, 463, 473: each of the 4 builds fails the certificate, P4b "the dual face of an edge in a
+corner zone", where the test's 0.005um meshes) — **MC13 still missed on that count, recorded**: the cure is in the
+generator's corner zones, not the search. The test's message comparison (a refusal by the rules at the automatic s
+against the rules at 0.005um) is informational, not MC13: which rule fires first depends on s. The climb's mutant is
+caught only by the hidden MC13 run (an hour), not run as a mutant. Two range-for copies in the window test fixed
+(clang -Wrange-loop-construct).
+
+**Slice 3 as built (MT8, 2026-11-22; owner "start slice 3"; Release, MSVC 14.51, 6 cores).** Deck: `[parameters]`
+(once, no name) of `name = value`, a value a length (with nm, um or cm), a number, or a sum of lengths and other
+parameters; references `$name` and sums `$a + $b`, `$a - 5nm`, `5nm + $a` in [mesh], [region], [contact] and [doping]
+(MQ1 (a); [contact] added to MT8's list: a patch box is geometry too). An operator has spaces on both sides or on
+neither: `$a -5nm` is two values. `deck::substituted` replaces them before the build reads values (deck::build calls it,
+the plan keeping no view into the deck; [adapt] substitutes per pass): a lone reference by its parameter's text as
+written (the same bits as the value written out), a sum by its value in cm written shortest round-trip. Errors on the
+referring line (invalid_input): undefined, a cycle (`$a -> $b -> $a`), a number in a sum, a value neither a length nor
+a number, a bad or repeated name, a second [parameters], a reference outside those sections, a `$` not starting one.
+A number parameter in a length place reads as cm, exactly as its value written out would (DK5: a unitless length is
+cm): the "non-length where a length is needed" of MC7 is a number in a sum and a value neither (recorded).
+Modeller (`app::solid`): `Model::parameters` (name, expression, resolved), `Solid::refs` and `Model::domain_refs`
+(each coordinate's reference as written); read_model resolves them; write_model writes a coordinate as its reference
+while the reference gives it (else its value: the tie broken), [parameters] by minimal edits (a changed expression in
+place, a new one after the last, a new section before the first). `set_parameter` (every tied face follows),
+`tie_edits` (after an edit: a moved coordinate tied by a lone `$p` sets p; one tied by a sum moves its last
+parameter by the rest; the edited solid's other tied coordinates are held where the edit put them, so dragging a box's
+near face keeps its far face and Lg takes the rest; a tie to a parameter that is itself an expression, or that
+disagrees, is broken), `name_extent` (N: the extent named, the far face `<near> + $name`, a low face `<near> - $name`).
+A parameter a drag sets is written with a unit (a bare 0 would be a number). Page: the inspector's Parameters (an
+editable `name = value` list and Apply parameters, one undo step; refused with the reason in the status when one
+does not resolve); commit_model and the live line follow ties (MC4); N during a face drag, nothing typed, names the
+dragged extent: a new parameter L<k>, then each existing length parameter in turn (the chip says which); once a number
+is typed, n is its unit's.
+- MC7: deck tests `[parameters]` 88 assertions: the diode (mesh, doping, number parameters) and a layered generate2d
+  deck (domain, solids, sums, tied faces) build to the same run identity and mesh digest as the values written out;
+  every error on its line. App `[parameters]` (model): ties read and written back byte for byte; Lg changed moves both
+  tied faces with one line changed; errors leave the model as it was; drags of the far face, the near face, the whole
+  solid, a low face named with `-`; an expression parameter's tie broken; N naming. Window `[parameters]` 41: Lg in the
+  inspector moves every tied face (one undo step, a cycle refused), a tied face dragged by typing (the line shown the
+  line written, MC4), N naming and cycling.
+- MC9: a tied drag frame with 100 tied solids (the edit, tie_edits, write_model, the deck line) median 0.68 ms
+  (≤ 1 ms; measured while MC13 ran on 3 cores); window suites' MC9 0.19 ms, slice 2's frames 0.22/0.18 ms.
+- MC1: app tests 45 755 assertions in 122 cases (before the last tests were added; `[parameters]` 387 after); window
+  `[modeller]`, `[solid]`, `[geometry]` 1271 in 28 (then `[parameters]` 41); deck 128 cases, 123 passed and 5 failed as
+  expected (the 9 `[!shouldfail]` assertions, as before).
+- MC11: 17/17 caught (~/mut-gv/s26m3.sh, s26m3b.sh through run6.sh, sharded on 6 cores). First pass 15: "a sum of
+  lengths not evaluated" survived (only the app tests held one; a deck test added) and one did not compile (an unused
+  variable under /WX; rewritten).
+- Deck `[parameters]` 93 assertions after it.
+- Limits (recorded): a contact's patch box reads references but is written as values (its ties are not kept); 2D
+  (the geometry editor) does not read references yet; renaming a parameter in the
+  inspector makes a new one (the old stays, its references with it); the live preview moves only the dragged solid,
+  other tied faces following when the drag ends (the deck line shows the parameter's line throughout); a polygon
+  vertex inserted or removed drops that prism's ties (its slots renumbered).
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

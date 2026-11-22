@@ -69,6 +69,10 @@ struct Solid {
     int axis = 2;             // a prism: its axis, extent and polygon in (u, v)
     Coord from = 0, to = 0;
     std::vector<Pt> polygon;
+    // Unit 26m MT8: the deck's references by coordinate, in the line's order (a box's x0 x1 y0 y1 z0 z1; a prism's
+    // from, to, then u v of each vertex): "" for a value, else the reference as written (`$Lg`, `$x0 + $Lg`). Empty
+    // when none. A coordinate whose reference no longer gives it is written as its value (the tie broken).
+    std::vector<std::string> refs;
     friend bool operator==(const Solid&, const Solid&) = default;
     [[nodiscard]] Box3 bounds() const noexcept;
     // Corners: a box's eight (bit k of the index: hi on axis k); a prism's polygon at `from`, then at `to`.
@@ -95,6 +99,16 @@ struct Contact {
     friend bool operator==(const Contact&, const Contact&) = default;
 };
 
+// A named parameter (Unit 26m MT8, the deck's [parameters]): its expression as written and what it resolves to.
+struct Param {
+    std::string name, expr;
+    std::string text;     // what it resolves to, written out (deck::Parameter::text)
+    bool length = false;  // a length (value in quanta), else a number
+    Coord value = 0;
+    double number = 0;    // a number's value
+    friend bool operator==(const Param&, const Param&) = default;
+};
+
 struct Model {
     MeshKind mesh = MeshKind::unsupported;
     std::string why;          // unsupported: why
@@ -103,6 +117,10 @@ struct Model {
     Box3 domain;
     std::vector<Region> regions;
     std::vector<Contact> contacts;
+    // Unit 26m MT8: the deck's [parameters] in its order, and the domain line's references (as Solid::refs, x0 x1 y0
+    // y1 z0 z1).
+    std::vector<Param> parameters;
+    std::vector<std::string> domain_refs;
     friend bool operator==(const Model&, const Model&) = default;
     [[nodiscard]] bool editable() const noexcept { return mesh == MeshKind::layered; }
     [[nodiscard]] int background() const noexcept;  // the region without solids, or -1
@@ -223,6 +241,26 @@ struct Extent {
 };
 [[nodiscard]] std::optional<Extent> extent(const Model& m);
 [[nodiscard]] double node_estimate(const Extent& e, double max_size, double s);
+// --- parameters (Unit 26m MT8) -----------------------------------------------------------------------------------
+// A coordinate slot of a solid, in its line's order (Solid::refs); none past the end.
+[[nodiscard]] Coord* slot(Solid& s, int k);
+[[nodiscard]] int slot_count(const Solid& s);
+// `name` set to `expr` (added at the end when new), then every parameter and every tied coordinate resolved again:
+// changing Lg moves every face tied to it. Errors (the model unchanged): a bad name, an expression that does not
+// resolve (undefined, a cycle, neither a length nor a number), or a tied coordinate it would leave off a valid solid.
+[[nodiscard]] std::expected<void, std::string> set_parameter(Model& m, std::string_view name, std::string expr);
+// After an edit took `before` to `after` (the same solids, coordinates changed): a moved coordinate tied by a lone
+// `$p` sets p (a length written as a value) to it; then one tied by a sum `... + $q` (or `- $q`) moves its last
+// parameter q by the rest; every tied coordinate is then resolved again. A tie whose parameter is itself an
+// expression, or that disagrees with another moved coordinate, is broken instead (written as its value). Solids added,
+// removed or with another slot count keep their refs as they are.
+void tie_edits(const Model& before, Model& after);
+// MT8's N: the solid's extent between slots `near` and `far` (one axis) named `name`: a new length parameter of that
+// extent, or an existing one (the far slot then moves to it), and the far slot written `<near> + $name` (`- $name` for a
+// low face: a box's lo, a prism's from; near its
+// reference if it has one, else its value). False: a bad name, a number parameter, a slot out of range.
+[[nodiscard]] bool name_extent(Model& m, SolidRef s, int near, int far, std::string_view name);
+
 // A [mesh] length key of the deck (max_size, interface_resolution) in cm; none when absent or not a length.
 [[nodiscard]] std::optional<double> mesh_length(std::string_view deck, std::string_view key);
 // The deck with its [mesh] `key` set to `q` quanta (the line replaced, or added after the section's last entry), every
