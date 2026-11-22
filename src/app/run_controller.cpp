@@ -1,7 +1,10 @@
 // The run controller (run_controller.hpp).
 #include "NiTCAD/app/run_controller.hpp"
 
+#include "NiTCAD/deck/dimension_sweep.hpp"
+
 #include <algorithm>
+#include <system_error>
 #include <format>
 #include <mutex>
 #include <utility>
@@ -21,7 +24,7 @@ std::string_view to_string(RunState s) noexcept {
 }
 
 struct RunController::Event {
-    enum class Kind : unsigned char { built, progress, finished } kind = Kind::progress;
+    enum class Kind : unsigned char { built, progress, finished, value } kind = Kind::progress;
     bool run = false;
     std::size_t planned = 0;
     solve::Progress progress{};
@@ -31,6 +34,10 @@ struct RunController::Event {
     std::optional<PlanSummary> summary;
     std::optional<deck::RunReport> report;
     std::optional<base::Error> error;
+    // A sweep (DT6): the value starting (value), the values whose run finished so far, whether Stop ended it.
+    std::size_t index = 0;
+    std::size_t completed = 0;
+    bool stopped = false;
 };
 
 // The queue between the worker and the UI thread. The worker wakes the UI thread only when it puts an
@@ -115,7 +122,14 @@ bool RunController::start_run(std::string text, std::filesystem::path path) {
     return true;
 }
 
-void RunController::start(bool run, std::string text, std::filesystem::path path) {
+bool RunController::start_sweep(std::string text, std::filesystem::path path, std::string name,
+                                std::vector<std::string> values) {
+    if (busy() || values.empty()) return false;
+    start(true, std::move(text), std::move(path), SweepState{.name = std::move(name), .values = std::move(values)});
+    return true;
+}
+
+void RunController::start(bool run, std::string text, std::filesystem::path path, std::optional<SweepState> sweep) {
     if (worker_.joinable()) worker_.join();  // the last worker has finished (not busy)
     process();                               // and nothing of it is left queued
     state_ = run ? RunState::running : RunState::checking;
@@ -127,9 +141,10 @@ void RunController::start(bool run, std::string text, std::filesystem::path path
     points_.clear();
     iterations_.clear();
     planned_points_ = 0;
+    sweep_ = sweep;
     started_ = finished_ = std::chrono::steady_clock::now();
-    worker_ = std::jthread([shared = shared_, wake = wake_, run, text = std::move(text),
-                            path = std::move(path)](std::stop_token stop) mutable {
+    worker_ = std::jthread([shared = shared_, wake = wake_, run, text = std::move(text), path = std::move(path),
+                            sweep = std::move(sweep)](std::stop_token stop) mutable {
         const auto post = [&](Event e) {
             bool was_empty = false;
             {
@@ -139,53 +154,103 @@ void RunController::start(bool run, std::string text, std::filesystem::path path
             }
             if (was_empty && wake) wake();
         };
-        CheckResult checked = check_deck(text, path);
-        if (!checked.plan) {
+        const auto failed = [&](base::Error error, std::size_t completed) {
             Event e{.kind = Event::Kind::finished, .run = run};
-            e.diagnostics = std::move(checked.diagnostics);
-            e.error = base::Error{base::ErrorCode::invalid_input,
-                                  e.diagnostics.empty() ? std::string("the deck does not build") : e.diagnostics.front().message,
-                                  std::nullopt};
+            e.error = std::move(error);
+            e.completed = completed;
             post(std::move(e));
-            return;
-        }
-        if (!run) {
-            Event e{.kind = Event::Kind::finished, .run = false};
-            e.summary = summarize_plan(*checked.plan);
-            e.plan = std::move(checked.plan);
-            post(std::move(e));
-            return;
-        }
-        {
-            Event built{.kind = Event::Kind::built, .run = true, .planned = plan_point_count(*checked.plan)};
-            built.summary = summarize_plan(*checked.plan);
-            post(std::move(built));
-        }
-        // Progress: one event per Newton iteration, with the wall time spent on its point.
-        auto point_started = std::chrono::steady_clock::now();
-        solve::Phase phase = solve::Phase::equilibrium;
-        std::size_t point = static_cast<std::size_t>(-1);
-        solve::RunControl control{.stop = stop, .progress = {}};
-        control.progress = [&](const solve::Progress& p) {
-            const auto now = std::chrono::steady_clock::now();
-            if (p.phase != phase || p.point != point) {
-                // A new point starts where the last iteration of the previous one ended.
-                if (point != static_cast<std::size_t>(-1)) point_started = now;
-                phase = p.phase;
-                point = p.point;
-            }
-            post(Event{.kind = Event::Kind::progress,
-                       .progress = p,
-                       .seconds = std::chrono::duration<double>(now - point_started).count()});
         };
-        auto report = deck::run(*checked.plan, control);
-        Event e{.kind = Event::Kind::finished, .run = true};
-        e.plan = std::move(checked.plan);
-        if (report) e.report = std::move(*report);
-        else e.error = std::move(report.error());
-        post(std::move(e));
+        // The texts to run: the deck's, or for a sweep one per value with the value written in (DT6), each value's
+        // outputs in its own folder. Every value is checked before the first run.
+        std::vector<std::string> texts;
+        std::vector<std::filesystem::path> folders;
+        if (sweep) {
+            auto deck = deck::parse(text, path.empty() ? std::string("<untitled>") : path.filename().string(),
+                                    path.parent_path());
+            if (!deck) return failed(std::move(deck.error()), 0);
+            const auto folder = deck::sweep_directory(path, sweep->name);
+            for (const std::string& v : sweep->values) {
+                auto d = deck::with_overrides(*deck, {{.name = sweep->name, .value = v}});
+                if (!d) return failed(std::move(d.error()), 0);
+                texts.push_back(std::move(d->text));
+                folders.push_back(deck::sweep_point_directory(folder, sweep->name, v));
+            }
+        } else {
+            texts.push_back(std::move(text));
+        }
+        std::size_t completed = 0;
+        for (std::size_t k = 0; k < texts.size(); ++k) {
+            if (sweep) post(Event{.kind = Event::Kind::value, .index = k, .completed = completed});
+            CheckResult checked = check_deck(texts[k], path);
+            if (!checked.plan) {
+                Event e{.kind = Event::Kind::finished, .run = run};
+                e.diagnostics = std::move(checked.diagnostics);
+                e.error = base::Error{base::ErrorCode::invalid_input,
+                                      e.diagnostics.empty() ? std::string("the deck does not build") : e.diagnostics.front().message,
+                                      std::nullopt};
+                e.completed = completed;
+                post(std::move(e));
+                return;
+            }
+            if (!run) {
+                Event e{.kind = Event::Kind::finished, .run = false};
+                e.summary = summarize_plan(*checked.plan);
+                e.plan = std::move(checked.plan);
+                post(std::move(e));
+                return;
+            }
+            if (sweep) {
+                checked.plan->outputs = deck::with_outputs_in(std::move(checked.plan->outputs), path.parent_path(), folders[k]);
+                std::error_code ec;
+                std::filesystem::create_directories(folders[k], ec);
+                if (ec) {
+                    return failed({base::ErrorCode::invalid_input, "cannot create " + folders[k].string() + ": " + ec.message(),
+                                   std::nullopt},
+                                  completed);
+                }
+            }
+            {
+                Event built{.kind = Event::Kind::built, .run = true, .planned = plan_point_count(*checked.plan)};
+                built.summary = summarize_plan(*checked.plan);
+                post(std::move(built));
+            }
+            // Progress: one event per Newton iteration, with the wall time spent on its point.
+            auto point_started = std::chrono::steady_clock::now();
+            solve::Phase phase = solve::Phase::equilibrium;
+            std::size_t point = static_cast<std::size_t>(-1);
+            solve::RunControl control{.stop = stop, .progress = {}};
+            control.progress = [&](const solve::Progress& p) {
+                const auto now = std::chrono::steady_clock::now();
+                if (p.phase != phase || p.point != point) {
+                    // A new point starts where the last iteration of the previous one ended.
+                    if (point != static_cast<std::size_t>(-1)) point_started = now;
+                    phase = p.phase;
+                    point = p.point;
+                }
+                post(Event{.kind = Event::Kind::progress,
+                           .progress = p,
+                           .seconds = std::chrono::duration<double>(now - point_started).count()});
+            };
+            auto report = deck::run(*checked.plan, control);
+            if (!report) return failed(std::move(report.error()), completed);
+            // A run stopped early (Stop, or a point that did not converge) ends a sweep, as in `nitcad sweep`.
+            const bool early = (report->sweep && report->sweep->stopped) ||
+                               (report->transient && report->transient->stopped) ||
+                               (report->small_signal && report->small_signal->stopped);
+            if (!early) ++completed;
+            if (k + 1 == texts.size() || early || stop.stop_requested()) {
+                Event e{.kind = Event::Kind::finished, .run = true};
+                e.plan = std::move(checked.plan);
+                e.report = std::move(*report);
+                e.completed = completed;
+                e.stopped = stop.stop_requested();
+                post(std::move(e));
+                return;
+            }
+        }
     });
 }
+
 
 void RunController::request_stop() {
     if (state_ != RunState::running) return;
@@ -215,6 +280,16 @@ void RunController::apply(Event& e) {
         iterations_.push_back({iterations_.size() + 1, p.update, points_.size() - 1, p.residual, p.iteration});
         break;
     }
+    case Event::Kind::value:
+        // The next value of a sweep: its run's rows start afresh.
+        if (sweep_) {
+            sweep_->current = e.index;
+            sweep_->completed = e.completed;
+        }
+        points_.clear();
+        iterations_.clear();
+        planned_points_ = 0;
+        break;
     case Event::Kind::finished:
         finished_ = std::chrono::steady_clock::now();
         diagnostics_ = std::move(e.diagnostics);
@@ -224,6 +299,10 @@ void RunController::apply(Event& e) {
         error_ = std::move(e.error);
         if (!e.run) state_ = diagnostics_.empty() ? RunState::idle : RunState::failed;
         else state_ = error_ ? RunState::failed : RunState::done;
+        if (sweep_) {
+            sweep_->completed = e.completed;
+            sweep_->stopped = e.stopped;
+        }
         break;
     }
 }

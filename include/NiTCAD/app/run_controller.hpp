@@ -89,6 +89,25 @@ public:
     // (check_deck). Refused (false) while checking, running or stopping.
     bool start_check(std::string text, std::filesystem::path path);
     bool start_run(std::string text, std::filesystem::path path);
+    // A dimension sweep (Unit 26n, DT6), as `nitcad sweep` runs it: the deck text as the file `path`, run once per
+    // value of parameter `name` with the value overridden (deck::with_overrides), each value's outputs in its own
+    // folder (deck::sweep_point_directory), one value after another. Every value is checked first: an unknown
+    // parameter or a value of the wrong kind fails the sweep before any run, the message naming the parameter. Each
+    // value is a run as start_run's (built, progress; the rows and iterations restart per value); sweep() says which
+    // value runs. Stop stops the current value's run at the solver's next safe point (its completed part written)
+    // and runs no further value. Done after the last value or a stop (plan and report the last value run's); failed
+    // at the first value that does not build or whose run fails (the values before it kept). Refused (false) while
+    // busy or with no value.
+    bool start_sweep(std::string text, std::filesystem::path path, std::string name, std::vector<std::string> values);
+    struct SweepState {
+        std::string name;
+        std::vector<std::string> values;
+        std::size_t current = 0;    // the value running, or the last one run
+        std::size_t completed = 0;  // values whose run finished (not stopped early)
+        bool stopped = false;       // Stop ended the sweep
+    };
+    // The current or last sweep, if the last start was one.
+    [[nodiscard]] const std::optional<SweepState>& sweep() const noexcept { return sweep_; }
     // Asks a run to stop at the solver's next safe point (running -> stopping); otherwise nothing.
     void request_stop();
 
@@ -131,7 +150,7 @@ public:
 private:
     struct Event;
     struct Shared;
-    void start(bool run, std::string text, std::filesystem::path path);
+    void start(bool run, std::string text, std::filesystem::path path, std::optional<SweepState> sweep = std::nullopt);
     void apply(Event& e);
 
     Wake wake_;
@@ -146,6 +165,7 @@ private:
     std::vector<PointRow> points_;
     std::vector<Iteration> iterations_;
     std::size_t planned_points_ = 0;
+    std::optional<SweepState> sweep_;
     std::chrono::steady_clock::time_point started_{};
     std::chrono::steady_clock::time_point finished_{};
 };

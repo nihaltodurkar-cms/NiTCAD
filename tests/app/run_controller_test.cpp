@@ -9,6 +9,8 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -268,4 +270,99 @@ TEST_CASE("app run controller: a run is bit-identical to nitcad run (WG2)", "[ap
         REQUIRE(written);
         check_identical(*written, *theirs);
     }
+}
+
+namespace {
+
+std::string pn_example() {
+    std::ifstream f(fs::path(NITCAD_EXAMPLES_DIR) / "devices" / "pn_diode_1d.deck", std::ios::binary);
+    return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+}
+
+}  // namespace
+
+TEST_CASE("app run controller: a dimension sweep runs each value into its folder, as nitcad sweep (DT6)", "[app][sweep_run]") {
+    const fs::path dir = app_test::scratch("controller_sweep");
+    const std::string text = pn_example();
+    const fs::path deck = app_test::write(dir, "pn.deck", text);
+    Pump pump;
+    app::RunController rc(pump.wake());
+    std::vector<std::size_t> seen;
+    REQUIRE(rc.start_sweep(text, deck, "Lp", {"1um", "1.5um"}));
+    REQUIRE(rc.sweep());
+    CHECK(rc.sweep()->name == "Lp");
+    pump.run(rc, [&] {
+        if (rc.sweep() && (seen.empty() || seen.back() != rc.sweep()->current)) seen.push_back(rc.sweep()->current);
+        // The rows are the current value's run's only.
+        if (!rc.points().empty()) CHECK(rc.points().front().point <= rc.points().back().point);
+    });
+    CHECK(rc.state() == RunState::done);
+    CHECK(seen == std::vector<std::size_t>{0, 1});
+    CHECK(rc.sweep()->completed == 2);
+    CHECK_FALSE(rc.sweep()->stopped);
+    // The deck's own outputs are not written, and its file is not edited.
+    CHECK_FALSE(fs::exists(dir / "pn_diode_1d.nitsweep"));
+
+    // nitcad sweep on a copy writes the same runs.
+    const fs::path cli_dir = app_test::scratch("controller_sweep_cli");
+    const fs::path cli_deck = app_test::write(cli_dir, "pn.deck", text);
+    const auto cli = app_test::nitcad("sweep " + app_test::quoted(cli_deck) + " Lp=1um,1.5um");
+    INFO(cli.output);
+    REQUIRE(cli.status == 0);
+    for (const std::string v : {"Lp=1um", "Lp=1.5um"}) {
+        auto a = io::load_sweep(dir / "pn_sweep_Lp" / v / "pn_diode_1d.nitsweep");
+        auto b = io::load_sweep(cli_dir / "pn_sweep_Lp" / v / "pn_diode_1d.nitsweep");
+        REQUIRE(a);
+        REQUIRE(b);
+        check_identical(*a, *b);
+    }
+}
+
+TEST_CASE("app run controller: Stop ends a dimension sweep in its current value (DT6)", "[app][sweep_run]") {
+    const fs::path dir = app_test::scratch("controller_sweep_stop");
+    std::string text = pn_example();
+    text.replace(text.find("0 : 0.7 : 0.05"), 14, "0 : 0.7 : 0.0005");
+    const fs::path deck = app_test::write(dir, "pn.deck", text);
+    Pump pump;
+    app::RunController rc(pump.wake());
+    REQUIRE(rc.start_sweep(text, deck, "Lp", {"1um", "1.5um"}));
+    bool asked = false;
+    pump.run(rc, [&] {
+        const auto converged = std::ranges::count_if(rc.points(), [](const app::PointRow& r) {
+            return r.phase == solve::Phase::bias && r.converged;
+        });
+        if (!asked && converged >= 3) {
+            rc.request_stop();
+            asked = true;
+        }
+    });
+    REQUIRE(asked);
+    CHECK(rc.state() == RunState::done);
+    REQUIRE(rc.sweep());
+    CHECK(rc.sweep()->stopped);
+    CHECK(rc.sweep()->completed == 0);
+    CHECK(rc.sweep()->current == 0);
+    // The stopped value's completed part is written; the next value never ran.
+    auto saved = io::load_sweep(dir / "pn_sweep_Lp" / "Lp=1um" / "pn_diode_1d.nitsweep");
+    REQUIRE(saved);
+    CHECK(saved->points.size() >= 3);
+    CHECK_FALSE(fs::exists(dir / "pn_sweep_Lp" / "Lp=1.5um"));
+}
+
+TEST_CASE("app run controller: a sweep of an unknown parameter or a wrong value fails before any run (DT6)", "[app][sweep_run]") {
+    const fs::path dir = app_test::scratch("controller_sweep_refused");
+    const std::string text = pn_example();
+    const fs::path deck = app_test::write(dir, "pn.deck", text);
+    for (const auto& [name, value] : {std::pair<std::string, std::string>{"Wfin", "1nm"}, {"Lp", "5"}, {"Na", "1nm"}}) {
+        app::RunController rc;
+        REQUIRE(rc.start_sweep(text, deck, name, {value}));
+        rc.wait();
+        rc.process();
+        CHECK(rc.state() == RunState::failed);
+        REQUIRE(rc.error());
+        CHECK(rc.error()->message.find(name) != std::string::npos);
+        CHECK_FALSE(fs::exists(dir / ("pn_sweep_" + name)));
+    }
+    app::RunController rc;
+    CHECK_FALSE(rc.start_sweep(text, deck, "Lp", {}));
 }
