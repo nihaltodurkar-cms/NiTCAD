@@ -76,4 +76,7 @@ struct Mark {
 // (view only). Errors: the deck does not parse or a reference does not resolve.
 [[nodiscard]] std::expected<std::string, std::string> substituted_text(std::string_view deck_text);
 
+// A substituted value's words as lengths in cm (nm, um, cm; unitless is cm, DK5); empty when any word is not one.
+[[nodiscard]] std::vector<double> lengths(std::string_view value);
+
 }  // namespace NiTCAD::app::dims

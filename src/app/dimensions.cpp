@@ -215,7 +215,9 @@ std::optional<double> length_cm(std::string_view w) {
     return std::nullopt;
 }
 
-std::vector<double> numbers(std::string_view value) {
+}  // namespace
+
+std::vector<double> lengths(std::string_view value) {
     std::vector<double> out;
     for (const std::string_view w : deck::value_words(value)) {
         const auto v = length_cm(w);
@@ -224,6 +226,10 @@ std::vector<double> numbers(std::string_view value) {
     }
     return out;
 }
+
+namespace {
+
+std::vector<double> numbers(std::string_view value) { return lengths(value); }
 
 struct Candidate {
     Span span;
