@@ -2236,6 +2236,102 @@ coordinates; the new sizes reached "above" placements, differing by rounding). M
 while the owner typed (the page reads Ctrl from the physical keyboard, GetKeyState); it passed in the next full run and
 3 of 3 alone: a test hazard, not changed.
 
+### Unit 26n — devices from dimensions: the dimensions panel, a parametric device library, dimension sweeps (proposed 2026-11-23; on `app/device-templates`)
+
+**Owner request (2026-11-23):** "Edit in Geometry is difficult … make the Geometry Section easy for creating
+semiconductor devices and research purpose"; then "investigate NiTCAD's existing Geometry system and propose the best
+solution to make semiconductor device creation simple, intuitive and research-oriented"; of the three approaches put
+(A devices from named dimensions with templates, B a process-style layer stack, C polishing the freehand modeller
+only) the owner chose **A** ("go with A").
+
+**Where things stand (found while proposing).**
+- The 3D modeller (26l, 26m) and the 2D editor (26k) are general CAD: drag boxes, prisms and cylinders on a work plane,
+  then Faces/Edges/Transform tools. Nothing knows a gate, a fin, an oxide or a source.
+- A device's numbers are written out by hand, many times over. In `examples/mosfet_3d.deck` the gate edge 0.5 µm is
+  in the gate contact's box, the source implant's window and (implicitly) the mesh lines; the oxide's 0.95–1 µm is in
+  the region, three contacts and the mesh. Changing Lg is about five edits that must agree.
+- `[parameters]` with `$name` references (26m MT8, `src/deck/parameters.cpp`) already substitutes in `[mesh]`,
+  `[region]`, `[contact]` and `[doping]`, but no shipped deck uses it and the only editor is a bare text box in the 3D
+  inspector ("Parameters (name = value; $name in solids)").
+- The modeller edits only `generate3d` layered decks (`MeshKind::layered`); every shipped deck is `tensor` (7) or
+  `extrude3d` (4), so the shipped devices cannot be edited in it at all, and 1D/2D tensor decks get no editor.
+- `[sweep]` steps contact biases only. Comparing Lg = 20, 30, 45 nm means three hand-made decks, and the comparison
+  view (26b) holds two runs (A and B). Unit 24's figures (V_th, SS, g_m max, on/off) are extracted per run.
+- The tester's screenshot of 2026-11-22 (cylinders drawn outside a 722-node domain, "region has no nodes") is the
+  freehand path's typical failure: nothing keeps a drawn solid inside the domain.
+
+**Approaches considered:** (A, chosen) a dimensions panel over `[parameters]` plus a library of parametric decks,
+with sweeps over a dimension; (B) a process-style stack (substrate, deposit, etch, implant) — the most general, but a
+new subsystem imitating a process simulator NiTCAD does not have, and 26m's owner ruling left process emulation out;
+(C) polish the freehand modeller only — needed anyway (slice 4 here), but it does not remove the repeated numbers or
+give sweeps.
+
+**Standing conditions:** as Units 26l/26m. The deck is the only source of truth, written by minimal edits through the
+deck editor's undo. Every deck that builds today builds to the same bits. Win32 + D3D12 + Direct2D only, no new
+dependency, no Python. The models have no Win32 type. Criteria fixed before code. Targeted Release tests per slice;
+full suites and Debug only on the owner's word; builds `-j 6`, runs on 6 threads. No screen automation. Nothing
+pushed or merged without authorization.
+
+**Left out:** process emulation (owner, 2026-11-21); a constraint solver (dimensions are independent parameters and
+sums of them, MQ1 of 26m); GDS/STEP import; optimisation loops (sweeps only); remote or parallel batch runs (one run at
+a time on 6 threads); new physics.
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| DT1 | 0 | **The dimensions panel.** For any deck with `[parameters]` (1D, 2D, 3D; tensor, extrude3d, generate2d/3d), the Geometry tab's inspector shows a table in place of the text box: one row per parameter — its label, value with unit, and the kind (length / number). A label is the parameter line's trailing comment (`Lg = 20nm  # Gate length`), else the name. Typing a value and Enter (or the mouse wheel over the cell: ×/÷ 10^(1/10) for numbers, ±1 lattice step × a 1-2-5 ladder for lengths) writes the one `[parameters]` line by a minimal edit; the live check (`live_check`) runs and the preview rebuilds. A refused value shows the build's message on that row and is not written. Rows may be grouped by a comment line `# group: Gate` inside `[parameters]`. | Decks without `[parameters]` show "No named dimensions — Name this value…" and the 26m tools are unchanged. |
+| DT2 | 0 | **The Geometry tab for every deck kind.** A deck the modeller cannot edit (tensor, 1D, 2D tensor) shows the device preview (the existing build preview, "Device (preview, not solved)") with the dimensions panel beside it, in place of today's blank or Device-view-only state. 1D shows the layer bar with dimension labels; 2D/3D the existing views, each dimension drawn as a labelled dimension line between the faces it sets (a parameter's faces are found by substituting it ± one lattice step and diffing the built geometry). | Clicking a dimension line selects its row; dragging it changes the value (one edit on release). |
+| DT3 | 1 | **The device library.** Parametric decks in `examples/` (each a full runnable deck: geometry, doping, contacts, mesh, models, a sweep, outputs) for: PN diode (1D, 2D), Schottky diode (1D), MOS capacitor (1D, C–V), planar MOSFET (2D, 3D), SOI MOSFET (2D), FinFET (3D, bulk and SOI), JFET (2D). Every geometric number, doping level and junction position is a parameter; the mesh lines are written from the same parameters (`linspace($x0, $x0 + $Lg, n)`), so an interface always has mesh lines on it. Existing example decks are rewritten to their parametric form only where they build to the same bits (MC1); otherwise the parametric deck is a new file beside them. | 1D/2D tensor meshes keep sweeps cheap and exact; 3D FinFETs use `extrude3d` as today. |
+| DT4 | 1 | **New device.** File ▸ New device… and the Start page's first card open a small dialog: the family list (with its dimension), a thumbnail, and the main dimensions (the panel's first group) to fill in before Create; Create copies the deck into the user's chosen folder (`copy_example`) with those values and opens it on the Geometry tab. | Same examples list the Start page reads (26 VQ11). |
+| DT5 | 2 | **Unlock shapes (3D).** A button on the panel for an `extrude3d` or `tensor` 3D deck: converts it to a `generate3d` layered deck (26l SQ5's `convert_to_layered` for extrude3d; for a tensor deck its region boxes become box solids, its mesh lines' spacing becomes `max_size`/`interface_resolution` as the 26m MT12 estimate needs), keeping `[parameters]` references in the solids it writes, then opens the 3D modeller. A refusal says why (e.g. a layout the 3D generator refuses, Unit 64). | One-way and undoable (deck undo). |
+| DT6 | 3 | **Dimension sweeps.** Each panel row has Sweep…: a value list (`20nm, 30nm, 45nm` or `from : to : step`, lengths or numbers). Run executes the deck once per value with that parameter overridden (no copy of the deck is edited; the override is applied after reading, as substitution is), writing each run's outputs to `<deck stem>_sweep_<name>/<name>=<value>/`. The same from the CLI: `nitcad run <deck> --set Lg=30nm` (repeatable) and `nitcad sweep <deck> Lg=20nm,30nm,45nm`. | One run at a time; Stop ends after the current point. |
+| DT7 | 3 | **Sweep results.** The Results tab gains a sweep view: the runs' curves overlaid (one colour per value, viridis order, legend `Lg = 20 nm`…), and Unit 24's figures plotted against the swept parameter (V_th, SS, g_m max, on/off vs Lg) with a CSV export `<…>_sweep_<name>/figures.csv`. Run comparison (26b) still takes any two runs. | No new figure extraction. |
+| DT8 | 4 | **Modeller guardrails.** Drawing in the 3D modeller and the 2D editor keeps solids inside the domain (a drag clamps at the domain's faces; a solid moved out is refused with the reason, as a meshability refusal); the inspector's position and size fields for a picked solid take typed values and `$name` references; "Name this value" (26m's N during a drag) is also on the inspector field's context menu. | Fixes the 2026-11-22 screenshot's case. |
+| DT9 | — | **Commits:** this proposal, a commit per slice, then ARCHITECTURE (6.14, the deck chapter for `--set` and labels, 11.3) and the records. The owner may stop after any slice. | |
+
+**Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
+
+| # | Criterion |
+|---|---|
+| DC1 | **Nothing else moves:** every example and test deck not rewritten builds to the same bits; a rewritten example builds to the same bits as before (else it is not rewritten, DT3); the 26k/26l/26m suites pass unchanged except where a test names the parameters text box (recorded). |
+| DC2 | **Panel edits are minimal:** for each library deck and each parameter, a typed value changes exactly that `[parameters]` line (byte diff of one line); undo restores the deck byte-identical. |
+| DC3 | **One number moves everything:** for each library deck, for each length parameter p, the deck built with p + δ (δ one mesh-independent step) equals the same deck with every dependent value written out by hand at p + δ (geometry, doping windows, contacts, mesh lines) — compared on the built device's regions, contacts and net doping at 200 seeded points to 1e-12 relative. |
+| DC4 | **The library runs:** every library deck at its default values builds, meshes under 20k nodes (3D) / 5k (2D) and runs its sweep to completion in Release on 6 threads within the existing slow-test budget; each MOSFET/FinFET's extracted V_th and SS are finite and SS ≥ 60 mV/dec × (1 − 1 %). |
+| DC5 | **Sweeps are the runs they stand for:** `nitcad sweep d Lg=a,b` writes, for each value, outputs byte-identical to `nitcad run` on a copy of d with `Lg = a` written in; `--set` on an unknown name or a wrong kind is a usage error naming the parameter. |
+| DC6 | **Dimension lines:** for each library deck, each length parameter's dimension line joins the faces the parameter moves (DT2's diff) and its label shows the parameter's current value; dragging it by n lattice steps writes the value + n steps. |
+| DC7 | **Guardrails:** 500 seeded random drags of the Box, Prism and Cylinder tools and of the move gizmo never leave a solid outside the domain; a typed out-of-domain size is refused with the reason and the deck unchanged. |
+| DC8 | **Unlock:** each 3D library deck either converts and builds as a layered deck whose regions at 200 seeded points equal the original's, or is refused with the 3D generator's reason (recorded per deck). |
+| DC9 | **Speed:** a panel edit to the refreshed preview ≤ 300 ms median for the 2D library decks and ≤ 1 s for the 3D ones on WARP (Release); the modeller's 26l SE5 / 26m MC9 frame budgets unchanged. |
+| DC10 | **Interaction:** by window messages only — New device ▸ FinFET (3D), set Lg = 30 nm and Wfin = 8 nm in the panel, Sweep… Lg = 20, 30 nm, run: two runs, the overlay shows two curves, figures.csv has two rows. |
+| DC11 | **Mutants:** at least 8 per slice caught (e.g. a panel edit touching a second line; an override applied to the wrong parameter; a sweep folder reused between values; a clamp letting a solid one lattice step out). |
+| DC12 | **Layering:** models in `app` without Win32 headers; overrides and labels in `deck`; the sweep driver in `deck`/`cli` without `app`; no new dependency. |
+
+**Questions (each with a recommendation; ruled by the standing "choose recommended" rule, 2026-11-11):**
+
+- **NQ1 — where a parameter's label lives.** (a) The parameter line's trailing comment, groups by `# group:` lines —
+  no grammar change, readable in the deck. (b) New keys (`Lg.label = …`). **Recommended (a).** Ruled (a).
+- **NQ2 — the library's mesh in 3D.** (a) Keep `extrude3d` (as the shipped FinFETs), Unlock converts to layered (DT5).
+  (b) Write the library as `generate3d` layered so the modeller edits it at once — but at 1 nm oxides the 3D
+  generator needs s ≈ 0.08 nm and refuses some fin layouts (Unit 64), which would make sweeps fail part-way.
+  **Recommended (a).** Ruled (a).
+- **NQ3 — arithmetic in parameters.** (a) Keep 26m MQ1's `+`/`−` of lengths; library decks are written so every
+  position is a sum (e.g. `x_gate1 = $Lsd + $Lg`), no halves. (b) Add `×`/`÷` by numbers now. **Recommended (a)**;
+  (b) if a library deck turns out to need it, recorded. Ruled (a).
+- **NQ4 — where sweep outputs go.** (a) `<deck stem>_sweep_<name>/<name>=<value>/` beside the deck, each a normal
+  run folder (opens in the results browser). (b) One combined file. **Recommended (a)**: every run stays an ordinary
+  run, comparable with 26b. Ruled (a).
+- **NQ5 — sweeping two dimensions.** (a) One parameter per sweep in this unit; a grid of two later. (b) Grids now.
+  **Recommended (a).** Ruled (a).
+
+**Risks:** DT3 is the largest slice (ten decks, each validated); a family whose physics needs a model not yet in
+NiTCAD (e.g. a JFET's gate junction is fine; a Schottky barrier uses the existing `kind = schottky`) is dropped and
+recorded rather than approximated. DT2's dimension lines rely on diffing built geometry, which is exact on tensor and
+layered meshes but may find no face for a parameter used only in doping (then no line, the row only). DT5's tensor →
+layered conversion may be refused for thin-oxide FinFETs by the 3D generator's rules; DC8 records it per deck. Sweeps
+run whole decks serially, so a 3D sweep of five values costs five runs (the 18-min FinFET is not a library default:
+DC4's node limits keep defaults quick).
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
