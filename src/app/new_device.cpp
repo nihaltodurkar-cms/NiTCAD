@@ -26,6 +26,31 @@ std::string trim(std::string s) {
     return s.substr(b, s.find_last_not_of(" \t\r\n") - b + 1);
 }
 
+// The deck with each [output] file named <stem>.<its extension>, each line rewritten in place (its key and comment
+// kept), so two decks made from one family in one folder write their own results; the text as it is when it does
+// not parse.
+std::string with_outputs_named(std::string_view deck_text, const std::string& stem) {
+    const auto d = deck::parse(deck_text);
+    if (!d) return std::string(deck_text);
+    std::vector<std::string> lines;
+    for (std::size_t at = 0;;) {
+        const auto nl = deck_text.find('\n', at);
+        lines.emplace_back(deck_text.substr(at, nl == std::string_view::npos ? std::string_view::npos : nl - at));
+        if (nl == std::string_view::npos) break;
+        at = nl + 1;
+    }
+    for (const deck::Section& s : d->sections) {
+        if (s.kind != "output") continue;
+        for (const deck::Entry& e : s.entries) {
+            const auto k = static_cast<std::size_t>(e.line - 1);
+            if (k < lines.size()) lines[k] = dims::with_value(lines[k], stem + fs::path(e.value).extension().string());
+        }
+    }
+    std::string out;
+    for (std::size_t k = 0; k < lines.size(); ++k) out += (k ? "\n" : "") + lines[k];
+    return out;
+}
+
 }  // namespace
 
 std::vector<Family> list_families(const fs::path& dir) {
@@ -118,8 +143,9 @@ std::expected<fs::path, std::string> create_device(std::string_view deck_text, c
     if (ec) return std::unexpected("The folder " + folder.string() + " cannot be made: " + ec.message());
     const fs::path to = folder / name;
     if (fs::exists(to, ec)) return std::unexpected(name + " is already in " + folder.string() + ": choose another name");
+    const std::string text = with_outputs_named(deck_text, fs::path(name).stem().string());
     std::ofstream f(to, std::ios::binary);
-    f.write(deck_text.data(), static_cast<std::streamsize>(deck_text.size()));
+    f.write(text.data(), static_cast<std::streamsize>(text.size()));
     f.close();
     if (!f) return std::unexpected("The deck cannot be written to " + to.string() + ".");
     return to;

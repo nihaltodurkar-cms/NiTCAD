@@ -101,3 +101,11 @@ TEST_CASE("new device: Create writes the deck under the typed name, never over a
         CHECK_FALSE(devices::create_device(text, dir, bad));
     }
 }
+
+TEST_CASE("new device: Create names the run's outputs after the new deck, so two devices of one family never share them", "[app][new_device]") {
+    const fs::path dir = app_test::scratch("new_device_outputs");
+    const std::string text = "# T\n[parameters]\nL = 1um\n\n[output]\nsweep = mosfet_2d.nitsweep\ndevice = mosfet_2d.nitdev  # the device\ntable = mosfet_2d.csv\n";
+    const auto a = devices::create_device(text, dir, "fet_a");
+    REQUIRE(a);
+    CHECK(read_file(*a) == "# T\n[parameters]\nL = 1um\n\n[output]\nsweep = fet_a.nitsweep\ndevice = fet_a.nitdev  # the device\ntable = fet_a.csv\n");
+}

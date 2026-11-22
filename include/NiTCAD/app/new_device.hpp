@@ -40,7 +40,8 @@ struct Thumbnail {
 [[nodiscard]] Thumbnail thumbnail(std::string_view deck_text);
 
 // The deck written to <folder>/<name>.deck (".deck" added when the name has none; the folder made when missing);
-// its path. Refused, nothing written: an empty name, a name holding \ / : * ? " < > |, a file of that name already
+// its path; each [output] file is renamed <name>.<its extension>, so two devices of one family in one folder keep
+// their own results. Refused, nothing written: an empty name, a name holding \ / : * ? " < > |, a file of that name already
 // there ("<file> is already in <folder>: choose another name"), or a write that fails.
 [[nodiscard]] std::expected<std::filesystem::path, std::string> create_device(std::string_view deck_text,
                                                                               const std::filesystem::path& folder,
