@@ -46,7 +46,8 @@ enum class Action : unsigned char { tool, mode, duplicate, overlap };
 // click ending it) and Extrude (drag the depth off a face); the Edges group's Chamfer and Fillet (drag in from an edge
 // along a prism's axis: the cut, or the radius), Round vertex (the same from a prism's vertex handle) and Taper (drag
 // the edge sideways). Each mode belongs to its group (group_of).
-enum class Mode : unsigned char { none, copy, mirror, array, align, inset, extrude, chamfer, fillet, round, taper };
+enum class Mode : unsigned char { none, copy, mirror, array, align, inset, extrude, chamfer, fillet, round, taper,
+                                  profile, implant, junction, max_size, refine };  // slice 4: Doping, Mesh
 [[nodiscard]] Group group_of(Mode m) noexcept;
 // The bar's armed key: a tool's number, or 100 + a mode.
 [[nodiscard]] constexpr int armed_key(int tool, Mode m) noexcept { return m == Mode::none ? tool : 100 + static_cast<int>(m); }

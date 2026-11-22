@@ -1161,45 +1161,9 @@ std::expected<void, base::Error> Builder::doping(device::DeviceDescription& d) c
     if (const Section* s = single("doping")) {
         for (const Entry& e : s->entries) {
             if (e.key != "profile") return std::unexpected(unknown(e, *s));
-            const auto t = tokens(e.value);
-            if (t.size() < 3) return std::unexpected(at(e.line, "a profile starts '<donor|acceptor> <shape> <peak>'"));
-            device::DopingProfile p;
-            if (t[0] == "donor") p.dopant = device::Dopant::donor;
-            else if (t[0] == "acceptor") p.dopant = device::Dopant::acceptor;
-            else return std::unexpected(at(e.line, "the dopant is donor or acceptor"));
-            if (t[1] == "constant") p.shape = device::DepthShape::constant;
-            else if (t[1] == "gaussian") p.shape = device::DepthShape::gaussian;
-            else if (t[1] == "erfc") p.shape = device::DepthShape::erfc;
-            else return std::unexpected(at(e.line, "the shape is constant, gaussian or erfc"));
-            NITCAD_DECK_TRY(peak, lift(e.line, number(t[2])));
-            p.peak_cm3 = peak;
-            for (std::size_t k = 3; k < t.size(); ++k) {
-                const std::size_t eq = t[k].find('=');
-                if (eq == std::string_view::npos) return std::unexpected(at(e.line, "expected name=value, not '" + std::string(t[k]) + "'"));
-                const std::string_view name = t[k].substr(0, eq);
-                const std::string_view value = t[k].substr(eq + 1);
-                static constexpr std::array<std::string_view, 3> axes{"x", "y", "z"};
-                const auto a = std::find(axes.begin(), axes.end(), name);
-                if (name == "axis") {
-                    const auto v = std::find(axes.begin(), axes.end(), value);
-                    if (v == axes.end()) return std::unexpected(at(e.line, "axis is x, y or z"));
-                    p.axis = static_cast<int>(v - axes.begin());
-                } else if (name == "center" || name == "width" || name == "lateral") {
-                    NITCAD_DECK_TRY(v, lift(e.line, length(value)));
-                    (name == "center" ? p.center : name == "width" ? p.width : p.lateral) = v;
-                } else if (a != axes.end()) {
-                    const auto range = items(value, ':');
-                    if (range.size() != 2) return std::unexpected(at(e.line, "a window is <lo>:<hi>"));
-                    NITCAD_DECK_TRY(lo, lift(e.line, length(range[0])));
-                    NITCAD_DECK_TRY(hi, lift(e.line, length(range[1])));
-                    const auto k3 = static_cast<std::size_t>(a - axes.begin());
-                    p.lo[k3] = lo;
-                    p.hi[k3] = hi;
-                } else {
-                    return std::unexpected(at(e.line, "unknown profile attribute '" + std::string(name) + "'"));
-                }
-            }
-            profiles.push_back(p);
+            const auto p = parse_profile(e.value);
+            if (!p) return std::unexpected(at(e.line, p.error()));
+            profiles.push_back(*p);
         }
     }
     auto sampled = device::sample(profiles, d.mesh, d.node_region, d.regions);
@@ -2228,6 +2192,72 @@ std::expected<Plan, base::Error> Builder::run() {
 }
 
 }  // namespace
+
+std::expected<device::DopingProfile, std::string> parse_profile(std::string_view value) {
+    using namespace detail;
+    const auto t = tokens(value);
+    if (t.size() < 3) return std::unexpected(std::string("a profile starts '<donor|acceptor> <shape> <peak>'"));
+    device::DopingProfile p;
+    if (t[0] == "donor") p.dopant = device::Dopant::donor;
+    else if (t[0] == "acceptor") p.dopant = device::Dopant::acceptor;
+    else return std::unexpected(std::string("the dopant is donor or acceptor"));
+    if (t[1] == "constant") p.shape = device::DepthShape::constant;
+    else if (t[1] == "gaussian") p.shape = device::DepthShape::gaussian;
+    else if (t[1] == "erfc") p.shape = device::DepthShape::erfc;
+    else return std::unexpected(std::string("the shape is constant, gaussian or erfc"));
+    const auto peak = number(t[2]);
+    if (!peak) return std::unexpected(peak.error());
+    p.peak_cm3 = *peak;
+    for (std::size_t k = 3; k < t.size(); ++k) {
+        const std::size_t eq = t[k].find('=');
+        if (eq == std::string_view::npos) return std::unexpected("expected name=value, not '" + std::string(t[k]) + "'");
+        const std::string_view name = t[k].substr(0, eq);
+        const std::string_view v = t[k].substr(eq + 1);
+        static constexpr std::array<std::string_view, 3> axes{"x", "y", "z"};
+        const auto a = std::find(axes.begin(), axes.end(), name);
+        if (name == "axis") {
+            const auto w = std::find(axes.begin(), axes.end(), v);
+            if (w == axes.end()) return std::unexpected(std::string("axis is x, y or z"));
+            p.axis = static_cast<int>(w - axes.begin());
+        } else if (name == "center" || name == "width" || name == "lateral") {
+            const auto l = length(v);
+            if (!l) return std::unexpected(l.error());
+            (name == "center" ? p.center : name == "width" ? p.width : p.lateral) = *l;
+        } else if (a != axes.end()) {
+            const auto range = items(v, ':');
+            if (range.size() != 2) return std::unexpected(std::string("a window is <lo>:<hi>"));
+            const auto lo = length(range[0]);
+            if (!lo) return std::unexpected(lo.error());
+            const auto hi = length(range[1]);
+            if (!hi) return std::unexpected(hi.error());
+            const auto k3 = static_cast<std::size_t>(a - axes.begin());
+            p.lo[k3] = *lo;
+            p.hi[k3] = *hi;
+        } else {
+            return std::unexpected("unknown profile attribute '" + std::string(name) + "'");
+        }
+    }
+    return p;
+}
+
+std::string profile_text(const device::DopingProfile& p) {
+    // Lengths in cm, shortest round-trip: the same doubles read back.
+    static constexpr const char* axes[] = {"x", "y", "z"};
+    std::string out = std::string(p.dopant == device::Dopant::donor ? "donor " : "acceptor ") +
+                      (p.shape == device::DepthShape::constant ? "constant " : p.shape == device::DepthShape::gaussian ? "gaussian " : "erfc ") +
+                      std::format("{}", p.peak_cm3);
+    if (p.shape != device::DepthShape::constant || p.axis != 0) out += std::string(" axis=") + axes[p.axis];
+    if (p.shape != device::DepthShape::constant) out += std::format(" center={}cm width={}cm", p.center, p.width);
+    for (int k = 0; k < 3; ++k) {
+        if (k == p.axis) continue;
+        const auto i = static_cast<std::size_t>(k);
+        if (std::isinf(p.lo[i]) && std::isinf(p.hi[i])) continue;
+        out += std::format(" {}={}cm:{}cm", axes[k], p.lo[i], p.hi[i]);
+    }
+    if (p.lateral != 0.0) out += std::format(" lateral={}cm", p.lateral);
+    return out;
+}
+
 
 // Unit 26m MT8: the parameters substituted first, so the build reads values as written out (the plan keeps no view
 // into the deck it read; [adapt] keeps the deck as given and substitutes again per pass).

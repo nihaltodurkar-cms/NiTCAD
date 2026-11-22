@@ -167,7 +167,16 @@ TEST_CASE("modeller: what is picked opens its group; each group's tools", "[app]
     CHECK(later(Group::edges).empty());
     CHECK(later(Group::faces).empty());
     CHECK(later(Group::solid).empty());
-    CHECK_FALSE(later(Group::doping).empty());
+    // Slice 4 (MT9, MT10): Doping has its three tools, Mesh two (Interface layers recorded: no key for a layered deck);
+    // 3D only.
+    CHECK(later(Group::doping).empty());
+    CHECK_FALSE(later(Group::mesh).empty());
+    REQUIRE(tools(Group::doping).size() == 3);
+    REQUIRE(tools(Group::mesh).size() == 2);
+    CHECK(tools_for(Group::doping, false).empty());
+    CHECK(tools_for(Group::mesh, true).size() == 2);
+    for (const Mode m : {Mode::profile, Mode::implant, Mode::junction}) CHECK(group_of(m) == Group::doping);
+    for (const Mode m : {Mode::max_size, Mode::refine}) CHECK(group_of(m) == Group::mesh);
     for (const Mode m : {Mode::chamfer, Mode::fillet, Mode::round, Mode::taper}) CHECK(group_of(m) == Group::edges);
     for (const Mode m : {Mode::inset, Mode::extrude}) CHECK(group_of(m) == Group::faces);
     for (const Mode m : {Mode::copy, Mode::mirror, Mode::array, Mode::align}) CHECK(group_of(m) == Group::transform);

@@ -648,6 +648,8 @@ void SolidPage::read_mesh_keys() {
     const auto s = mesh_length(text_seen_, "interface_resolution");
     res_q_ = s ? static_cast<Coord>(std::llround(*s * static_cast<double>(per_um) * 1e4)) : 0;
     max_size_ = mesh_length(text_seen_, "max_size").value_or(0.0);
+    profiles_ = solid::profiles(text_seen_);  // slice 4: drawn each frame, read once per deck
+    size_boxes_ = solid::size_boxes(text_seen_);
 }
 
 Coord SolidPage::gap_up(Coord v) const {
@@ -707,6 +709,7 @@ Model SolidPage::cut_model(Coord r) {
 bool SolidPage::tool_press(const Pick& p, double x, double y) {
     using modeller::Mode;
     if (mode_ == Mode::none || modeller::group_of(mode_) == modeller::Group::transform) return false;
+    if (const auto g = modeller::group_of(mode_); g == modeller::Group::doping || g == modeller::Group::mesh) return doping_press(p, x, y);
     const bool on_face = (p.kind == PickKind::face || (p.kind == PickKind::handle && p.handle == HandleKind::face)) && p.solid.solid >= 0;
     if (mode_ == Mode::inset || mode_ == Mode::extrude) {
         if (!on_face) return false;
@@ -928,6 +931,18 @@ std::string SolidPage::chip_value() const {
         break;
     }
     case Drag::extrude: v = "depth " + chip_length(drag_s_); break;
+    case Drag::implant:
+    case Drag::junction:
+        v = (drag_ == Drag::implant ? "peak depth " : "junction depth ") + chip_length(drag_s_) +
+            std::format(", {} {:.0e} (D, wheel)", donor_ ? "donor" : "acceptor", level_);
+        break;
+    case Drag::max_size: {
+        const auto e = extent(m_);
+        v = "max_size " + chip_length(drag_s_) +
+            (e && res_q_ > 0 ? std::format(", about {:.0f} nodes", node_estimate(*e, static_cast<double>(drag_s_) * 1e-8, static_cast<double>(res_q_) * 1e-8)) : std::string());
+        break;
+    }
+    case Drag::refine: v = "size " + chip_length(refine_size_) + " (wheel)"; break;
     case Drag::inset: v = "margin " + chip_length(margin_); break;
     case Drag::inset_depth: v = "margin " + chip_length(margin_) + ", depth " + chip_length(drag_s_); break;
     case Drag::radius: v = "radius " + chip_length(radius_) + (preview_.solids.empty() ? std::string(", sides under 6 s") : std::format(", {} sides", preview_.solids.front().polygon.size())); break;
@@ -944,6 +959,7 @@ std::string SolidPage::chip_value() const {
 }
 
 void SolidPage::after_drag_step(double x, double y) {
+    if (drag_ == Drag::implant || drag_ == Drag::junction || drag_ == Drag::max_size || drag_ == Drag::refine) return;  // doping_step
     if (auto next = pending()) {
         // As commit_model writes it: a tied coordinate moved edits its parameter (MT8, MC4).
         if (m_start_.parameters == next->parameters && !next->parameters.empty()) tie_edits(m_start_, *next);
@@ -967,8 +983,16 @@ void SolidPage::end_drag_ui() {
 
 bool SolidPage::on_char(wchar_t c) {
     const bool scalar = drag_ == Drag::axis || drag_ == Drag::face || drag_ == Drag::height || drag_ == Drag::cut || drag_ == Drag::taper ||
-                        drag_ == Drag::extrude || drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius;
+                        drag_ == Drag::extrude || drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius ||
+                        drag_ == Drag::implant || drag_ == Drag::junction || drag_ == Drag::max_size;
     const bool two = drag_ == Drag::move || drag_ == Drag::plane || drag_ == Drag::base || drag_ == Drag::array;
+    // Slice 4 (MT9): D swaps the doping tools' dopant, during a drag too.
+    if ((c == L'd' || c == L'D') && modeller::group_of(mode_) == modeller::Group::doping && mode_ != modeller::Mode::none) {
+        donor_ = !donor_;
+        host_.solid_status(std::format("{} {:.0e} cm^-3 (D: the dopant; the wheel: the level)", donor_ ? "donor" : "acceptor", level_));
+        if (drag_ != Drag::none) on_move(last_x_, last_y_, false, false);
+        return true;
+    }
     if (!scalar && !two) return false;
     // MT8: N names the dragged extent (a new parameter, then each existing length one in turn), while nothing is
     // typed (once a number is, n is its unit's).
@@ -1054,12 +1078,18 @@ void SolidPage::apply_drag() {
     case Drag::vertex:
     case Drag::contact_move:
     case Drag::base:
+    case Drag::implant:
+    case Drag::junction:
+    case Drag::max_size:
+    case Drag::refine:
     case Drag::contact: on_up(last_x_, last_y_); return;
     default: return;
     }
 }
 
 void SolidPage::cancel() {
+    pending_text_.clear();
+    pending_volume_.reset();
     if (drag_ == Drag::move || drag_ == Drag::axis || drag_ == Drag::plane || drag_ == Drag::face || drag_ == Drag::vertex ||
         drag_ == Drag::contact_move || drag_ == Drag::array || drag_ == Drag::cut || drag_ == Drag::taper || drag_ == Drag::extrude ||
         drag_ == Drag::inset || drag_ == Drag::inset_depth) {
@@ -1118,6 +1148,15 @@ double SolidPage::render() {
         for (const solid::Problem& p : problems_) overlay.markers.insert(overlay.markers.end(), p.markers.begin(), p.markers.end());
     }
     if (mesh_shown()) overlay.mesh = mesh_;
+    // Slice 4: the profiles (Doping open) and refine boxes (Mesh open) as see-through volumes, the drag's too.
+    if (bar_->group() == modeller::Group::doping) {
+        for (const auto& p : profiles_) {
+            overlay.volumes.push_back({solid::profile_extent(m_.domain, p), solid::doping_color(p.dopant == device::Dopant::donor, p.peak_cm3)});
+        }
+    } else if (bar_->group() == modeller::Group::mesh) {
+        for (const auto& b : size_boxes_) overlay.volumes.push_back({b.box, {0.55f, 0.55f, 0.60f, 0.22f}});
+    }
+    if (pending_volume_) overlay.volumes.push_back(*pending_volume_);
     scene_ = solid_scene(m_, v_, sel_, preview_, overlay);
     scene_ms_ = 1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!target_) {
@@ -1668,6 +1707,10 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         return *v >= 0 && dragged < 0 ? -*v : *v;
     };
     switch (drag_) {
+    case Drag::implant:
+    case Drag::junction:
+    case Drag::max_size:
+    case Drag::refine: doping_step(x, y); return;
     case Drag::orbit:
         v_.camera.azimuth_deg -= static_cast<float>(dx * 0.4);
         v_.camera.elevation_deg = std::clamp(v_.camera.elevation_deg + static_cast<float>(dy * 0.4), -89.0f, 89.0f);
@@ -1897,6 +1940,130 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
     (void)shift;
 }
 
+// --- Slice 4 (MT9, MT10): the Doping and Mesh tools, each writing one deck line ---------------------------------------
+
+bool SolidPage::commit_text(const std::string& out) {
+    const std::string text = host_.solid_deck();
+    if (out.empty() || out == text) return false;
+    history_.record(text);
+    apply_text(out);
+    return true;
+}
+
+bool SolidPage::doping_press(const Pick& p, double x, double y) {
+    using modeller::Mode;
+    const auto dopant = [&] { return donor_ ? device::Dopant::donor : device::Dopant::acceptor; };
+    pending_text_.clear();
+    pending_volume_.reset();
+    drag_s_ = 0;
+    entry_.clear();
+    if (mode_ == Mode::max_size) {
+        if (!(max_size_ > 0.0)) {
+            host_.solid_status("The deck has no max_size to change.");
+            return true;
+        }
+        size_from_ = max_size_;
+        press_y_ = y;
+        begin_drag(Drag::max_size);
+        doping_step(x, y);
+        return true;
+    }
+    if (mode_ == Mode::refine) {
+        const auto q = plane_point(x, y);
+        if (!q) return true;
+        a_ = b_ = *q;
+        if (refine_size_ <= 0) refine_size_ = std::max<Coord>(1, static_cast<Coord>(std::llround(max_size_ * 1e8 / 4.0)));
+        begin_drag(Drag::refine);
+        return true;
+    }
+    const bool on_face = (p.kind == PickKind::face || (p.kind == PickKind::handle && p.handle == HandleKind::face)) && p.solid.solid >= 0;
+    if (!on_face) return false;
+    if (mode_ == Mode::profile) {
+        sel_ = {{p.solid}, -1};
+        const auto out = solid::add_profile(host_.solid_deck(), solid::region_profile(m_, p.solid, dopant(), level_));
+        if (!out) {
+            host_.solid_status(out.error());
+            return true;
+        }
+        host_.solid_status(modeller::deck_line(host_.solid_deck(), *out));
+        commit_text(*out);
+        return true;
+    }
+    const Solid* s = solid_at(m_, p.solid);
+    const auto n = s ? face_normal(*s, p.index) : std::nullopt;
+    if (!n) {
+        host_.solid_status("A slanted face takes no implant or junction; press another face.");
+        return true;
+    }
+    ref_ = p.solid;
+    index_ = p.index;
+    normal_ = *n;
+    origin_ = p.at;
+    sel_ = {{p.solid}, -1};
+    start_s_ = along_axis(m_, v_, x, y, origin_, n->axis);
+    begin_drag(mode_ == Mode::implant ? Drag::implant : Drag::junction);
+    return true;
+}
+
+void SolidPage::doping_step(double x, double y) {
+    const auto dopant = donor_ ? device::Dopant::donor : device::Dopant::acceptor;
+    std::expected<std::string, std::string> out = std::unexpected(std::string());
+    pending_volume_.reset();
+    switch (drag_) {
+    case Drag::implant:
+    case Drag::junction: {
+        const Coord raw = quantize(along_axis(m_start_, v_, x, y, origin_, normal_.axis) - start_s_) * -normal_.sign;  // into the solid
+        const auto typed = entry_.value();
+        drag_s_ = typed ? std::abs(*typed) : std::max<Coord>(0, raw);
+        const Solid* s = solid_at(m_start_, ref_);
+        if (!s || drag_s_ <= 0) break;
+        const Coord at = quanta_of(origin_)[normal_.axis];
+        Box3 window = s->bounds();
+        window.lo[normal_.axis] = window.hi[normal_.axis] = at;
+        if (drag_ == Drag::implant) {
+            const auto p = solid::implant_profile(normal_, at, window, drag_s_, 0, dopant, level_);
+            out = solid::add_profile(text_seen_, p);
+            pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, p), solid::doping_color(donor_, level_)};
+        } else {
+            const auto p = solid::junction_profile(profiles_, normal_, at, window, drag_s_, dopant, level_);
+            if (!p) {
+                out = std::unexpected(p.error());
+                break;
+            }
+            out = solid::add_profile(text_seen_, *p);
+            pending_volume_ = solid::Volume{solid::profile_extent(m_.domain, *p), solid::doping_color(donor_, level_)};
+        }
+        break;
+    }
+    case Drag::max_size: {
+        // Up doubles it every 100 px (at 96 dpi), down halves it; a typed value is the size.
+        const double px = 100.0 * dpi_ / 96.0;
+        const auto typed = entry_.value();
+        drag_s_ = typed ? std::abs(*typed) : std::max<Coord>(1, static_cast<Coord>(std::llround(size_from_ * std::pow(2.0, (press_y_ - y) / px) * 1e8)));
+        if (drag_s_ > 0) out = solid::set_mesh_length(text_seen_, "max_size", drag_s_);
+        break;
+    }
+    case Drag::refine: {
+        if (const auto q = plane_point(x, y)) b_ = *q;
+        const int n = v_.plane.normal;
+        Box3 b = normalized(a_, b_);
+        b.lo[n] = m_.domain.lo[n];
+        b.hi[n] = m_.domain.hi[n];
+        const solid::SizeBox3 sb{b, refine_size_};
+        out = solid::add_size_box(text_seen_, sb);
+        pending_volume_ = solid::Volume{b, {0.55f, 0.55f, 0.60f, 0.22f}};
+        break;
+    }
+    default: return;
+    }
+    pending_text_ = out ? *out : std::string();
+    live_line_ = out ? modeller::deck_line(text_seen_, *out) : out.error();
+    if (!live_line_.empty()) host_.solid_status(live_line_);
+    const int off = MulDiv(16, dpi_, 96);
+    bar_->chip(static_cast<int>(x) + off, static_cast<int>(y) + canvas_top_ + off, chip_value());
+    invalidate();
+}
+
 void SolidPage::on_up(double /*x*/, double /*y*/) {  // the release's place: no step uses it
     button_ = false;
     if (drag_ != Drag::base && drag_ != Drag::inset && drag_ != Drag::radius) end_drag_ui();
@@ -1910,6 +2077,19 @@ void SolidPage::on_up(double /*x*/, double /*y*/) {  // the release's place: no 
         start_s_ = origin_[static_cast<std::size_t>(normal_.axis)];
         drag_s_ = 0;
         m_ = m_start_;
+        invalidate();
+        return;
+    }
+    case Drag::implant:
+    case Drag::junction:
+    case Drag::max_size:
+    case Drag::refine: {  // slice 4: the line the drag shows, written
+        const std::string out = pending_text_;
+        drag_ = Drag::none;
+        pending_text_.clear();
+        pending_volume_.reset();
+        if (!out.empty()) commit_text(out);
+        update_inspector();
         invalidate();
         return;
     }
@@ -1998,7 +2178,8 @@ bool SolidPage::on_key(UINT key, bool shift, bool ctrl) {
     // MT3: while a drag takes a typed value, letters and digits are its (WM_CHAR), not the tools' keys.
     const bool typing = drag_ == Drag::axis || drag_ == Drag::face || drag_ == Drag::height || drag_ == Drag::move || drag_ == Drag::plane ||
                         drag_ == Drag::base || drag_ == Drag::array || drag_ == Drag::cut || drag_ == Drag::taper || drag_ == Drag::extrude ||
-                        drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius;
+                        drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius || drag_ == Drag::implant ||
+                        drag_ == Drag::junction || drag_ == Drag::max_size;
     if (typing && ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') || (key >= VK_NUMPAD0 && key <= VK_DIVIDE) ||
                    key == VK_OEM_PERIOD || key == VK_OEM_MINUS || key == VK_BACK)) {
         return true;
@@ -2166,6 +2347,19 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         if (drag_ == Drag::orbit || drag_ == Drag::pan) on_up(x, y);
         return 0;
     case WM_MOUSEWHEEL: {
+        // Slice 4: the wheel sets the doping tools' level by decades, a refine box's size by halves.
+        if (mode_ != modeller::Mode::none && modeller::group_of(mode_) == modeller::Group::doping) {
+            level_ = std::clamp(level_ * (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 10.0 : 0.1), 1e12, 1e22);
+            level_ = std::pow(10.0, std::round(std::log10(level_)));
+            host_.solid_status(std::format("{} {:.0e} cm^-3 (D: the dopant; the wheel: the level)", donor_ ? "donor" : "acceptor", level_));
+            if (drag_ != Drag::none) on_move(last_x_, last_y_, false, false);
+            return 0;
+        }
+        if (drag_ == Drag::refine) {
+            refine_size_ = std::max<Coord>(1, GET_WHEEL_DELTA_WPARAM(w) > 0 ? refine_size_ * 2 : refine_size_ / 2);
+            on_move(last_x_, last_y_, false, false);
+            return 0;
+        }
         if (drag_ == Drag::array) {  // MT5: the wheel sets the count, whatever the camera
             array_count_ = std::clamp(array_count_ + (GET_WHEEL_DELTA_WPARAM(w) > 0 ? 1 : -1), 2, 100);
             on_move(last_x_, last_y_, false, false);

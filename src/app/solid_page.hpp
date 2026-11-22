@@ -212,7 +212,7 @@ private:
 
     // A drag or a drawing in progress.
     enum class Drag { none, orbit, pan, move, axis, plane, face, vertex, contact_move, base, height, polygon, contact, measure, array,
-                      cut, taper, extrude, inset, inset_depth, radius };
+                      cut, taper, extrude, inset, inset_depth, radius, implant, junction, max_size, refine };
     Drag drag_ = Drag::none;
     bool button_ = false;  // the left button is down
     solid::Model m_start_;
@@ -280,6 +280,20 @@ private:
     solid::Coord margin_ = 0, radius_ = 0;
     solid::Coord res_q_ = 0;       // the deck's interface_resolution, quanta (0: none)
     double max_size_ = 0.0;        // the deck's max_size, cm
+    // Slice 4 (MT9, MT10): the doping tools' dopant and level (D, the wheel), a refine box's size (the wheel), the deck
+    // a doping or mesh drag would write (empty: none) and its volume drawn.
+    bool donor_ = true;
+    double level_ = 1e18;
+    solid::Coord refine_size_ = 0;
+    double size_from_ = 0.0;  // max_size at the press, cm
+    double press_y_ = 0.0;
+    std::string pending_text_;
+    std::vector<device::DopingProfile> profiles_;  // the deck's, as last read
+    std::vector<solid::SizeBox3> size_boxes_;
+    std::optional<solid::Volume> pending_volume_;
+    [[nodiscard]] bool doping_press(const solid::Pick& p, double x, double y);
+    void doping_step(double x, double y);
+    bool commit_text(const std::string& out);
 };
 
 }  // namespace NiTCAD::app

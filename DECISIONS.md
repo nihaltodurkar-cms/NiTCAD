@@ -2147,6 +2147,62 @@ is typed, n is its unit's.
   inspector makes a new one (the old stays, its references with it); the live preview moves only the dragged solid,
   other tied faces following when the drag ends (the deck line shows the parameter's line throughout); a polygon
   vertex inserted or removed drops that prism's ties (its slots renumbered).
+
+**Slice 4 as built (MT9, MT10, 2026-11-22; owner "once slice 3 is done start slice 4"; Release, MSVC 14.51, 6
+cores).** Deck: the `[doping]` profile reader moved out of the builder into `deck::parse_profile` (the build reads
+every profile through it, unchanged: deck baseline 123 passed, 5 failed as expected, the 9 `[!shouldfail]` as
+before), with its writer `deck::profile_text` (lengths in cm, shortest round-trip: read back to the same doubles;
+windows only where bounded). Modeller (`app::solid`): `profiles(deck)` (references substituted), `add_profile` (one
+`profile =` line last in [doping], a new [doping] before the first contact or analysis section when there is none;
+every other line byte for byte), `region_profile` (constant over the solid's bounds; the deck windows two axes, so the
+unbounded depth axis is the one the solid spans most of the domain along, z on a tie: exact where it spans all of
+it), `implant_profile` (gaussian along the face's axis, its peak `depth` inside, σ half of it), `junction_profile`
+(erfc from a face looking down an axis, its length half the depth and its centre so the profile equals the other
+dopant's net `depth` inside the face, at the window's centre: c = x_j - w erfc⁻¹(2 N_bg / N_peak), erfc⁻¹ by Newton to
+the last bits), `profile_extent` (as drawn), `size_boxes` / `add_size_box`. Page: the Doping group's Region profile
+(click a solid), Implant (drag into a face: the peak depth, typed or dragged), Junction (drag into a face looking down
+an axis: the junction depth); D swaps donor and acceptor and the wheel sets the level by decades (1e12 to 1e22),
+during a drag too; the chip shows the depth and the dopant and level. The Mesh group's Max size (drag up or down
+anywhere: doubled every 100 px, or typed; the chip estimates the nodes, MT12) and Refine box (drag a rectangle on the
+work plane: a box through the domain along the plane's normal, its size max_size / 4, the wheel halving or doubling
+it). Each writes one line by minimal edit, shown live as the deck line (MC4), one undo step. Profiles are drawn as
+see-through boxes (donors blue, acceptors red, deeper with the level, log 1e14 to 1e21) while Doping is open, refine
+boxes grey while Mesh is open, the dragged one too; both read once per deck change, not per frame. Snapping (found
+building MC10): a snap onto a face or an edge now also puts its free coordinates on the view's grid where that stays
+on the face or edge (it kept the pixel's place: a gate at 0.0401um beside a fin at 0.04um, slivers of a quantum the
+generator refuses).
+- **MQ5 premise corrected:** the deck already exposes the generators' size boxes, `[mesh] box = u0 v0 u1 v1 h`
+  (generate2d) and `box = x0 y0 z0 x1 y1 z1 h` (generate3d, layered too). Refine box writes that existing key; no
+  `refine` key was added (recommended option: no second spelling of one thing).
+- MC8: app `[doping]` 3049 assertions: each tool's line exactly (a minimal edit: one line more, the rest byte for
+  byte), read back to the same profile, the junction meeting 1e16 to 1e-9 at its depth, its three refusals; max_size
+  and a refine box; then the deck built and the net doping at every one of its 1506 semiconductor nodes equal to the
+  profiles' formula (`device::evaluate` summed) to 1e-12 relative. Window `[doping]` 61: Region profile (wheel, D, a
+  click), Implant (typed), a Junction from a face looking up refused with the deck as it was, Max size (the chip's node
+  estimate), Refine box (the wheel's size); each the line shown, one undo step and redo; the deck builds.
+- MC10: a FinFET by window messages only (`[finfet]`): Box (a silicon fin), Array (two, pitch typed), Fillet (each
+  fin's top edge, 0.02um), a sio2 gate box with Fill and its x_max face dragged with N naming `Lg` (`0.04um + $Lg`),
+  a Gaussian implant into each fin's top (donors 1e20, 10nm), Region profile (acceptors 1e17 in each fin), three
+  Contacts (source and drain the x faces, the gate on top made an electrode by the inspector's Kind), the inspector's
+  largest interface_resolution (1.2nm); built, **13 359 nodes** (≤ 20k), equilibrium converged in 1.7 s.
+- MC9: 100 solids and 100 profiles: an Implant drag's frame median 0.12 ms, a Junction's 0.11 ms, the 100 volumes
+  drawn +0.23 ms (≤ 1 ms).
+- MC1: app tests 49 059 assertions in 124 cases (the slice 2 group test updated: Doping has its tools, Mesh lacks
+  Interface layers); window `[modeller]`, `[solid]`, `[geometry]` 1386 in 30, all passing after the snap change.
+- MC11: 12/12 caught (~/mut-gv/s26m4.sh through run6.sh, sharded on 6 cores): windows not read, lateral not
+  written, the region depth axis always z, the implant peak outside, the junction centre off, a junction from a face
+  looking up, a new [doping] section every time (its first pattern did not apply; rerun), a refine box unchecked, the
+  drag's line not written, D doing nothing, the wheel keeping the level, face snaps off the grid.
+- **Misses and deviations (recorded):** Interface layers (MT10) **not built**: the `layer` key exists only for
+  extrude3d cross-sections (`option_swept`); a layered deck has none and MT10 allows no generator change — the Mesh
+  group says so. Implant's window is the whole face and its lateral spread 0 (MT9: a window dragged on the face, then
+  the depth and the spread). Region profile's level is the wheel (MT9: a drag up or down), the same for all three
+  tools. Refine box spans the domain along the work plane's normal and takes its size from the wheel (MT10: a box
+  dragged, then inside it for the size). MC10's implant covers each fin's whole top, under the gate too (no mask: the
+  window is the face), so the device is a resistor-like FinFET; MC10 asks only that it builds and runs equilibrium.
+- Limits: a junction is made only from a face looking down an axis (the deck's erfc falls along its axis); the
+  junction's background is taken at the window's centre only; profiles are drawn only while the Doping group is open;
+  the profile tools are 3D only (the 2D editor has no Doping group tools yet, MQ6 allows it).
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

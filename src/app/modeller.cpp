@@ -53,6 +53,20 @@ constexpr std::array<ToolEntry, 5> transform_tools{{
      "Click a face: the other picked solids' matching faces move to its plane."},
 }};
 
+constexpr std::array<ToolEntry, 3> doping_tools{{
+    {"Region profile", Action::mode, static_cast<int>(Mode::profile), "",
+     "Click a solid: a constant profile over it. D: donor or acceptor; the wheel: the level by decades."},
+    {"Implant", Action::mode, static_cast<int>(Mode::implant), "",
+     "Drag into a face: a Gaussian whose peak lies that deep, over the face. D: the dopant; wheel: the level."},
+    {"Junction", Action::mode, static_cast<int>(Mode::junction), "",
+     "Drag up into a face looking down an axis: an erfc meeting the other doping that deep. D, wheel as Implant."},
+}};
+constexpr std::array<ToolEntry, 2> mesh_tools{{
+    {"Max size", Action::mode, static_cast<int>(Mode::max_size), "",
+     "Drag up or down anywhere: the mesh's max_size (the node estimate shows); or type it."},
+    {"Refine box", Action::mode, static_cast<int>(Mode::refine), "",
+     "Drag a rectangle on the work plane: a [mesh] box through the domain; the wheel halves or doubles its size."},
+}};
 }  // namespace
 
 std::string_view group_name(Group g) noexcept { return names[static_cast<std::size_t>(g)]; }
@@ -74,6 +88,8 @@ std::span<const ToolEntry> tools(Group g) noexcept {
     case Group::edges: return edge_tools;
     case Group::faces: return face_tools;
     case Group::transform: return transform_tools;
+    case Group::doping: return doping_tools;
+    case Group::mesh: return mesh_tools;
     default: return {};
     }
 }
@@ -94,6 +110,11 @@ Group group_of(Mode m) noexcept {
     case Mode::fillet:
     case Mode::round:
     case Mode::taper: return Group::edges;
+    case Mode::profile:
+    case Mode::implant:
+    case Mode::junction: return Group::doping;
+    case Mode::max_size:
+    case Mode::refine: return Group::mesh;
     default: return Group::transform;
     }
 }
@@ -104,8 +125,8 @@ std::string_view later(Group g) noexcept {
     case Group::edges: return "";
     case Group::faces: return "";
     case Group::transform: return "";
-    case Group::doping: return "Region profile, Implant and Junction come in slice 4.";
-    case Group::mesh: return "Max size, Interface layers and Refine box come in slice 4.";
+    case Group::doping: return "";
+    case Group::mesh: return "Interface layers: a layered deck has no interface layer key (recorded, slice 4).";
     }
     return "";
 }

@@ -188,6 +188,7 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/device/device.hpp"
+#include "NiTCAD/device/doping_profiles.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/results/learn.hpp"
 #include "NiTCAD/solve/adapt.hpp"
@@ -254,6 +255,12 @@ struct Plan {
     solve::TraceOptions trace;
     std::optional<AdaptPlan> adapt;  // [adapt] (Unit 17)
 };
+
+// One [doping] profile's value (`<donor|acceptor> <constant|gaussian|erfc> <peak> [name=value ...]`), as the build reads
+// it (Unit 26m slice 4: the modeller reads and writes profiles too). The error without a location.
+[[nodiscard]] std::expected<device::DopingProfile, std::string> parse_profile(std::string_view value);
+// The profile as a line's value, which parse_profile reads back to the same profile (windows only where bounded).
+[[nodiscard]] std::string profile_text(const device::DopingProfile& p);
 
 [[nodiscard]] std::expected<Plan, base::Error> build(const Deck& deck);
 // The deck built on a refined mesh (Unit 17): the refinement's non-empty members replace the

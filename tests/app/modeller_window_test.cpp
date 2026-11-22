@@ -27,6 +27,8 @@
 #include "NiTCAD/app/modeller.hpp"
 #include "NiTCAD/app/solid.hpp"
 #include "NiTCAD/app/solid_view.hpp"
+#include "NiTCAD/deck/build.hpp"
+#include "NiTCAD/solve/equilibrium.hpp"
 #include "win32.hpp"
 
 using namespace NiTCAD;
@@ -1314,4 +1316,395 @@ patch = body
     CHECK(model().regions[1].solids[0].box.hi.z == 12 * nm);
     REQUIRE(page.undo());
     CHECK(w->deck().text() == original);
+}
+
+TEST_CASE("app window modeller: Region profile, Implant, Junction, Max size and Refine box, each one line and one undo step "
+          "(MC4, MC8, MT9, MT10)",
+          "[app][window][modeller][doping]") {
+    auto [w, pp] = open_3d("doping3d", block);
+    SolidPage& page = *pp;
+    const HWND c = page.canvas();
+    page.set_material("sio2");
+    const solid::SolidRef a = draw_box(*w, page);  // x 0..0.2um, y 0..0.3um, z 0.4..0.5um
+    REQUIRE(a == solid::SolidRef{1, 0});
+    page.set_section({2, 5800});
+    page.render();
+    std::vector<std::string> texts{w->deck().text()};
+    const auto step = [&](const std::string& want, const std::string& shown) {
+        const std::string now = w->deck().text();
+        CHECK(now == want);
+        CHECK(now != texts.back());
+        if (!shown.empty()) CHECK(shown == modeller::deck_line(texts.back(), now));
+        // One undo step, then redone.
+        REQUIRE(page.undo());
+        CHECK(w->deck().text() == texts.back());
+        REQUIRE(page.redo());
+        CHECK(w->deck().text() == now);
+        texts.push_back(now);
+        page.render();
+    };
+    using NiTCAD::device::Dopant;
+
+    // Region profile: the wheel up a decade (1e19), D to acceptors, a click on A.
+    page.set_mode(modeller::Mode::profile);
+    CHECK(page.group() == modeller::Group::doping);
+    {
+        auto [px, at] = face_or_handle(page, a, 5);
+        wheel(c, px[0], px[1], 120);
+        type(c, L"d");
+        const auto want = solid::add_profile(texts.back(), solid::region_profile(page.model(), a, Dopant::acceptor, 1e19));
+        REQUIRE(want);
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_LBUTTONUP, 0, px[0], px[1]);
+        step(*want, "");
+    }
+    // Implant into A's top (z = 0.5um), the peak 30nm in (typed).
+    page.set_mode(modeller::Mode::implant);
+    {
+        auto [px, at] = face_or_handle(page, a, 5);
+        const auto to = page.screen_of_um({at[0], at[1], at[2] - 0.05});
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+        INFO("chip: " << page.chip());
+        CHECK(has(page.chip(), "peak depth "));
+        CHECK(has(page.chip(), "acceptor 1e+19"));
+        type(c, L"0.03");
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, to[0], to[1]);
+        const solid::Box3 window{{0, 0, 5000}, {2000, 3000, 5000}};
+        const auto want = solid::add_profile(texts.back(), solid::implant_profile({2, 1}, 5000, window, 300, 0, Dopant::acceptor, 1e19));
+        REQUIRE(want);
+        step(*want, shown);
+    }
+    // Junction from a face looking up: refused, the deck as it was.
+    page.set_mode(modeller::Mode::junction);
+    {
+        auto [px, at] = face_or_handle(page, a, 5);
+        const auto to = page.screen_of_um({at[0], at[1], at[2] - 0.05});
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+        CHECK(has(page.live_line(), "looking down an axis"));
+        send(c, WM_LBUTTONUP, 0, to[0], to[1]);
+        CHECK(w->deck().text() == texts.back());
+    }
+    // Max size: a drag, then 0.12um typed; the chip estimates the nodes.
+    page.set_mode(modeller::Mode::max_size);
+    CHECK(page.group() == modeller::Group::mesh);
+    {
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, 300, 300);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, 300, 200);
+        INFO("chip: " << page.chip());
+        CHECK(has(page.chip(), "max_size "));
+        CHECK(has(page.chip(), "nodes"));
+        type(c, L"0.12");
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, 300, 200);
+        const auto want = solid::set_mesh_length(texts.back(), "max_size", 1200);
+        REQUIRE(want);
+        step(*want, shown);
+    }
+    // Refine box: a rectangle on the work plane (z = 0.4um), through the domain along z; the wheel doubles its size
+    // from max_size / 4.
+    page.set_mode(modeller::Mode::refine);
+    {
+        const auto p0 = page.screen_of_um({0.5, 0.1, 0.4}), p1 = page.screen_of_um({0.9, 0.5, 0.4});
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, p0[0], p0[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, p1[0], p1[1]);
+        wheel(c, p1[0], p1[1], 120);
+        INFO("chip: " << page.chip());
+        CHECK(has(page.chip(), "size 0.06"));
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, p1[0], p1[1]);
+        const auto boxes = solid::size_boxes(w->deck().text());
+        REQUIRE(boxes.size() == 1);
+        CHECK(boxes[0].size == 600);
+        CHECK(boxes[0].box.lo.z == 0);
+        CHECK(boxes[0].box.hi.z == 6000);
+        CHECK(boxes[0].box.hi.x > boxes[0].box.lo.x);
+        const auto want = solid::add_size_box(texts.back(), boxes[0]);
+        REQUIRE(want);
+        step(*want, shown);
+    }
+    // The whole deck still builds: the doping and mesh lines are the build's.
+    const auto parsed = deck::parse(w->deck().text());
+    REQUIRE(parsed);
+    CHECK(deck::build(*parsed).has_value());
+    CHECK(solid::profiles(w->deck().text()).size() == 3);
+}
+
+namespace {
+
+const std::string fin_start = R"([parameters]
+Lg = 0.04um
+
+[mesh]
+type = generate3d
+layered = on
+domain = 0 0.12um 0 0.16um 0 0.1um
+max_size = 0.03um
+interface_resolution = 0.004um
+
+[region ox]
+material = sio2
+
+[equilibrium]
+)";
+
+// A box drawn by the Box tool: the base's corners on the work plane at z, then the height typed.
+void draw_box_at(SolidPage& page, solid::V3 lo, solid::V3 hi) {
+    const HWND c = page.canvas();
+    page.set_work_plane({2, static_cast<solid::Coord>(std::llround(lo[2] * solid::per_um))});
+    page.set_tool(SolidPage::Tool::box);
+    page.render();
+    const auto a = page.screen_of_um(lo), b = page.screen_of_um({hi[0], hi[1], lo[2]});
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, a[0], a[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, b[0], b[1]);
+    send(c, WM_LBUTTONUP, 0, b[0], b[1]);
+    type(c, std::format(L"{}", hi[2] - lo[2]));
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, b[0], b[1]);
+    send(c, WM_LBUTTONUP, 0, b[0], b[1]);
+    page.set_tool(SolidPage::Tool::select);
+    page.render();
+}
+
+// A contact dragged on a face of the domain, from `a` to `b` (um, on the face).
+void drag_contact(SolidPage& page, solid::V3 a, solid::V3 b) {
+    const HWND c = page.canvas();
+    page.set_tool(SolidPage::Tool::contact);
+    page.render();
+    const auto p = page.screen_of_um(a), q = page.screen_of_um(b);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, p[0], p[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, q[0], q[1]);
+    send(c, WM_LBUTTONUP, 0, q[0], q[1]);
+    page.set_tool(SolidPage::Tool::select);
+    page.render();
+}
+
+}  // namespace
+
+TEST_CASE("app window modeller: a FinFET drawn by window messages builds and runs its equilibrium (MC10)",
+          "[app][window][modeller][doping][finfet]") {
+    auto [w, pp] = open_3d("finfet3d", fin_start);
+    SolidPage& page = *pp;
+    const HWND c = page.canvas();
+    const auto deck = [&] { return w->deck().text(); };
+    // The first fin: silicon, x through the domain, y 0.02..0.06um, z 0.02..0.07um.
+    page.set_material("silicon");
+    draw_box_at(page, {0.0, 0.02, 0.02}, {0.12, 0.06, 0.07});
+    INFO(deck());
+    // The base as the pixels give it (on the view's snap step), the height as typed.
+    REQUIRE(page.selection().solids.size() == 1);
+    const solid::SolidRef fin = page.selection().solids.at(0);
+    const solid::Box3 fb = page.model().regions[static_cast<std::size_t>(fin.region)].solids[static_cast<std::size_t>(fin.solid)].bounds();
+    CHECK(fb.lo.x == 0);
+    CHECK(fb.hi.x == 1200);
+    CHECK(std::abs(fb.lo.y - 200) <= 10);
+    CHECK(std::abs(fb.hi.y - 600) <= 10);
+    CHECK(fb.lo.z == 200);
+    CHECK(fb.hi.z == 700);
+    page.set_section({2, 900});
+    page.render();
+    // Array: two fins at a pitch of 0.08um along y (typed; the wheel down from 3).
+    page.set_mode(modeller::Mode::array);
+    {
+        auto [px, at] = face_pixel(page, fin, 5);
+        drag_by(page, px, at, {0.0, 0.08, 0.0}, [&] {
+            wheel(c, px[0], px[1], -120);
+            type(c, L"0.08");
+        });
+    }
+    REQUIRE(has(deck(), std::format("box = 0 0.12um {} {} 0.02um 0.07um\n", geo::format_length(fb.lo.y + 800), geo::format_length(fb.hi.y + 800))));
+    // Fillet on each fin's top edge at y hi (vertices 6, 7: x lo and hi, y hi, z hi) at 0.02um.
+    page.set_mode(modeller::Mode::fillet);
+    std::vector<solid::SolidRef> fins;
+    for (std::size_t r = 0; r < page.model().regions.size(); ++r) {
+        for (std::size_t k = 0; k < page.model().regions[r].solids.size(); ++k) {
+            if (page.model().regions[r].material == "silicon") fins.push_back({static_cast<int>(r), static_cast<int>(k)});
+        }
+    }
+    REQUIRE(fins.size() == 2);
+    for (const solid::SolidRef f : fins) {
+        auto [fx, fa] = face_or_handle(page, f, 5);
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, fx[0], fx[1]);
+        send(c, WM_LBUTTONUP, 0, fx[0], fx[1]);
+        page.render();
+        const auto list = page.model().regions[static_cast<std::size_t>(f.region)].solids[static_cast<std::size_t>(f.solid)].edges();
+        int edge = -1;
+        for (std::size_t k = 0; k < list.size(); ++k) {
+            if (list[k] == std::pair{6, 7}) edge = static_cast<int>(k);
+        }
+        REQUIRE(edge >= 0);
+        const auto px = must_find(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::edge && p.solid == f && p.index == edge; }, "the top y hi edge");
+        const std::string before = deck();
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, px[0] + 10, px[1] + 10);
+        type(c, L"0.02");
+        INFO("chip: " << page.chip());
+        send(c, WM_LBUTTONUP, 0, px[0] + 10, px[1] + 10);
+        CHECK(deck() != before);
+        page.render();
+    }
+    // The gate oxide: a sio2 box over the fins, x 0.04..0.07um, then its x_max face pushed out with N naming Lg
+    // (N: a new L1, N again: Lg); the region fills only empty space (Fill), so the fins stay.
+    page.set_mode(modeller::Mode::none);
+    page.set_material("sio2");
+    draw_box_at(page, {0.04, 0.0, 0.02}, {0.07, 0.16, 0.09});
+    const solid::SolidRef gate = page.selection().solids.at(0);
+    REQUIRE(page.toggle_overlap());
+    {
+        const auto hp = face_handle(page, gate, 1);
+        const auto hs = solid::handles(page.model(), page.view(), gate);
+        const auto h = std::ranges::find_if(hs, [&](const solid::Handle& k) { return k.kind == solid::HandleKind::face && k.index == 1; });
+        REQUIRE(h != hs.end());
+        const auto to = page.screen_of_um({h->pts[0][0] + 0.01, h->pts[0][1], h->pts[0][2]});
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, hp[0], hp[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+        type(c, L"nn");
+        INFO("chip: " << page.chip());
+        CHECK(has(page.chip(), "$Lg"));
+        send(c, WM_LBUTTONUP, 0, to[0], to[1]);
+    }
+    CHECK(has(deck(), "um + $Lg 0 0.16um 0.02um 0.09um\n"));
+    // Each fin's top face (looking up z): a box's face 5, a filleted prism's side.
+    const auto top_of = [&](solid::SolidRef f) {
+        const solid::Solid& s = page.model().regions[static_cast<std::size_t>(f.region)].solids[static_cast<std::size_t>(f.solid)];
+        for (int k = 0; k < 2 + static_cast<int>(s.polygon.size()) + 6; ++k) {
+            const auto n = solid::face_normal(s, k);
+            if (n && n->axis == 2 && n->sign > 0 && (s.kind == solid::SolidKind::box ? k == 5 : k >= 2)) return k;
+        }
+        return -1;
+    };
+    // A Gaussian source/drain implant: donors (the tools' start) at 1e20, into each fin's top, the peak 10nm in.
+    page.set_mode(modeller::Mode::implant);
+    wheel(c, 300, 300, 120);  // 1e19
+    wheel(c, 300, 300, 120);  // 1e20
+    for (const solid::SolidRef f : fins) {
+        auto [px, at] = face_or_handle(page, f, top_of(f));
+        const auto to = page.screen_of_um({at[0], at[1], at[2] - 0.01});
+        const std::string before = deck();
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+        type(c, L"0.01");
+        send(c, WM_LBUTTONUP, 0, to[0], to[1]);
+        CHECK(deck() != before);
+    }
+    // The fins' background: acceptors 1e17 (Region profile).
+    page.set_mode(modeller::Mode::profile);
+    type(c, L"d");  // acceptors
+    wheel(c, 300, 300, -120);
+    wheel(c, 300, 300, -120);
+    wheel(c, 300, 300, -120);  // 1e17
+    for (const solid::SolidRef f : fins) {
+        auto [px, at] = face_or_handle(page, f, top_of(f));
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_LBUTTONUP, 0, px[0], px[1]);
+    }
+    CHECK(solid::profiles(deck()).size() == 4);
+    // Contacts: source and drain on the x faces over the fins, the gate on the top over the oxide box.
+    page.set_mode(modeller::Mode::none);
+    page.set_section({});
+    page.render();
+    drag_contact(page, {0.12, 0.002, 0.002}, {0.12, 0.158, 0.098});  // the whole face: no patch edge by the fins
+    drag_contact(page, {0.04, 0.002, 0.1}, {0.08, 0.158, 0.1});  // inside the face: its edges pick the sides
+    REQUIRE(page.selection().contact == 1);  // the gate: an electrode, by the inspector's Kind
+    SendMessageW(page.control(SolidPage::c_kind), CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(L"electrode"));
+    REQUIRE(page.commit(SolidPage::c_kind));
+    {  // turned half round (as an orbit would): the x_min face in view
+        render::Camera cam = page.view().camera;
+        cam.azimuth_deg += 180.0f;
+        page.set_camera(cam);
+    }
+    page.render();
+    drag_contact(page, {0.0, 0.002, 0.002}, {0.0, 0.158, 0.098});
+    INFO(deck());
+    REQUIRE(page.model().contacts.size() == 3);
+    // The inspector's largest interface_resolution the layout's rules allow (MT12).
+    {
+        const auto s = page.automatic_resolution();
+        INFO((s ? std::to_string(*s) : s.error()));
+        REQUIRE(s);
+        REQUIRE(page.use_automatic_resolution());
+        std::printf("MC10: interface_resolution %s\n", geo::format_length(page.resolution()).c_str());
+    }
+    const auto parsed = deck::parse(deck());
+    REQUIRE(parsed);
+    const auto plan = deck::build(*parsed);
+    INFO((plan ? std::string() : plan.error().message));
+    REQUIRE(plan);
+    const std::size_t nodes = plan->device.mesh().node_count();
+    std::printf("MC10: %zu nodes\n", nodes);
+    CHECK(nodes <= 20000);
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto eq = solve::solve_equilibrium(plan->device);
+    INFO((eq ? std::string() : eq.error().message));
+    CHECK(eq.has_value());
+    std::printf("MC10: equilibrium %.1f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+}
+
+TEST_CASE("app window modeller: slice 4's per-frame work adds at most 1 ms with 100 solids and 100 profiles (MC9, MT9, MT10)",
+          "[app][window][modeller][perf]") {
+    std::string deck = "[mesh]\ntype = generate3d\nlayered = on\ndomain = 0 10um 0 10um 0 1um\nmax_size = 0.5um\n\n[region si]\nmaterial = silicon\n";
+    for (int k = 0; k < 100; ++k) {
+        deck += std::format("\n[region r{}]\nmaterial = {}\nbox = {}um {}.8um {}um {}.8um 0 0.{}um\n", k, k % 2 ? "sio2" : "silicon", k % 10, k % 10,
+                            k / 10, k / 10, 3 + k % 7);
+    }
+    deck += "\n[doping]\nprofile = acceptor constant 1e16\n";
+    for (int k = 0; k < 99; ++k) {
+        deck += std::format("profile = donor gaussian 1e19 axis=z center={}um width=0.02um x={}um:{}.5um y={}um:{}.5um\n", 0.1 + 0.001 * k, k % 10,
+                            k % 10, k / 10, k / 10);
+    }
+    deck += "\n[equilibrium]\n";
+    auto [w, pp] = open_3d("hundred4", deck);
+    SolidPage& page = *pp;
+    REQUIRE(page.model().regions.size() == 101);
+    const std::string text = w->deck().text();
+    const auto existing = solid::profiles(text);
+    REQUIRE(existing.size() == 100);
+    std::vector<solid::Volume> volumes;
+    for (const auto& p : existing) volumes.push_back({solid::profile_extent(page.model().domain, p), solid::doping_color(true, p.peak_cm3)});
+    std::vector<double> implant, junction, drawn;
+    const solid::Box3 window{{0, 0, 0}, {4000, 4000, 0}};  // its centre in the first donor window
+    for (int k = 1; k <= 31; ++k) {
+        // An Implant drag's frame: the profile, its deck line.
+        auto t0 = std::chrono::steady_clock::now();
+        const auto ip = solid::implant_profile({2, -1}, 0, window, 100 + 10 * k, 0, NiTCAD::device::Dopant::donor, 1e19);
+        auto out = solid::add_profile(text, ip);
+        REQUIRE(out);
+        std::string line = modeller::deck_line(text, *out);
+        implant.push_back(1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        REQUIRE_FALSE(line.empty());
+        // A Junction drag's frame: the other doping at the depth (100 profiles), the erfc, its deck line.
+        t0 = std::chrono::steady_clock::now();
+        const auto jp = solid::junction_profile(existing, {2, -1}, 0, window, 500 + 10 * k, NiTCAD::device::Dopant::acceptor, 1e21);
+        INFO((jp ? std::string() : jp.error()));
+        REQUIRE(jp);
+        out = solid::add_profile(text, *jp);
+        REQUIRE(out);
+        line = modeller::deck_line(text, *out);
+        junction.push_back(1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        REQUIRE_FALSE(line.empty());
+        // The 100 profiles' volumes in the scene: the scene with them less the scene without.
+        t0 = std::chrono::steady_clock::now();
+        const auto bare = solid::solid_scene(page.model(), page.view(), page.selection());
+        const double without = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        t0 = std::chrono::steady_clock::now();
+        solid::Overlay ov;
+        ov.volumes = volumes;
+        const auto full = solid::solid_scene(page.model(), page.view(), page.selection(), {}, ov);
+        drawn.push_back(1e3 * (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() - without));
+        REQUIRE(full.triangles.size() > bare.triangles.size());
+    }
+    std::ranges::sort(implant);
+    std::ranges::sort(junction);
+    std::ranges::sort(drawn);
+    std::printf("MC9 slice 4, 100 solids, 100 profiles: Implant frame median %.3f ms (max %.3f); Junction frame median %.3f ms (max %.3f); "
+                "100 volumes drawn median +%.3f ms\n",
+                implant[implant.size() / 2], implant.back(), junction[junction.size() / 2], junction.back(), drawn[drawn.size() / 2]);
+#ifdef NDEBUG
+    CHECK(implant[implant.size() / 2] <= 1.0);
+    CHECK(junction[junction.size() / 2] <= 1.0);
+    CHECK(drawn[drawn.size() / 2] <= 1.0);
+#endif
 }

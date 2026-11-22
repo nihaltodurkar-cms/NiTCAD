@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "NiTCAD/app/geometry.hpp"
+#include "NiTCAD/device/doping_profiles.hpp"
 #include "NiTCAD/mesh/complex.hpp"
 
 namespace NiTCAD::app::solid {
@@ -260,6 +261,38 @@ void tie_edits(const Model& before, Model& after);
 // low face: a box's lo, a prism's from; near its
 // reference if it has one, else its value). False: a bad name, a number parameter, a slot out of range.
 [[nodiscard]] bool name_extent(Model& m, SolidRef s, int near, int far, std::string_view name);
+
+// --- doping and mesh tools (Unit 26m slice 4: MT9, MT10) ----------------------------------------------------------
+// The deck's [doping] profiles in order (references substituted; unreadable ones left out).
+[[nodiscard]] std::vector<device::DopingProfile> profiles(std::string_view deck);
+// The deck with `p` written as its last [doping] profile (a new [doping] section before the first contact or analysis
+// section when it has none), every other line kept byte for byte.
+[[nodiscard]] std::expected<std::string, std::string> add_profile(std::string_view deck, const device::DopingProfile& p);
+// Region profile: `constant` over the solid's bounds. The deck windows two axes; the third (the depth axis) is not
+// bounded, so it is the axis along which the solid spans most of the domain (exact where it spans all of it).
+[[nodiscard]] device::DopingProfile region_profile(const Model& m, SolidRef s, device::Dopant dopant, double peak);
+// Implant: `gaussian` along the face's axis, its peak `depth` inside the face (σ half of it), over `window` on the
+// face's plane with the erfc fall-off `lateral`.
+[[nodiscard]] device::DopingProfile implant_profile(Normal face, Coord at_face, const Box3& window, Coord depth, Coord lateral,
+                                                    device::Dopant dopant, double peak);
+// Junction: `erfc` from a face looking down an axis (-x, -y or -z: the erfc falls along its axis), its length half
+// the depth and its centre so that the profile meets the other dopant's net (`existing`, at the window's centre)
+// exactly `depth` inside the face. Errors: a face looking up an axis, no opposite doping there, or more than the level.
+[[nodiscard]] std::expected<device::DopingProfile, std::string> junction_profile(const std::vector<device::DopingProfile>& existing,
+                                                                                 Normal face, Coord at_face, const Box3& window,
+                                                                                 Coord depth, device::Dopant dopant, double peak);
+// A profile's extent in the domain, as drawn (MT9): its windows (out by 2 × lateral), along its axis the whole
+// domain (constant), centre ± 2σ (gaussian) or up to centre + 2 × length (erfc); clipped to the domain.
+[[nodiscard]] Box3 profile_extent(const Box3& domain, const device::DopingProfile& p);
+// Refine box (MT10, MQ5): the generators' size box, the deck's existing [mesh] `box = x0 y0 z0 x1 y1 z1 h` (a smaller
+// h inside it).
+struct SizeBox3 {
+    Box3 box;
+    Coord size = 0;
+    friend bool operator==(const SizeBox3&, const SizeBox3&) = default;
+};
+[[nodiscard]] std::vector<SizeBox3> size_boxes(std::string_view deck);
+[[nodiscard]] std::expected<std::string, std::string> add_size_box(std::string_view deck, const SizeBox3& b);
 
 // A [mesh] length key of the deck (max_size, interface_resolution) in cm; none when absent or not a length.
 [[nodiscard]] std::optional<double> mesh_length(std::string_view deck, std::string_view key);

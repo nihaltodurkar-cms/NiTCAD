@@ -6,10 +6,12 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <numbers>
 #include <ranges>
 #include <set>
 
 #include "deck_text.hpp"
+#include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 
@@ -1456,6 +1458,7 @@ bool inside(const std::vector<Pt>& poly, Pt p) {
 }  // namespace
 
 Snap snap(const Model& m, const WorkPlane& plane, P3 raw, Coord tolerance, std::optional<SolidRef> skip, Coord grid) {
+    const auto on_grid = [&](Coord c) { return round_to(static_cast<double>(c) / static_cast<double>(grid)) * grid; };
     std::vector<Solid> solids;
     const auto as_box = [](const Box3& b) { return Solid{SolidKind::box, b, 2, 0, 0, {}}; };
     solids.push_back(as_box(m.domain));
@@ -1514,6 +1517,10 @@ Snap snap(const Model& m, const WorkPlane& plane, P3 raw, Coord tolerance, std::
                 t = std::clamp(t / len2, 0.0, 1.0);
                 P3 q;
                 for (int k = 0; k < 3; ++k) q[k] = round_to(static_cast<double>(a[k]) + t * static_cast<double>(b[k] - a[k]));
+                // Along the edge on the grid too (Unit 26m slice 4): a pixel's place leaves slivers of a quantum.
+                for (int k = 0; k < 3; ++k) {
+                    if (grid > 0 && a[k] != b[k]) q[k] = std::clamp(on_grid(q[k]), std::min(a[k], b[k]), std::max(a[k], b[k]));
+                }
                 offer(q);
             });
         })) {
@@ -1525,7 +1532,13 @@ Snap snap(const Model& m, const WorkPlane& plane, P3 raw, Coord tolerance, std::
                 if (a == plane.normal && c == plane.offset) return;
                 P3 q = raw;
                 q[a] = c;
-                if (in_face(q)) offer(q);
+                // In the face's plane on the grid too (slice 4), where that stays in the face.
+                P3 g = q;
+                for (int k = 0; k < 3; ++k) {
+                    if (grid > 0 && k != a) g[k] = on_grid(g[k]);
+                }
+                if (in_face(g)) offer(g);
+                else if (in_face(q)) offer(q);
             };
             for (const Solid& s : solids) {
                 if (s.kind == SolidKind::box) {
@@ -1938,6 +1951,192 @@ bool name_extent(Model& m, SolidRef s, int near, int far, std::string_view name)
     if (!resolve_all(t)) return false;
     m = std::move(t);
     return true;
+}
+
+// --- doping and mesh tools (Unit 26m slice 4: MT9, MT10) ----------------------------------------------------------
+
+namespace {
+
+double cm(Coord q) { return static_cast<double>(q) / 1e8; }  // correctly rounded (q * 1e-8 is not: 7000 gives 7.000000000000001e-05)
+
+// `line` added as the last entry of the deck's `kind` section; a new section (before the first contact or analysis
+// section, else at the end) when it has none. Every other line kept byte for byte.
+std::expected<std::string, std::string> append_entry(std::string_view text, std::string_view kind, const std::string& line) {
+    const auto d = deck::parse(text);
+    if (!d) return std::unexpected(d.error().message);
+    Lines l = split(text);
+    const deck::Section* section = nullptr;
+    for (const auto& s : d->sections) {
+        if (s.kind == kind) section = &s;
+    }
+    if (section) {
+        const int at = section_last(l, *section) + 1;
+        l.body.insert(l.body.begin() + at, line);
+        l.eol.insert(l.eol.begin() + at, l.nl);
+        if (at > 0 && l.eol[static_cast<std::size_t>(at - 1)].empty()) l.eol[static_cast<std::size_t>(at - 1)] = l.nl;
+    } else {
+        static const std::set<std::string_view> later{"contact", "thermal_contact", "equilibrium", "sweep", "transient",
+                                                      "small_signal", "trace", "output", "adapt"};
+        int at = static_cast<int>(l.body.size());
+        for (const auto& s : d->sections) {
+            if (later.contains(s.kind)) {
+                at = s.line - 1;
+                break;
+            }
+        }
+        const std::vector<std::string> block{"[" + std::string(kind) + "]", line, ""};
+        if (at > 0 && l.eol[static_cast<std::size_t>(at - 1)].empty()) l.eol[static_cast<std::size_t>(at - 1)] = l.nl;
+        for (std::size_t k = 0; k < block.size(); ++k) {
+            l.body.insert(l.body.begin() + at + static_cast<int>(k), block[k]);
+            l.eol.insert(l.eol.begin() + at + static_cast<int>(k), l.nl);
+        }
+    }
+    std::string out;
+    for (std::size_t k = 0; k < l.body.size(); ++k) out += l.body[k] + l.eol[k];
+    return out;
+}
+
+// erfc⁻¹(y) for 0 < y < 2, by Newton's method on erfc from a rational start (to the last bits).
+double erfc_inverse(double y) {
+    double x = y < 1.0 ? std::sqrt(-std::log(y / 2.0)) : -std::sqrt(-std::log(1.0 - y / 2.0));
+    for (int k = 0; k < 60; ++k) {
+        const double f = std::erfc(x) - y;
+        const double step = f / (-2.0 / std::sqrt(std::numbers::pi) * std::exp(-x * x));
+        x -= step;
+        if (std::abs(step) <= 1e-16 * std::max(1.0, std::abs(x))) break;
+    }
+    return x;
+}
+
+}  // namespace
+
+std::vector<device::DopingProfile> profiles(std::string_view text) {
+    std::vector<device::DopingProfile> out;
+    const auto d = deck::parse(text);
+    if (!d) return out;
+    const auto params = deck::parameters(*d);
+    for (const auto& s : d->sections) {
+        if (s.kind != "doping") continue;
+        for (const auto& e : s.entries) {
+            if (e.key != "profile") continue;
+            const auto v = params ? deck::substitute(e.value, *params) : std::expected<std::string, std::string>(e.value);
+            if (!v) continue;
+            if (auto p = deck::parse_profile(*v)) out.push_back(*p);
+        }
+    }
+    return out;
+}
+
+std::expected<std::string, std::string> add_profile(std::string_view text, const device::DopingProfile& p) {
+    return append_entry(text, "doping", "profile = " + deck::profile_text(p));
+}
+
+device::DopingProfile region_profile(const Model& m, SolidRef s, device::Dopant dopant, double peak) {
+    device::DopingProfile p{.dopant = dopant, .peak_cm3 = peak, .shape = device::DepthShape::constant};
+    const Box3 b = m.regions[static_cast<std::size_t>(s.region)].solids[static_cast<std::size_t>(s.solid)].bounds();
+    // The depth axis (unbounded: the deck's windows are on the other two) the one the solid spans most of the domain
+    // along, z on a tie: exact when it spans the domain there.
+    double best = -1.0;
+    for (const int a : {2, 1, 0}) {
+        const double span = static_cast<double>(b.hi[a] - b.lo[a]) / static_cast<double>(std::max<Coord>(1, m.domain.hi[a] - m.domain.lo[a]));
+        if (span > best + 1e-12) {
+            best = span;
+            p.axis = a;
+        }
+    }
+    for (int a = 0; a < 3; ++a) {
+        if (a == p.axis) continue;
+        p.lo[static_cast<std::size_t>(a)] = cm(b.lo[a]);
+        p.hi[static_cast<std::size_t>(a)] = cm(b.hi[a]);
+    }
+    return p;
+}
+
+device::DopingProfile implant_profile(Normal face, Coord at_face, const Box3& window, Coord depth, Coord lateral, device::Dopant dopant,
+                                      double peak) {
+    device::DopingProfile p{.dopant = dopant, .peak_cm3 = peak, .shape = device::DepthShape::gaussian, .axis = face.axis};
+    p.center = cm(at_face - face.sign * depth);  // into the solid: against the face's outward normal
+    p.width = cm(depth) / 2.0;
+    p.lateral = cm(lateral);
+    for (int a = 0; a < 3; ++a) {
+        if (a == face.axis) continue;
+        p.lo[static_cast<std::size_t>(a)] = cm(window.lo[a]);
+        p.hi[static_cast<std::size_t>(a)] = cm(window.hi[a]);
+    }
+    return p;
+}
+
+std::expected<device::DopingProfile, std::string> junction_profile(const std::vector<device::DopingProfile>& existing, Normal face,
+                                                                   Coord at_face, const Box3& window, Coord depth,
+                                                                   device::Dopant dopant, double peak) {
+    if (face.sign > 0) {
+        return std::unexpected(std::string("a junction diffuses from a face looking down an axis (-x, -y or -z): the erfc profile falls along its axis"));
+    }
+    if (depth <= 0) return std::unexpected(std::string("the junction lies inside the solid: drag into it"));
+    device::DopingProfile p{.dopant = dopant, .peak_cm3 = peak, .shape = device::DepthShape::erfc, .axis = face.axis};
+    for (int a = 0; a < 3; ++a) {
+        if (a == face.axis) continue;
+        p.lo[static_cast<std::size_t>(a)] = cm(window.lo[a]);
+        p.hi[static_cast<std::size_t>(a)] = cm(window.hi[a]);
+    }
+    // The junction's point: the window's centre at the dragged depth; the background there the other dopant's net.
+    mesh::Point x{};
+    for (int a = 0; a < 3; ++a) x[static_cast<std::size_t>(a)] = 0.5 * (cm(window.lo[a]) + cm(window.hi[a]));
+    x[static_cast<std::size_t>(face.axis)] = cm(at_face + depth);
+    double background = 0.0;
+    for (const auto& q : existing) background += (q.dopant == dopant ? -1.0 : 1.0) * device::evaluate(q, x);
+    if (!(background > 0.0)) return std::unexpected(std::string("no opposite doping at that depth for a junction to meet"));
+    if (!(background < peak)) return std::unexpected(std::string("the opposite doping there is above the level: raise the level"));
+    // peak/2 erfc((xj - c)/w) = background, with w half the depth: c = xj - w erfc⁻¹(2 background / peak).
+    p.width = cm(depth) / 2.0;
+    p.center = x[static_cast<std::size_t>(face.axis)] - p.width * erfc_inverse(2.0 * background / peak);
+    return p;
+}
+
+
+Box3 profile_extent(const Box3& domain, const device::DopingProfile& p) {
+    const auto q = [](double c) { return static_cast<Coord>(std::llround(c * 1e8)); };
+    Box3 b = domain;
+    for (int a = 0; a < 3; ++a) {
+        const auto i = static_cast<std::size_t>(a);
+        double lo = -std::numeric_limits<double>::infinity(), hi = std::numeric_limits<double>::infinity();
+        if (a != p.axis) {
+            lo = p.lo[i] - 2.0 * p.lateral;
+            hi = p.hi[i] + 2.0 * p.lateral;
+        } else if (p.shape == device::DepthShape::gaussian) {
+            lo = p.center - 2.0 * p.width;
+            hi = p.center + 2.0 * p.width;
+        } else if (p.shape == device::DepthShape::erfc) {
+            hi = p.center + 2.0 * p.width;
+        }
+        if (std::isfinite(lo)) b.lo[a] = std::clamp(q(lo), domain.lo[a], domain.hi[a]);
+        if (std::isfinite(hi)) b.hi[a] = std::clamp(q(hi), domain.lo[a], domain.hi[a]);
+        b.lo[a] = std::min(b.lo[a], b.hi[a]);
+    }
+    return b;
+}
+std::vector<SizeBox3> size_boxes(std::string_view text) {
+    std::vector<SizeBox3> out;
+    const auto d = deck::parse(text);
+    if (!d) return out;
+    for (const auto& s : d->sections) {
+        if (s.kind != "mesh") continue;
+        for (const auto& e : s.entries) {
+            if (e.key != "box") continue;
+            std::vector<std::string> refs;
+            const auto c = lengths(e.value, 7, {}, refs);
+            if (!c) continue;
+            out.push_back({normalized({(*c)[0], (*c)[1], (*c)[2]}, {(*c)[3], (*c)[4], (*c)[5]}), (*c)[6]});
+        }
+    }
+    return out;
+}
+
+std::expected<std::string, std::string> add_size_box(std::string_view text, const SizeBox3& b) {
+    if (b.size <= 0 || !(b.box.lo.x < b.box.hi.x && b.box.lo.y < b.box.hi.y && b.box.lo.z < b.box.hi.z)) {
+        return std::unexpected(std::string("a refine box needs a volume and a size"));
+    }
+    return append_entry(text, "mesh", "box = " + patch_text(b.box) + "  " + format_length(b.size));
 }
 
 }  // namespace NiTCAD::app::solid

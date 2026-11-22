@@ -1745,3 +1745,87 @@ TEST_CASE("parameters: a tied drag frame with 100 tied solids adds at most 1 ms 
     for (int k = 0; k < 100; ++k) CHECK(m.regions[static_cast<std::size_t>(k) + 1].solids[0].box.hi.x - m.regions[static_cast<std::size_t>(k) + 1].solids[0].box.lo.x == 80);
     CHECK(ms[ms.size() / 2] <= 1.0);
 }
+
+// --- Unit 26m slice 4 (MT9, MT10, MC8): doping and mesh tools -------------------------------------------------------
+
+TEST_CASE("doping and mesh tools: each writes exactly its line, and the built doping is the profiles' formula (MC8)",
+          "[app][solid][doping]") {
+    const auto m = read_model(well_deck);
+    REQUIRE(m);
+    REQUIRE(m->editable());
+    using NiTCAD::device::Dopant;
+    using NiTCAD::device::DepthShape;
+    std::string deck = well_deck;
+    const auto add = [&](const NiTCAD::device::DopingProfile& p, const std::string& line) {
+        const auto out = add_profile(deck, p);
+        REQUIRE(out);
+        INFO(*out);
+        CHECK(has(*out, "\n" + line + "\n"));
+        // Minimal edit: one line more, the rest byte for byte.
+        CHECK(out->size() == deck.size() + line.size() + 1);
+        deck = *out;
+    };
+    // Region profile on the well (a prism along x over y 0..0.6um, z 0..0.2um): it spans the domain along y, so y is
+    // the depth axis and x, z the windows.
+    const auto region = region_profile(*m, {2, 0}, Dopant::donor, 1e18);
+    CHECK(region.shape == DepthShape::constant);
+    CHECK(region.axis == 1);
+    add(region, "profile = donor constant 1e+18 axis=y x=2e-05cm:8e-05cm z=0cm:2e-05cm");
+    // Implant through the top (z = 0.6um, looking up z): its peak 50nm down, σ 25nm, over x 0.3..0.7um, y 0.1..0.5um.
+    const Box3 window{{3000, 1000, 6000}, {7000, 5000, 6000}};
+    const auto implant = implant_profile({2, 1}, 6000, window, 50 * nm, 10 * nm, Dopant::acceptor, 1e19);
+    CHECK(implant.center == 5500 / 1e8);
+    CHECK(implant.width == 500 / 1e8 / 2.0);
+    add(implant, "profile = acceptor gaussian 1e+19 axis=z center=" + std::format("{}", implant.center) + "cm width=" +
+                     std::format("{}", implant.width) + "cm x=3e-05cm:7e-05cm y=1e-05cm:5e-05cm lateral=1e-06cm");
+    // Junction from the bottom (z = 0, looking down z) meeting the deck's 1e16 acceptors 100nm up.
+    const Box3 bottom{{0, 0, 0}, {10000, 6000, 0}};
+    const auto existing = profiles(deck);
+    REQUIRE(existing.size() == 3);  // the deck's own, the two above
+    const auto junction = junction_profile({existing.front()}, {2, -1}, 0, bottom, 100 * nm, Dopant::donor, 1e19);
+    REQUIRE(junction);
+    CHECK(junction->shape == DepthShape::erfc);
+    const NiTCAD::mesh::Point xj{0.5e-4, 0.3e-4, 100 * nm / 1e8};
+    CHECK(std::abs(NiTCAD::device::evaluate(*junction, xj) - 1e16) <= 1e-9 * 1e16);
+    CHECK_FALSE(junction_profile({existing.front()}, {2, 1}, 6000, bottom, 100 * nm, Dopant::donor, 1e19));   // looking up
+    CHECK_FALSE(junction_profile({existing.front()}, {2, -1}, 0, bottom, 100 * nm, Dopant::acceptor, 1e19));  // no opposite
+    CHECK_FALSE(junction_profile({existing.front()}, {2, -1}, 0, bottom, 100 * nm, Dopant::donor, 1e15));     // below it
+    add(*junction, "profile = " + NiTCAD::deck::profile_text(*junction));
+    CHECK(has(NiTCAD::deck::profile_text(*junction), "donor erfc 1e+19 axis=z center="));
+    // The profiles read back as written.
+    const auto back = profiles(deck);
+    REQUIRE(back.size() == 4);
+    CHECK(NiTCAD::deck::profile_text(back[1]) == NiTCAD::deck::profile_text(region));
+    CHECK(NiTCAD::deck::profile_text(back[2]) == NiTCAD::deck::profile_text(implant));
+    CHECK(NiTCAD::deck::profile_text(back[3]) == NiTCAD::deck::profile_text(*junction));
+    // Max size and a refine box: the [mesh] lines.
+    auto meshed = set_mesh_length(deck, "max_size", 1200);
+    REQUIRE(meshed);
+    CHECK(has(*meshed, "max_size = 0.12um\n"));
+    const SizeBox3 refine{{{2000, 0, 4000}, {8000, 6000, 6000}}, 400};
+    meshed = add_size_box(*meshed, refine);
+    REQUIRE(meshed);
+    CHECK(has(*meshed, "box = 0.2um 0 0.4um  0.8um 0.6um 0.6um  0.04um\n"));
+    REQUIRE(size_boxes(*meshed).size() == 1);
+    CHECK(size_boxes(*meshed)[0] == refine);
+    CHECK_FALSE(add_size_box(*meshed, {{{0, 0, 0}, {0, 10, 10}}, 10}));
+    // MC8: the built device's net doping at every node is the profiles' formula, to 1e-12 relative.
+    const auto parsed = NiTCAD::deck::parse(*meshed);
+    REQUIRE(parsed);
+    const auto plan = NiTCAD::deck::build(*parsed);
+    REQUIRE(plan);
+    const auto& dev = plan->device;
+    const auto pts = dev.mesh().points();
+    const auto all = profiles(*meshed);
+    std::size_t checked = 0;
+    for (std::size_t k = 0; k < pts.size(); ++k) {
+        if (NiTCAD::device::is_insulator(dev.regions()[dev.node_region()[k]])) continue;
+        double nd = 0.0, na = 0.0;
+        for (const auto& p : all) (p.dopant == Dopant::donor ? nd : na) += NiTCAD::device::evaluate(p, pts[k]);
+        CHECK(std::abs(dev.donors()[k] - nd) <= 1e-12 * std::max(1.0, nd));
+        CHECK(std::abs(dev.acceptors()[k] - na) <= 1e-12 * std::max(1.0, na));
+        ++checked;
+    }
+    CHECK(checked > 100);
+    std::printf("MC8: %zu semiconductor nodes checked against the formulas\n", checked);
+}
