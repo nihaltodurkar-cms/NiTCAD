@@ -113,6 +113,16 @@ struct Figure {
 };
 [[nodiscard]] std::vector<Figure> extracted_figures(const Workspace& w);
 
+// The curve the figures are read from (Unit 26n, DT7: the sweep overlay draws it): the swept contact and the sensed
+// one, for a swept gate or electrode the contact carrying the most current at the last point, else the swept contact
+// itself. None without a sweep of two points or more, or when a swept gate's most current is its own.
+struct FigureCurve {
+    std::size_t swept = 0;
+    std::size_t sense = 0;
+    bool transfer = false;  // a gate or electrode swept
+};
+[[nodiscard]] std::optional<FigureCurve> figure_curve(const Workspace& w);
+
 // The contact whose bias varies most over the points (the swept one), as `nitcad plot` chooses it.
 [[nodiscard]] std::size_t swept_contact(const std::vector<std::vector<double>>& biases);
 
