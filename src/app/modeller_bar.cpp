@@ -87,7 +87,7 @@ void ModellerBar::set_group(Group g) {
 void ModellerBar::rebuild() {
     for (HWND h : tools_) DestroyWindow(h);
     tools_.clear();
-    const auto list = tools(group_);
+    const auto list = tools_for(group_, three_d_);
     for (std::size_t k = 0; k < list.size(); ++k) {
         const bool action = list[k].action == Action::duplicate || list[k].action == Action::overlap;  // pressed once
         tools_.push_back(make(L"BUTTON", win32::widen(list[k].label).c_str(),
@@ -100,7 +100,7 @@ void ModellerBar::rebuild() {
 
 void ModellerBar::set_tool(int tool) {
     tool_ = tool;
-    const auto list = tools(group_);
+    const auto list = tools_for(group_, three_d_);
     std::string how;
     std::string_view name;
     for (std::size_t k = 0; k < list.size(); ++k) {
@@ -133,7 +133,12 @@ void ModellerBar::set_mesh(bool on) { SendMessageW(corner_[mesh], BM_SETCHECK, o
 void ModellerBar::set_measure(bool on) { SendMessageW(corner_[measure], BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0); }
 
 void ModellerBar::size_bar() {
-    const int pad = scaled(4, dpi_), bh = scaled(24, dpi_), bw = scaled(84, dpi_), line = scaled(15, dpi_);
+    const int pad = scaled(4, dpi_), bh = scaled(24, dpi_), line = scaled(15, dpi_);
+    // The buttons narrow to keep the bar inside the viewport (a group of five at 200 %), never under 48 px at 96 dpi.
+    int bw = scaled(84, dpi_);
+    const int n = static_cast<int>(tools_.size());
+    const int room = static_cast<int>(viewport_.width()) - 2 * scaled(8, dpi_) - 2 - pad;
+    if (n > 0 && room > 0 && n * (bw + pad / 2) > room) bw = std::max(scaled(48, dpi_), room / n - pad / 2);
     int x = pad;
     for (HWND h : tools_) {
         MoveWindow(h, x, pad, bw, bh, TRUE);
@@ -150,8 +155,13 @@ void ModellerBar::size_bar() {
 }
 
 void ModellerBar::place(const Box& viewport, const std::optional<Box>& selection) {
+    const bool resize = viewport.width() != viewport_.width();
     viewport_ = viewport;
     selection_ = selection;
+    if (resize) {  // the buttons' width follows the viewport's (size_bar places the bar again)
+        size_bar();
+        return;
+    }
     RECT r{};
     GetWindowRect(bar_, &r);
     const double gap = scaled(8, dpi_);
@@ -166,7 +176,7 @@ std::optional<ModellerBar::Command> ModellerBar::command(int id) const {
     const int k = id - first_;
     if (k >= group0 && k < group0 + group_count) return Command{Command::Kind::group, k - group0};
     if (k >= corner0 && k < corner0 + corner_count) return Command{Command::Kind::corner, k - corner0};
-    const auto list = tools(group_);
+    const auto list = tools_for(group_, three_d_);
     if (k >= tool0 && k < tool0 + static_cast<int>(list.size())) {
         const ToolEntry& t = list[static_cast<std::size_t>(k - tool0)];
         if (t.action == Action::duplicate) return Command{Command::Kind::duplicate, 0};

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <format>
+#include <numbers>
 #include <sstream>
 
 #include "NiTCAD/app/deck_vocabulary.hpp"
@@ -144,6 +145,7 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
     add(c_translucent, L"BUTTON", L"Translucent (T)", WS_TABSTOP | BS_AUTOCHECKBOX);
     add(c_convert, L"BUTTON", L"Convert to layered generate3d", WS_TABSTOP | BS_PUSHBUTTON);
     add(c_overlap, L"BUTTON", L"Fills only empty space (overlap = fill)", WS_TABSTOP | BS_AUTOCHECKBOX);
+    add(c_resolution, L"BUTTON", L"Use the largest interface_resolution", WS_TABSTOP | BS_PUSHBUTTON);  // MT12
     for (const int c : {c_material, c_draw}) {
         for (const std::string& mat : choices_of("region", "material")) SendMessageW(control(c), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(win32::widen(mat).c_str()));
     }
@@ -230,6 +232,7 @@ void SolidPage::layout_inspector() {
     line(c_apply);
     pair(c_kind_label, c_kind, MulDiv(160, dpi_, 96));
     line(c_convert);
+    line(c_resolution);
     y += pad;
     pair(c_draw_label, c_draw, MulDiv(200, dpi_, 96));
     pair(c_plane_label, c_plane, MulDiv(90, dpi_, 96));
@@ -251,6 +254,7 @@ void SolidPage::reload(bool fit_view) {
     if (text != text_seen_) history_.clear();  // edited elsewhere (or a new deck): the page's undo starts again
     const bool first = text_seen_.empty();
     text_seen_ = text;
+    read_mesh_keys();
     auto m = read_model(text);
     if (!m) {
         m_ = {};
@@ -282,6 +286,7 @@ void SolidPage::prune_selection() {
 void SolidPage::apply_text(const std::string& text) {
     host_.solid_edited(text);
     text_seen_ = text;
+    read_mesh_keys();
     if (auto m = read_model(text)) {
         m_ = std::move(*m);
         message_ = m_.mesh == MeshKind::unsupported ? m_.why : std::string();
@@ -429,7 +434,7 @@ void SolidPage::set_tool(Tool t) {
 void SolidPage::update_tool_buttons() {
     // A tool armed by its key opens a group that holds it (Pan and Measure are in none: the group stays).
     const auto in = [&](modeller::Group g) {
-        return std::ranges::any_of(modeller::tools(g), [&](const modeller::ToolEntry& e) {
+        return std::ranges::any_of(modeller::tools_for(g, true), [&](const modeller::ToolEntry& e) {
             return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_);
         });
     };
@@ -460,8 +465,8 @@ void SolidPage::reset_view() {
 
 void SolidPage::set_group(modeller::Group g) {
     bar_->set_group(g);
-    if (g != modeller::Group::transform) mode_ = modeller::Mode::none;
-    const auto list = modeller::tools(g);
+    if (mode_ != modeller::Mode::none && modeller::group_of(mode_) != g) mode_ = modeller::Mode::none;
+    const auto list = modeller::tools_for(g, true);
     const bool has = std::ranges::any_of(list, [&](const modeller::ToolEntry& e) { return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_); });
     if (!has && !list.empty() && list.front().action == modeller::Action::tool) {
         set_tool(static_cast<Tool>(list.front().tool));
@@ -479,7 +484,7 @@ void SolidPage::set_mode(modeller::Mode m) {
     cancel();
     mode_ = m;
     array_count_ = 3;
-    if (m != modeller::Mode::none && bar_->group() != modeller::Group::transform) bar_->set_group(modeller::Group::transform);
+    if (m != modeller::Mode::none && bar_->group() != modeller::group_of(m)) bar_->set_group(modeller::group_of(m));
     bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
     place_bar();
     invalidate();
@@ -589,6 +594,152 @@ bool SolidPage::transform_click(const Pick& p, bool shift, bool ctrl) {
     host_.solid_status("Align: nothing moves (the faces are there already), or a solid would leave the limits.");
     return false;
 }
+// --- Unit 26m slice 2: the Faces and Edges modes, Cylinder, meshable by construction (MT6, MT7, MT12) --------------
+
+void SolidPage::begin_drag(Drag d) {
+    drag_ = d;
+    button_ = true;
+    m_start_ = m_;
+    SetCapture(canvas_);
+}
+
+void SolidPage::read_mesh_keys() {
+    const auto s = mesh_length(text_seen_, "interface_resolution");
+    res_q_ = s ? static_cast<Coord>(std::llround(*s * static_cast<double>(per_um) * 1e4)) : 0;
+    max_size_ = mesh_length(text_seen_, "max_size").value_or(0.0);
+}
+
+Coord SolidPage::gap_up(Coord v) const {
+    const Coord g = 4 * res_q_;
+    return v != 0 && std::abs(v) < g ? (v < 0 ? -g : g) : v;
+}
+
+std::expected<double, std::string> SolidPage::automatic_resolution() const {
+    if (!m_.editable()) return std::unexpected(std::string("the deck is not a layered 3D one"));
+    if (!(max_size_ > 0.0)) return std::unexpected(std::string("the deck has no max_size"));
+    return solid::automatic_resolution(m_, max_size_);
+}
+
+bool SolidPage::use_automatic_resolution() {
+    const auto s = automatic_resolution();
+    if (!s) {
+        host_.solid_status("No interface_resolution passes the rules: " + s.error());
+        return false;
+    }
+    if (std::isinf(*s)) {
+        host_.solid_status("The layout has no interfaces: any interface_resolution goes.");
+        return false;
+    }
+    const Coord q = static_cast<Coord>(std::floor(*s * static_cast<double>(per_um) * 1e4));
+    if (q <= 0) return false;
+    const std::string text = host_.solid_deck();
+    const auto out = set_mesh_length(text, "interface_resolution", q);
+    const auto e = extent(m_);
+    const std::string about = e ? std::format("; about {:.0f} nodes (MT12 estimate)", node_estimate(*e, max_size_, static_cast<double>(q) * 1e-8)) : std::string();
+    host_.solid_status("interface_resolution = " + geo::format_length(q) + ", the largest the layout's rules allow" + about);
+    if (!out || *out == text) return false;
+    history_.record(text);
+    apply_text(*out);
+    update_inspector();
+    return true;
+}
+
+// The edge cut of size r on the model the drag started from (unchanged when refused); chords_ the fillet's chords.
+Model SolidPage::cut_model(Coord r) {
+    Model next = m_start_;
+    chords_ = 0;
+    const Solid* s = solid_at(m_start_, ref_);
+    if (!s || r <= 0) return next;
+    const auto ec = edge_corner(*s, edge_);
+    if (!ec) return next;
+    if (mode_ == modeller::Mode::chamfer) {
+        chamfer_edge(next, ref_, edge_, r);
+        return next;
+    }
+    // MQ4, MT12 (2): ⌈θ / 15°⌉ chords, fewer while one is under the generator's 6 s.
+    const double turn = geo::corner_turn(ec->prism.polygon, ec->corner);
+    chords_ = geo::arc_segments(turn, static_cast<double>(r), 6.0 * static_cast<double>(res_q_));
+    if (chords_ > 0) fillet_edge(next, ref_, edge_, r, chords_);
+    return next;
+}
+
+bool SolidPage::tool_press(const Pick& p, double x, double y) {
+    using modeller::Mode;
+    if (mode_ == Mode::none || modeller::group_of(mode_) == modeller::Group::transform) return false;
+    const bool on_face = (p.kind == PickKind::face || (p.kind == PickKind::handle && p.handle == HandleKind::face)) && p.solid.solid >= 0;
+    if (mode_ == Mode::inset || mode_ == Mode::extrude) {
+        if (!on_face) return false;
+        const Solid* s = solid_at(m_, p.solid);
+        const auto n = s ? face_normal(*s, p.index) : std::nullopt;
+        if (!n) {
+            host_.solid_status("A slanted face takes no inset or extrusion; press another face.");
+            return true;
+        }
+        ref_ = p.solid;
+        index_ = p.index;
+        normal_ = *n;
+        origin_ = p.at;  // a face's hit point, or a handle's own place on the face (pick sets it)
+        sel_ = {{p.solid}, -1};
+        update_inspector();
+        if (mode_ == Mode::extrude) {
+            start_s_ = along_axis(m_, v_, x, y, origin_, n->axis);
+            begin_drag(Drag::extrude);
+        } else {
+            const auto q = on_plane(m_, v_, x, y, n->axis, origin_[static_cast<std::size_t>(n->axis)]);
+            if (!q) return true;
+            start_p_ = *q;
+            margin_ = 0;
+            begin_drag(Drag::inset);
+        }
+        return true;
+    }
+    // The Edges modes: an edge along a solid's axis (Round vertex: a prism's vertex handle); a press on a solid picks it,
+    // so its edges can be picked, and moves nothing.
+    const bool on_edge = p.kind == PickKind::edge && p.solid.solid >= 0 && mode_ != Mode::round;
+    const bool on_vertex = p.kind == PickKind::handle && p.handle == HandleKind::vertex && mode_ == Mode::round;
+    if (!on_edge && !on_vertex) {
+        if (p.kind == PickKind::face && p.solid.solid >= 0) {
+            sel_ = {{p.solid}, -1};
+            update_inspector();
+            invalidate();
+            host_.solid_status(mode_ == Mode::round ? "Now drag in from one of its vertex handles." : "Now drag in from one of its edges along its axis.");
+            return true;
+        }
+        return false;
+    }
+    const Solid* s = solid_at(m_, p.solid);
+    if (!s) return true;
+    edge_ = on_vertex ? 3 * p.index + 2 : p.index;
+    const auto ec = edge_corner(*s, edge_);
+    if (!ec) {
+        host_.solid_status("That edge is a cap's: chamfers, fillets and tapers take edges along a solid's axis.");
+        return true;
+    }
+    ref_ = p.solid;
+    axis_ = ec->prism.axis;
+    origin_ = um_of(from_uv(axis_, ec->prism.polygon[static_cast<std::size_t>(ec->corner)], quanta_of(p.at)[axis_]));
+    const auto q = on_plane(m_, v_, x, y, axis_, origin_[static_cast<std::size_t>(axis_)]);
+    if (!q) return true;
+    start_p_ = *q;
+    chords_ = 0;
+    begin_drag(mode_ == Mode::taper ? Drag::taper : Drag::cut);
+    return true;
+}
+
+void SolidPage::finish_inset() {
+    Model done = m_;
+    const bool changed = !(done == m_start_);
+    m_ = m_start_;
+    drag_ = Drag::none;
+    button_ = false;
+    end_drag_ui();
+    if (GetCapture() == canvas_) ReleaseCapture();
+    if (changed) commit_model(std::move(done));
+    else host_.solid_status("The inset is not taken (it needs a depth, and a margin that leaves it a size).");
+    update_inspector();
+    invalidate();
+}
+
 std::optional<modeller::Box> SolidPage::selection_bounds() const {
     std::vector<Box3> boxes;
     for (const SolidRef s : sel_.solids) {
@@ -636,8 +787,20 @@ std::optional<Model> SolidPage::pending() const {
     case Drag::axis:
     case Drag::plane:
     case Drag::face:
+    case Drag::cut:
+    case Drag::taper:
+    case Drag::extrude:
+    case Drag::inset:
+    case Drag::inset_depth:
     case Drag::vertex:
     case Drag::contact_move: return m_;
+    case Drag::radius: {
+        if (preview_.solids.empty()) return std::nullopt;
+        Model next = m_;
+        const Solid& s = preview_.solids.front();
+        if (add_prism(next, s.axis, s.from, s.to, s.polygon, material_) < 0) return std::nullopt;
+        return next;
+    }
     case Drag::base: {
         // As released now: the height one grid step (on_up).
         Model next = m_;
@@ -697,6 +860,33 @@ std::string SolidPage::chip_value() const {
         break;
     }
     case Drag::height: v = "height " + chip_length(height_); break;
+    case Drag::cut:
+        v = (mode_ == modeller::Mode::chamfer ? "cut " : "radius ") + chip_length(drag_s_);
+        if (mode_ != modeller::Mode::chamfer) v += chords_ > 0 ? std::format(", {} chords", chords_) : std::string(", chords under 6 s");
+        break;
+    case Drag::taper: {
+        v = offset(drag_d_);
+        if (const Solid* s = solid_at(m_start_, ref_)) {
+            if (const auto ec = edge_corner(*s, edge_)) {
+                // The wall leaning: the neighbour edge across the move, its length against the offset.
+                const auto& w = ec->prism.polygon;
+                const std::size_t n = w.size(), k = static_cast<std::size_t>(ec->corner);
+                const Pt d = uv_of(axis_, drag_d_);
+                for (const std::size_t j : {(k + n - 1) % n, (k + 1) % n}) {
+                    const double ex = static_cast<double>(w[j].x - w[k].x), ey = static_cast<double>(w[j].y - w[k].y);
+                    if (ex * static_cast<double>(d.x) + ey * static_cast<double>(d.y) == 0.0 && (d.x != 0 || d.y != 0)) {
+                        v += std::format(", wall {:.1f}°", std::atan2(std::hypot(static_cast<double>(d.x), static_cast<double>(d.y)), std::hypot(ex, ey)) * 180.0 / std::numbers::pi);
+                        break;
+                    }
+                }
+            }
+        }
+        break;
+    }
+    case Drag::extrude: v = "depth " + chip_length(drag_s_); break;
+    case Drag::inset: v = "margin " + chip_length(margin_); break;
+    case Drag::inset_depth: v = "margin " + chip_length(margin_) + ", depth " + chip_length(drag_s_); break;
+    case Drag::radius: v = "radius " + chip_length(radius_) + (preview_.solids.empty() ? std::string(", sides under 6 s") : std::format(", {} sides", preview_.solids.front().polygon.size())); break;
     case Drag::measure: {
         const double d = std::sqrt(std::pow(static_cast<double>(b_.x - a_.x), 2) + std::pow(static_cast<double>(b_.y - a_.y), 2) +
                                    std::pow(static_cast<double>(b_.z - a_.z), 2)) / static_cast<double>(per_um);
@@ -730,7 +920,8 @@ void SolidPage::end_drag_ui() {
 }
 
 bool SolidPage::on_char(wchar_t c) {
-    const bool scalar = drag_ == Drag::axis || drag_ == Drag::face || drag_ == Drag::height;
+    const bool scalar = drag_ == Drag::axis || drag_ == Drag::face || drag_ == Drag::height || drag_ == Drag::cut || drag_ == Drag::taper ||
+                        drag_ == Drag::extrude || drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius;
     const bool two = drag_ == Drag::move || drag_ == Drag::plane || drag_ == Drag::base || drag_ == Drag::array;
     if (!scalar && !two) return false;
     if (c == L'\b') {
@@ -781,6 +972,12 @@ void SolidPage::finish_height() {
 void SolidPage::apply_drag() {
     switch (drag_) {
     case Drag::height: finish_height(); return;
+    case Drag::inset_depth: finish_inset(); return;
+    case Drag::cut:
+    case Drag::taper:
+    case Drag::extrude:
+    case Drag::inset:
+    case Drag::radius:
     case Drag::move:
     case Drag::array:
     case Drag::axis:
@@ -796,7 +993,8 @@ void SolidPage::apply_drag() {
 
 void SolidPage::cancel() {
     if (drag_ == Drag::move || drag_ == Drag::axis || drag_ == Drag::plane || drag_ == Drag::face || drag_ == Drag::vertex ||
-        drag_ == Drag::contact_move || drag_ == Drag::array) {
+        drag_ == Drag::contact_move || drag_ == Drag::array || drag_ == Drag::cut || drag_ == Drag::taper || drag_ == Drag::extrude ||
+        drag_ == Drag::inset || drag_ == Drag::inset_depth) {
         m_ = copy_from_ ? *copy_from_ : m_start_;
         if (copy_from_) sel_ = copy_sel_;
     }
@@ -941,6 +1139,7 @@ void SolidPage::update_inspector() {
          false);
     for (int k = 0; k < 12; ++k) show({c_x0_label + k}, false);
     const bool usable = m_.mesh != MeshKind::unsupported;
+    show({c_resolution}, m_.editable());
     show({c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset, c_section_label, c_section, c_cut_label, c_cut, c_translucent},
          usable);
     SendMessageW(control(c_plane), CB_SETCURSEL, static_cast<WPARAM>(v_.plane.normal), 0);
@@ -1029,6 +1228,10 @@ bool SolidPage::commit(int c) {
     }
     if (c == c_convert) {
         convert();
+        return true;
+    }
+    if (c == c_resolution) {
+        use_automatic_resolution();
         return true;
     }
     Model next = m_;
@@ -1122,6 +1325,10 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
         finish_height();
         return;
     }
+    if (drag_ == Drag::inset_depth) {  // MT6: the click ends the inset
+        finish_inset();
+        return;
+    }
     entry_.clear();
     typed_axis_ = -1;
     drag_d_ = {};
@@ -1134,6 +1341,11 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
         if ((mode_ == modeller::Mode::mirror || mode_ == modeller::Mode::align) && editable &&
             (solid_face || (mode_ == modeller::Mode::align && p.kind == PickKind::face && p.domain_face >= 0))) {
             transform_click(p, shift, ctrl);
+            invalidate();
+            return;
+        }
+        // Unit 26m slice 2 (MT6, MT7): the Faces and Edges modes.
+        if (editable && tool_press(p, x, y)) {
             invalidate();
             return;
         }
@@ -1316,6 +1528,17 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
         begin(Drag::contact);
         return;
     }
+    case Tool::cylinder: {  // MT7: the centre on the work plane, then the radius, then the height
+        if (!editable) return refuse_edit();
+        const auto p = plane_point(x, y);
+        if (!p) return;
+        a_ = b_ = *p;
+        radius_ = 0;
+        polygon_.clear();
+        preview_ = {};
+        begin(Drag::radius);
+        return;
+    }
     case Tool::measure: {
         const Pick p = pick(m_, v_, x, y, {});
         std::optional<P3> q;
@@ -1403,6 +1626,24 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
             if (a != axis_) d[a] = quantize((*q)[static_cast<std::size_t>(a)] - start_p_[static_cast<std::size_t>(a)]);
         }
         if (typed_axis_ >= 0 && drag_ != Drag::contact_move) d[typed_axis_] = typed_or(d[typed_axis_]);
+        // MT12 (2): copies keep clear of other solids' faces and the domain's: onto them or 4 s off.
+        if (res_q_ > 0 && (drag_ == Drag::array || (drag_ == Drag::move && copy_from_))) {
+            std::vector<Solid> moving;
+            std::vector<SolidRef> skip;
+            if (drag_ == Drag::array) {
+                if (const Solid* s = solid_at(m_start_, ref_)) moving.push_back(*s);
+            } else {
+                for (const SolidRef c : sel_.solids) {
+                    if (const Solid* s = solid_at(m_start_, c)) {
+                        moving.push_back(*s);
+                        skip.push_back(c);
+                    }
+                }
+            }
+            for (int a = 0; a < 3; ++a) {
+                if (a != axis_ && d[a] != 0) d[a] = keep_clear(m_start_, moving, skip, a, d[a], 4 * res_q_);
+            }
+        }
         drag_d_ = d;
         Model next = m_start_;
         if (drag_ == Drag::contact_move) {
@@ -1476,6 +1717,77 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         invalidate();
         return;
     }
+    case Drag::cut:
+    case Drag::taper: {
+        const auto q = on_plane(m_start_, v_, x, y, axis_, start_p_[static_cast<std::size_t>(axis_)]);
+        if (!q) return;
+        P3 raw{};
+        for (int a = 0; a < 3; ++a) raw[a] = quantize((*q)[static_cast<std::size_t>(a)] - start_p_[static_cast<std::size_t>(a)]);
+        Pt d = uv_of(axis_, raw);
+        if (drag_ == Drag::taper) {
+            // Sideways along one axis of the cross-section: the larger offset's.
+            if (std::abs(d.x) >= std::abs(d.y)) {
+                d.y = 0;
+                d.x = typed_or(d.x);
+            } else {
+                d.x = 0;
+                d.y = typed_or(d.y);
+            }
+            drag_d_ = from_uv(axis_, d, 0);
+            Model next = m_start_;
+            if (d.x != 0 || d.y != 0) taper_edge(next, ref_, edge_, d);
+            with_drag(std::move(next));
+            return;
+        }
+        const double len = std::hypot(static_cast<double>(d.x), static_cast<double>(d.y)) / um;
+        drag_s_ = std::max<Coord>(0, typed_or(quantize(len)));
+        with_drag(cut_model(drag_s_));
+        return;
+    }
+    case Drag::extrude:
+    case Drag::inset_depth: {
+        const Coord raw = quantize(along_axis(m_start_, v_, x, y, origin_, normal_.axis) - start_s_) * normal_.sign;
+        drag_s_ = gap_up(typed_or(raw));  // MT12 (2): no layer under 4 s
+        Model next = m_start_;
+        if (drag_ == Drag::extrude) {
+            if (drag_s_ > 0) extrude_face(next, ref_, index_, drag_s_, material_);
+        } else if (drag_s_ != 0) {
+            inset_face(next, ref_, index_, margin_, drag_s_, material_);
+        }
+        with_drag(std::move(next));
+        return;
+    }
+    case Drag::inset: {
+        const auto q = on_plane(m_start_, v_, x, y, normal_.axis, start_p_[static_cast<std::size_t>(normal_.axis)]);
+        if (!q) return;
+        double reach = 0;
+        for (int a = 0; a < 3; ++a) {
+            if (a != normal_.axis) reach = std::max(reach, std::abs((*q)[static_cast<std::size_t>(a)] - start_p_[static_cast<std::size_t>(a)]));
+        }
+        margin_ = gap_up(std::max<Coord>(0, typed_or(quantize(reach))));  // MT12 (2): a margin of 0 or at least 4 s
+        // Shown with a depth of one grid step until the depth is given.
+        Model next = m_start_;
+        inset_face(next, ref_, index_, margin_, gap_up(grid()), material_);
+        with_drag(std::move(next));
+        return;
+    }
+    case Drag::radius: {
+        const auto p = plane_point(x, y);
+        if (!p) return;
+        b_ = *p;
+        const int n = v_.plane.normal;
+        const Pt c = uv_of(n, a_), e = uv_of(n, b_);
+        radius_ = std::max<Coord>(0, typed_or(quantize(std::hypot(static_cast<double>(e.x - c.x), static_cast<double>(e.y - c.y)) / um)));
+        // MQ4, MT12 (2): 16 sides, fewer while a side is under 6 s.
+        const int sides = res_q_ > 0 ? geo::polygon_sides(static_cast<double>(radius_), 6.0 * static_cast<double>(res_q_)) : 16;
+        preview_.solids.clear();
+        if (radius_ > 0 && sides >= 3) {
+            preview_.solids = {Solid{SolidKind::prism, {}, n, v_.plane.offset, v_.plane.offset + grid(), geo::regular_polygon(c, radius_, sides)}};
+        }
+        invalidate();
+        return;
+    }
+
     case Drag::polygon: {
         if (const auto p = plane_point(x, y)) {
             const int n = v_.plane.normal;
@@ -1510,13 +1822,42 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
     (void)shift;
 }
 
-void SolidPage::on_up(double x, double y) {
-    (void)x;
-    (void)y;
+void SolidPage::on_up(double /*x*/, double /*y*/) {  // the release's place: no step uses it
     button_ = false;
-    if (drag_ != Drag::base) end_drag_ui();
+    if (drag_ != Drag::base && drag_ != Drag::inset && drag_ != Drag::radius) end_drag_ui();
     if (GetCapture() == canvas_) ReleaseCapture();
     switch (drag_) {
+    case Drag::inset: {  // MT6: the margin given; now the depth, a click ending it
+        drag_ = Drag::inset_depth;
+        entry_.clear();
+        // The depth from the face itself (its pressed point along the normal), not from the release pixel's ray: the
+        // margin drag ends off the normal line, and its nearest point there is not the face's.
+        start_s_ = origin_[static_cast<std::size_t>(normal_.axis)];
+        drag_s_ = 0;
+        m_ = m_start_;
+        invalidate();
+        return;
+    }
+    case Drag::radius: {  // MT7: the radius given; now the height, as a prism's
+        if (preview_.solids.empty()) {
+            host_.solid_status(radius_ > 0 ? "A cylinder that small has sides under 6 s (lower interface_resolution)." : "A cylinder needs a radius.");
+            cancel();
+            return;
+        }
+        const int n = v_.plane.normal;
+        polygon_.clear();
+        for (const Pt& p : preview_.solids.front().polygon) polygon_.push_back(from_uv(n, p, v_.plane.offset));
+        entry_.clear();
+        typed_axis_ = -1;
+        height_ = grid();
+        b_ = polygon_.front();
+        drag_ = Drag::height;
+        invalidate();
+        return;
+    }
+    case Drag::cut:
+    case Drag::taper:
+    case Drag::extrude:
     case Drag::move:
     case Drag::array:
     case Drag::axis:
@@ -1581,7 +1922,8 @@ bool SolidPage::on_key(UINT key, bool shift, bool ctrl) {
     if (ctrl) return false;
     // MT3: while a drag takes a typed value, letters and digits are its (WM_CHAR), not the tools' keys.
     const bool typing = drag_ == Drag::axis || drag_ == Drag::face || drag_ == Drag::height || drag_ == Drag::move || drag_ == Drag::plane ||
-                        drag_ == Drag::base || drag_ == Drag::array;
+                        drag_ == Drag::base || drag_ == Drag::array || drag_ == Drag::cut || drag_ == Drag::taper || drag_ == Drag::extrude ||
+                        drag_ == Drag::inset || drag_ == Drag::inset_depth || drag_ == Drag::radius;
     if (typing && ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') || (key >= VK_NUMPAD0 && key <= VK_DIVIDE) ||
                    key == VK_OEM_PERIOD || key == VK_OEM_MINUS || key == VK_BACK)) {
         return true;
@@ -1592,6 +1934,7 @@ bool SolidPage::on_key(UINT key, bool shift, bool ctrl) {
     case 'B':
     case 'R': set_tool(Tool::box); return true;
     case 'P': set_tool(Tool::prism); return true;
+    case 'O': set_tool(Tool::cylinder); return true;
     case 'C': set_tool(Tool::contact); return true;
     case 'H': set_tool(Tool::pan); return true;
     case 'M': set_tool(Tool::measure); return true;
@@ -1684,7 +2027,7 @@ LRESULT CALLBACK SolidPage::inspector_proc(HWND hwnd, UINT message, WPARAM w, LP
         if (message == WM_COMMAND) {
             const int c = LOWORD(w) - self->inspector_id_;
             const int code = HIWORD(w);
-            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert || c == c_overlap)) ||
+            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert || c == c_overlap || c == c_resolution)) ||
                 (code == CBN_SELCHANGE && (c == c_material || c == c_kind || c == c_draw || c == c_axis || c == c_plane || c == c_section))) {
                 self->commit(c);
                 return 0;

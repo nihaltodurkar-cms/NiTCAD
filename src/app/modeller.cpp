@@ -11,18 +11,32 @@ namespace {
 
 constexpr std::array<std::string_view, group_count> names{"Solid", "Edges", "Faces", "Transform", "Doping", "Mesh"};
 
-constexpr std::array<ToolEntry, 4> solid_tools{{
+constexpr std::array<ToolEntry, 5> solid_tools{{
     {"Select (V)", Action::tool, 0, "Click a shape to pick it; drag it to move it.", "Click a solid to pick it; drag it to move it."},
     {"Box (B)", Action::tool, 1, "Drag the rectangle; type a size for it exactly.",
      "Drag the base on the work plane, release, move for the height, click. Type a size for it exactly."},
     {"Prism (P)", Action::tool, 2, "Click the polygon's corners; Enter or the first corner closes it.",
      "Click the polygon's corners on the work plane; Enter closes it; then its height, a click ending it."},
+    {"Cylinder (O)", Action::tool, 6, "",
+     "Press the centre on the work plane, drag the radius, release, move for the height, click (16 sides, fewer under 6 s)."},
     {"Fill / Replace", Action::overlap, 0, "The picked shapes' regions fill only empty space, or replace again.",
      "The picked solids' regions fill only empty space, or replace again."},
 }};
-constexpr std::array<ToolEntry, 2> face_tools{{
+constexpr std::array<ToolEntry, 4> edge_tools{{
+    {"Chamfer", Action::mode, static_cast<int>(Mode::chamfer), "Drag in from a shape's corner: the cut along both sides.",
+     "Drag in from an edge along a solid's axis: the cut along both faces."},
+    {"Fillet", Action::mode, static_cast<int>(Mode::fillet), "",
+     "Drag in from an edge along a solid's axis: the radius (6 chords a right angle, fewer under 6 s)."},
+    {"Round vertex", Action::mode, static_cast<int>(Mode::round), "Drag in from a shape's corner: the radius of its arc.",
+     "Drag in from a prism's vertex handle: the radius of its corner's arc."},
+    {"Taper", Action::mode, static_cast<int>(Mode::taper), "", "Drag an edge along a solid's axis sideways: its wall leans (the angle shows)."},
+}};
+constexpr std::array<ToolEntry, 4> face_tools{{
     {"Push/Pull", Action::tool, 0, "Drag a side's handle along its normal; type the distance.",
      "Drag a face's handle along its normal; type the distance."},
+    {"Inset", Action::mode, static_cast<int>(Mode::inset), "",
+     "Drag in from a face's edge for the margin, release, move for the depth (out or in), click. The material is the inspector's."},
+    {"Extrude", Action::mode, static_cast<int>(Mode::extrude), "", "Drag off a face: a new solid on it, as deep as the drag."},
     {"Contact (C)", Action::tool, 3, "Drag along a side of the domain.", "Drag a rectangle on a face of the domain."},
 }};
 constexpr std::array<ToolEntry, 5> transform_tools{{
@@ -57,17 +71,38 @@ Group group_for(Picked p) noexcept {
 std::span<const ToolEntry> tools(Group g) noexcept {
     switch (g) {
     case Group::solid: return solid_tools;
+    case Group::edges: return edge_tools;
     case Group::faces: return face_tools;
     case Group::transform: return transform_tools;
     default: return {};
     }
 }
 
+std::vector<ToolEntry> tools_for(Group g, bool three_d) {
+    std::vector<ToolEntry> out;
+    for (const ToolEntry& e : tools(g)) {
+        if (!(three_d ? e.how_3d : e.how_2d).empty()) out.push_back(e);
+    }
+    return out;
+}
+
+Group group_of(Mode m) noexcept {
+    switch (m) {
+    case Mode::inset:
+    case Mode::extrude: return Group::faces;
+    case Mode::chamfer:
+    case Mode::fillet:
+    case Mode::round:
+    case Mode::taper: return Group::edges;
+    default: return Group::transform;
+    }
+}
+
 std::string_view later(Group g) noexcept {
     switch (g) {
-    case Group::solid: return "Cylinder comes in slice 2.";
-    case Group::edges: return "Chamfer, Fillet, Round vertex and Taper come in slice 2.";
-    case Group::faces: return "Inset and Extrude come in slice 2.";
+    case Group::solid: return "";
+    case Group::edges: return "";
+    case Group::faces: return "";
     case Group::transform: return "";
     case Group::doping: return "Region profile, Implant and Junction come in slice 4.";
     case Group::mesh: return "Max size, Interface layers and Refine box come in slice 4.";

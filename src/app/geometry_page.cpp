@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include "NiTCAD/app/deck_vocabulary.hpp"
+#include "NiTCAD/app/solid.hpp"
 #include "win32.hpp"
 
 // Last: they bring objbase.h's `interface` macro.
@@ -530,7 +531,7 @@ void GeometryPage::set_tool(Tool t) {
 void GeometryPage::update_tool_buttons() {
     // A tool armed by its key opens a group that holds it (Pan and Measure are in none: the group stays).
     const auto in = [&](modeller::Group g) {
-        return std::ranges::any_of(modeller::tools(g), [&](const modeller::ToolEntry& e) {
+        return std::ranges::any_of(modeller::tools_for(g, false), [&](const modeller::ToolEntry& e) {
             return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_);
         });
     };
@@ -556,8 +557,8 @@ void GeometryPage::set_camera_fixed(bool fixed) {
 
 void GeometryPage::set_group(modeller::Group g) {
     bar_->set_group(g);
-    if (g != modeller::Group::transform) mode_ = modeller::Mode::none;
-    const auto list = modeller::tools(g);
+    if (mode_ != modeller::Mode::none && modeller::group_of(mode_) != g) mode_ = modeller::Mode::none;
+    const auto list = modeller::tools_for(g, false);
     const bool has = std::ranges::any_of(list, [&](const modeller::ToolEntry& e) { return e.action == modeller::Action::tool && e.tool == static_cast<int>(tool_); });
     if (!has && !list.empty() && list.front().action == modeller::Action::tool) {
         set_tool(static_cast<Tool>(list.front().tool));
@@ -575,7 +576,7 @@ void GeometryPage::set_mode(modeller::Mode m) {
     cancel();
     mode_ = m;
     array_count_ = 3;
-    if (m != modeller::Mode::none && bar_->group() != modeller::Group::transform) bar_->set_group(modeller::Group::transform);
+    if (m != modeller::Mode::none && bar_->group() != modeller::group_of(m)) bar_->set_group(modeller::group_of(m));
     bar_->set_tool(modeller::armed_key(static_cast<int>(tool_), mode_));
     place_bar();
     invalidate();
@@ -707,6 +708,7 @@ std::string GeometryPage::fresh_contact() const {
 
 std::optional<Geometry> GeometryPage::pending() const {
     switch (drag_) {
+    case Drag::corner:
     case Drag::move:
     case Drag::array:
     case Drag::handle:
@@ -756,6 +758,10 @@ std::string GeometryPage::chip_value() const {
         break;
     }
     case Drag::contact: v = chip_length(std::abs(at_.x - anchor_.x) + std::abs(at_.y - anchor_.y)); break;
+    case Drag::corner:
+        v = (mode_ == modeller::Mode::chamfer ? "cut " : "radius ") + chip_length(corner_r_);
+        if (mode_ != modeller::Mode::chamfer && corner_r_ > 0) v += corner_chords_ > 0 ? std::format(", {} chords", corner_chords_) : std::string(", chords under 6 s");
+        break;
     case Drag::measure: {
         const double dx = static_cast<double>(at_.x - anchor_.x), dy = static_cast<double>(at_.y - anchor_.y);
         v = std::format("{:.6g} \xC2\xB5m", std::sqrt(dx * dx + dy * dy) / static_cast<double>(per_um));
@@ -793,7 +799,7 @@ Coord GeometryPage::typed_or(Coord dragged) const {
 }
 
 bool GeometryPage::on_char(wchar_t c) {
-    if (drag_ != Drag::move && drag_ != Drag::rectangle && drag_ != Drag::array) return false;
+    if (drag_ != Drag::move && drag_ != Drag::rectangle && drag_ != Drag::array && drag_ != Drag::corner) return false;
     if (c == L'\b') {
         if (!entry_.backspace()) return true;
     } else if (!entry_.type(c)) {
@@ -1109,6 +1115,30 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
         invalidate();
         return;
     }
+    // Unit 26m slice 2 (MQ6): Chamfer and Round vertex drag in from a picked shape's corner (a polygon's vertex, a box's
+    // corner handle); a press on a shape picks it, so its corners show.
+    if (mode_ == modeller::Mode::chamfer || mode_ == modeller::Mode::round) {
+        int corner = -1;
+        if (hit.kind == HitKind::vertex && hit.shape.shape >= 0) corner = hit.index;
+        else if (hit.kind == HitKind::handle && hit.shape.shape >= 0 && hit.index % 2 == 0) corner = hit.index / 2;
+        if (corner >= 0) {
+            corner_shape_ = hit.shape;
+            drag_index_ = corner;
+            corner_r_ = 0;
+            corner_chords_ = 0;
+            anchor_ = view_.model(x, y);
+            begin(Drag::corner);
+            return;
+        }
+        if ((hit.kind == HitKind::shape || hit.kind == HitKind::edge) && hit.shape.shape >= 0) {
+            selection_ = {hit.shape};
+            contact_ = -1;
+            update_inspector();
+            invalidate();
+            host_.geometry_status("Now drag in from one of its corners.");
+            return;
+        }
+    }
     // MT2: what is picked opens its group.
     {
         modeller::Picked k = modeller::Picked::nothing;
@@ -1324,6 +1354,26 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         if (typed_axis_ == 0) at_.x = anchor_.x + typed_or(at_.x - anchor_.x);
         if (typed_axis_ == 1) at_.y = anchor_.y + typed_or(at_.y - anchor_.y);
         break;
+    case Drag::corner: {
+        const Coord step = grid_step(view_);
+        const double len = std::hypot(static_cast<double>(raw.x - anchor_.x), static_cast<double>(raw.y - anchor_.y));
+        corner_r_ = std::max<Coord>(0, typed_or(static_cast<Coord>(std::llround(len / static_cast<double>(step))) * step));
+        g_ = g_start_;
+        corner_chords_ = 0;
+        if (corner_r_ > 0) {
+            if (mode_ == modeller::Mode::chamfer) {
+                chamfer_shape(g_, corner_shape_, drag_index_, corner_r_);
+            } else {
+                // MQ4, MT12 (2): 15° a chord, fewer while one is under the generator's 6 s.
+                const auto& sh = g_.regions[static_cast<std::size_t>(corner_shape_.region)].shapes[static_cast<std::size_t>(corner_shape_.shape)];
+                const auto s = solid::mesh_length(text_seen_, "interface_resolution");
+                const double six_s = s ? 6.0 * *s * static_cast<double>(per_um) * 1e4 : 0.0;
+                corner_chords_ = arc_segments(corner_turn(sh.outline(), drag_index_), static_cast<double>(corner_r_), six_s);
+                if (corner_chords_ > 0) fillet_shape(g_, corner_shape_, drag_index_, corner_r_, corner_chords_);
+            }
+        }
+        break;
+    }
     case Drag::measure: at_ = snapped(x, y, shift); break;
     }
     invalidate();
@@ -1353,6 +1403,7 @@ void GeometryPage::on_up(double x, double y, bool shift) {
     drag_ = Drag::none;
     if (GetCapture() == canvas_) ReleaseCapture();
     switch (d) {
+    case Drag::corner:
     case Drag::move:
     case Drag::array:
     case Drag::handle:
@@ -1419,7 +1470,7 @@ void GeometryPage::on_up(double x, double y, bool shift) {
 bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
     if (ctrl) return false;
     // MT3: while a drag takes a typed value, letters and digits are its (WM_CHAR), not the tools' keys.
-    if ((drag_ == Drag::move || drag_ == Drag::rectangle || drag_ == Drag::array) && ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') ||
+    if ((drag_ == Drag::move || drag_ == Drag::rectangle || drag_ == Drag::array || drag_ == Drag::corner) && ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') ||
                                                           (key >= VK_NUMPAD0 && key <= VK_DIVIDE) || key == VK_OEM_PERIOD || key == VK_OEM_MINUS || key == VK_BACK)) {
         return true;
     }

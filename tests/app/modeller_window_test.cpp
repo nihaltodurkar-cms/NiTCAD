@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <numbers>
 #include <optional>
 #include <tuple>
 #include <fstream>
@@ -358,7 +359,7 @@ TEST_CASE("app window modeller: picks open their groups; the bar lies inside the
     REQUIRE(edge);
     click(*edge);
     CHECK(page.group() == modeller::Group::edges);
-    CHECK(has(page.bar().line(), "slice 2"));
+    CHECK_FALSE(has(page.bar().line(), "slice"));  // slice 2 gave Edges its tools
     const auto contact = find_pick(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::contact; });
     REQUIRE(contact);
     click(*contact);
@@ -823,4 +824,383 @@ TEST_CASE("app window modeller: Copy, Mirror, Align, Array and Fill/Replace in 2
     }
     for (std::size_t k = 1; k < texts.size(); ++k) REQUIRE(page.redo());
     CHECK(w->deck().text() == texts.back());
+}
+
+// --- Unit 26m slice 2 (MT6, MT7, MT12; MQ6): the Faces and Edges tools and Cylinder, by window messages ------------
+
+namespace {
+
+// A silicon block alone (no cap hiding the solids' faces), s = 0.01um (6 s = 600 quanta, 4 s = 400).
+const std::string block = R"([mesh]
+type = generate3d
+layered = on
+domain = 0 1um 0 0.6um 0 0.6um
+patch body = 0 0 0  1um 0.6um 0
+max_size = 0.15um
+interface_resolution = 0.01um
+
+[region si]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[equilibrium]
+)";
+
+// A pixel where the pick finds what `want` says, else the test stops.
+// A pixel pressing face `face` of `s`: the face itself, or its handle when `s` is selected; and the point on the face (µm).
+std::pair<std::array<double, 2>, solid::V3> face_or_handle(const SolidPage& page, solid::SolidRef s, int face) {
+    const auto px = find_pick(page, [&](const solid::Pick& p) {
+        return p.solid == s && p.index == face && (p.kind == solid::PickKind::face || (p.kind == solid::PickKind::handle && p.handle == solid::HandleKind::face));
+    });
+    REQUIRE(px);
+    const auto hs = solid::handles(page.model(), page.view(), s);
+    const auto h = std::ranges::find_if(hs, [&](const solid::Handle& k) { return k.kind == solid::HandleKind::face && k.index == face; });
+    REQUIRE(h != hs.end());
+    return {*px, h->pts[0]};
+}
+
+std::array<double, 2> must_find(const SolidPage& page, const std::function<bool(const solid::Pick&)>& want, const char* what) {
+    const auto p = find_pick(page, want);
+    INFO("looking for " << what);
+    REQUIRE(p);
+    return *p;
+}
+
+}  // namespace
+
+TEST_CASE("app window modeller: Extrude, Chamfer, Fillet, Round vertex, Taper, Inset and Cylinder in 3D, each one undo step "
+          "(MC4, MC6, MT6, MT7, MT12)",
+          "[app][window][modeller][tools]") {
+    auto [w, pp] = open_3d("tools3d", block);
+    SolidPage& page = *pp;
+    const HWND c = page.canvas();
+    CHECK(page.resolution() == 100);
+    page.set_material("sio2");
+    const solid::SolidRef a = draw_box(*w, page);  // 0 0.2um 0 0.3um 0.4um 0.5um, region 1
+    REQUIRE(a == solid::SolidRef{1, 0});
+    page.set_material("silicon");  // what the tools add from here (of A's own material they would join its region)
+    // The domain's own faces hide what lies inside it (26l): a section at z = 0.58um opens the top (slice 1's way).
+    page.set_section({2, 5800});
+    page.render();
+    std::vector<std::string> texts{w->deck().text()};
+    // Each step: the deck is exactly the model function's edit of the deck before (by minimal edits), the line shown
+    // during the drag the line written (MC4).
+    const auto step = [&](const solid::Model& expected, const std::string& shown) {
+        const auto want = solid::write_model(texts.back(), expected);
+        REQUIRE(want);
+        const std::string now = w->deck().text();
+        CHECK(now == *want);
+        CHECK(now != texts.back());
+        CHECK(shown == modeller::deck_line(texts.back(), now));  // every step here is a drag
+        texts.push_back(now);
+        page.render();
+    };
+    const auto press_drag = [&](std::array<double, 2> from, std::array<double, 2> to, const std::wstring& typed) {
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, from[0], from[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, (from[0] + to[0]) / 2, (from[1] + to[1]) / 2);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+        type(c, typed);
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, to[0], to[1]);
+        return shown;
+    };
+
+    // Extrude A's top by 0.05um (typed): a new silicon region on it.
+    page.set_mode(modeller::Mode::extrude);
+    CHECK(page.group() == modeller::Group::faces);
+    {
+        solid::Model e = page.model();
+        REQUIRE(solid::extrude_face(e, a, 5, 500, "silicon") == 2);
+        auto [px, at] = face_or_handle(page, a, 5);
+        // Dragged, before anything is typed: the depth is measured from the pressed point on the face (a handle's
+        // press too: its own place on the face), so 0.1um up reads 0.1um (on the view's snap step).
+        const auto to = page.screen_of_um({at[0], at[1], at[2] + 0.1});
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, (px[0] + to[0]) / 2, (px[1] + to[1]) / 2);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+        INFO("chip: " << page.chip());
+        CHECK(has(page.chip(), "depth 0.1 "));
+        type(c, L"0.05");
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, to[0], to[1]);
+        step(e, shown);
+    }
+    const solid::SolidRef top{2, 0};
+    // The largest interface_resolution (MT12): written by the inspector's button as one edit, then put back by undo
+    // (the tools below keep the deck's s).
+    {
+        const auto s = page.automatic_resolution();
+        INFO((s ? std::string() : s.error()));
+        REQUIRE(s);
+        REQUIRE(std::isfinite(*s));
+        REQUIRE(page.use_automatic_resolution());
+        const auto q = static_cast<solid::Coord>(std::floor(*s * 1e8));
+        CHECK(has(w->deck().text(), "interface_resolution = " + geo::format_length(q) + "\n"));
+        CHECK(page.resolution() == q);
+        REQUIRE(page.undo());
+        CHECK(w->deck().text() == texts.back());
+        CHECK(page.resolution() == 100);
+        page.render();
+    }
+
+    // Chamfer A's edge at x hi, y hi along z by 0.05um: A becomes a prism along z.
+    page.set_mode(modeller::Mode::chamfer);
+    CHECK(page.group() == modeller::Group::edges);
+    auto [fx, fa] = face_or_handle(page, a, 1);  // a press on a face picks the solid (its edges then pickable) and moves nothing
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, fx[0], fx[1]);
+    send(c, WM_LBUTTONUP, 0, fx[0], fx[1]);
+    REQUIRE(page.selection().solids == std::vector<solid::SolidRef>{a});
+    CHECK(w->deck().text() == texts.back());
+    page.render();
+    const auto edge_of = [&](int i, int j) {
+        const auto list = page.model().regions[1].solids[0].edges();
+        for (std::size_t k = 0; k < list.size(); ++k) {
+            if (list[k] == std::pair{i, j}) return static_cast<int>(k);
+        }
+        return -1;
+    };
+    {
+        const int edge = edge_of(3, 7);
+        REQUIRE(edge >= 0);
+        const auto px = must_find(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::edge && p.solid == a && p.index == edge; }, "the x hi, y hi edge");
+        solid::Model e = page.model();
+        REQUIRE(solid::chamfer_edge(e, a, edge, 500));
+        const std::string shown = press_drag(px, {px[0] - 15, px[1] + 5}, L"0.05");
+        step(e, shown);
+        CHECK(page.model().regions[1].solids[0].kind == solid::SolidKind::prism);
+    }
+    // Fillet the x lo, y hi edge (the prism's vertex 4, edge 14) at 0.1um: 2 chords, as 6 s allows (MQ4, MT12).
+    page.set_mode(modeller::Mode::fillet);
+    page.render();
+    {
+        const auto px = must_find(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::edge && p.solid == a && p.index == 14; }, "edge 14");
+        solid::Model e = page.model();
+        REQUIRE(solid::fillet_edge(e, a, 14, 1000, 2));
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, px[0] + 10, px[1] + 10);
+        type(c, L"0.1");
+        CHECK(page.chords() == 2);
+        CHECK(has(page.chip(), "2 chords"));
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, px[0] + 10, px[1] + 10);
+        step(e, shown);
+    }
+    // Round vertex: the prism's vertex 1 (x hi, y lo) at 0.05um from its handle.
+    page.set_mode(modeller::Mode::round);
+    page.render();
+    {
+        const auto px = must_find(page, [&](const solid::Pick& p) {
+            return p.kind == solid::PickKind::handle && p.handle == solid::HandleKind::vertex && p.solid == a && p.index == 1;
+        }, "vertex handle 1");
+        solid::Model e = page.model();
+        REQUIRE(solid::fillet_vertex(e, a, 1, 500, 1));
+        const std::string shown = press_drag(px, {px[0] - 10, px[1]}, L"0.05");
+        step(e, shown);
+    }
+    // Taper: vertex 0's edge 0.02um along +x; the wall angle shows.
+    page.set_mode(modeller::Mode::taper);
+    page.render();
+    {
+        const auto px = must_find(page, [&](const solid::Pick& p) { return p.kind == solid::PickKind::edge && p.solid == a && p.index == 2; }, "edge 2");
+        solid::Model e = page.model();
+        REQUIRE(solid::taper_edge(e, a, 2, {200, 0}));
+        const auto to = page.screen_of_um({0.05, 0.0, 0.45});
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+        type(c, L"0.02");
+        CHECK(has(page.chip(), "wall"));
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, to[0], to[1]);
+        step(e, shown);
+    }
+    // Inset on the extruded top: the margin 0.05um, released, then the depth 0.05um up, a click ending it. Of the top's
+    // own material it joins its region.
+    page.set_mode(modeller::Mode::inset);
+    page.render();
+    {
+        auto [px, at] = face_or_handle(page, top, 5);
+        solid::Model e = page.model();
+        REQUIRE(solid::inset_face(e, top, 5, 500, 500, "silicon") == 2);
+        const auto in = page.screen_of_um({at[0] + 0.03, at[1] + 0.03, at[2]});
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, in[0], in[1]);
+        type(c, L"0.05");
+        CHECK(has(page.chip(), "margin 0.05"));
+        send(c, WM_LBUTTONUP, 0, in[0], in[1]);
+        CHECK(w->deck().text() == texts.back());  // not yet written
+        const auto up = page.screen_of_um({at[0], at[1], at[2] + 0.1});
+        send(c, WM_MOUSEMOVE, 0, up[0], up[1]);
+        // Moved, before typing: the depth from the pressed point on the face, 0.1um up.
+        INFO("chip: " << page.chip());
+        CHECK(has(page.chip(), "depth 0.1 "));
+        type(c, L"0.05");
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, up[0], up[1]);
+        send(c, WM_LBUTTONUP, 0, up[0], up[1]);
+        step(e, shown);
+    }
+    // A typed margin under 4 s is raised to 4 s (MT12): shown in the chip, then Esc leaves the deck as it was.
+    {
+        auto [px, at] = face_or_handle(page, top, 5);
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, px[0], px[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, px[0] + 5, px[1] + 5);
+        type(c, L"0.01");
+        CHECK(has(page.chip(), "margin 0.04"));
+        SendMessageW(c, WM_KEYDOWN, VK_ESCAPE, 0);
+        send(c, WM_LBUTTONUP, 0, px[0] + 5, px[1] + 5);
+        CHECK(w->deck().text() == texts.back());
+    }
+    // Cylinder on the work plane z = 0.2um: centre (0.6, 0.3)um, radius 0.1um (10 sides: 16 would be under 6 s), height 0.1um.
+    page.set_mode(modeller::Mode::none);
+    page.set_work_plane({2, 2000});
+    page.set_tool(SolidPage::Tool::cylinder);
+    CHECK(page.group() == modeller::Group::solid);
+    {
+        solid::Model e = page.model();
+        REQUIRE(solid::add_cylinder(e, 2, 2000, 3000, {6000, 3000}, 1000, 10, "silicon") == 3);
+        const auto ctr = page.screen_of_um({0.6, 0.3, 0.2}), rim = page.screen_of_um({0.68, 0.3, 0.2});
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, ctr[0], ctr[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, rim[0], rim[1]);
+        type(c, L"0.1");
+        CHECK(has(page.chip(), "10 sides"));
+        send(c, WM_LBUTTONUP, 0, rim[0], rim[1]);
+        const auto up = page.screen_of_um({0.7, 0.3, 0.3});
+        send(c, WM_MOUSEMOVE, 0, up[0], up[1]);
+        type(c, L"0.1");
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, up[0], up[1]);
+        send(c, WM_LBUTTONUP, 0, up[0], up[1]);
+        step(e, shown);
+    }
+    page.set_tool(SolidPage::Tool::select);
+
+    // The inset left the top's face a ring: no s passes, and the button says so, the deck kept (MT12).
+    {
+        const auto s = page.automatic_resolution();
+        REQUIRE_FALSE(s);
+        CHECK(has(s.error(), "an interface piece has holes"));
+        CHECK_FALSE(page.use_automatic_resolution());
+        CHECK(w->deck().text() == texts.back());
+    }
+
+    for (std::size_t k = texts.size() - 1; k-- > 0;) {
+        REQUIRE(page.undo());
+        CHECK(w->deck().text() == texts[k]);
+    }
+    for (std::size_t k = 1; k < texts.size(); ++k) REQUIRE(page.redo());
+    CHECK(w->deck().text() == texts.back());
+}
+
+TEST_CASE("app window modeller: Chamfer and Round vertex on 2D corners, each one undo step (MC4, MC6, MQ6)", "[app][window][modeller][tools]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("tools2d", layered2d)));
+    pump();
+    w->execute(Command::tab_geometry);
+    GeometryPage& page = w->geometry_page();
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    const HWND c = page.canvas();
+    const auto at = [&](geo::Coord x, geo::Coord y) { return std::array<double, 2>{page.view().sx(x), page.view().sy(y)}; };
+    page.set_material("sio2");
+    page.set_tool(GeometryPage::Tool::rectangle);
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, at(4000, 2000)[0], at(4000, 2000)[1]);
+    send(c, WM_MOUSEMOVE, MK_LBUTTON, at(8000, 5000)[0], at(8000, 5000)[1]);
+    send(c, WM_LBUTTONUP, 0, at(8000, 5000)[0], at(8000, 5000)[1]);
+    REQUIRE(has(w->deck().text(), "box = 0.4um 0.8um 0.2um 0.5um\n"));
+    const geo::ShapeRef a{2, 0};
+    std::vector<std::string> texts{w->deck().text()};
+    const auto corner = [&](std::array<double, 2> from, std::array<double, 2> to, const std::wstring& typed, const geo::Geometry& expected) {
+        send(c, WM_LBUTTONDOWN, MK_LBUTTON, from[0], from[1]);
+        send(c, WM_MOUSEMOVE, MK_LBUTTON, to[0], to[1]);
+        type(c, typed);
+        const std::string shown = page.live_line();
+        send(c, WM_LBUTTONUP, 0, to[0], to[1]);
+        const auto want = geo::write_geometry(texts.back(), expected);
+        REQUIRE(want);
+        CHECK(w->deck().text() == *want);
+        CHECK(shown == modeller::deck_line(texts.back(), w->deck().text()));
+        texts.push_back(w->deck().text());
+    };
+
+    // The 3D-only tools are not on the 2D bar.
+    page.set_mode(modeller::Mode::chamfer);
+    CHECK(page.group() == modeller::Group::edges);
+    CHECK(modeller::tools_for(modeller::Group::edges, false).size() == 2);
+    CHECK(modeller::tools_for(modeller::Group::faces, false).size() == 2);
+    // Chamfer: a press inside A picks it; then from its upper-right corner handle, 0.05um.
+    send(c, WM_LBUTTONDOWN, MK_LBUTTON, at(6000, 3500)[0], at(6000, 3500)[1]);
+    send(c, WM_LBUTTONUP, 0, at(6000, 3500)[0], at(6000, 3500)[1]);
+    REQUIRE(page.selection() == std::vector<geo::ShapeRef>{a});
+    CHECK(w->deck().text() == texts.back());
+    {
+        geo::Geometry e = page.geometry();
+        REQUIRE(geo::chamfer_shape(e, a, 2, 500));
+        corner(at(8000, 5000), at(7600, 4600), L"0.05", e);
+    }
+    // Round vertex at the lower-left corner (vertex 0), 0.2um: 2 chords (3 would be under 6 s = 0.12um).
+    page.set_mode(modeller::Mode::round);
+    {
+        geo::Geometry e = page.geometry();
+        REQUIRE(geo::fillet_shape(e, a, 0, 2000, 2));
+        corner(at(4000, 2000), at(4500, 2500), L"0.2", e);
+    }
+    for (std::size_t k = texts.size() - 1; k-- > 0;) {
+        REQUIRE(page.undo());
+        CHECK(w->deck().text() == texts[k]);
+    }
+    for (std::size_t k = 1; k < texts.size(); ++k) REQUIRE(page.redo());
+    CHECK(w->deck().text() == texts.back());
+}
+
+TEST_CASE("app window modeller: slice 2's per-frame work adds at most 1 ms with 100 solids (MC9, MT7, MT12)", "[app][window][modeller][perf]") {
+    std::string deck = "[mesh]\ntype = generate3d\nlayered = on\ndomain = 0 10um 0 10um 0 1um\nmax_size = 0.5um\n\n[region si]\nmaterial = silicon\n";
+    for (int k = 0; k < 100; ++k) {
+        deck += std::format("\n[region r{}]\nmaterial = {}\nbox = {}um {}.8um {}um {}.8um 0 0.{}um\n", k, k % 2 ? "sio2" : "silicon", k % 10, k % 10,
+                            k / 10, k / 10, 3 + k % 7);
+    }
+    deck += "\n[equilibrium]\n";
+    auto [w, pp] = open_3d("hundred2", deck);
+    SolidPage& page = *pp;
+    REQUIRE(page.model().regions.size() == 101);
+    REQUIRE(page.select_region("r55"));
+    const std::string text = w->deck().text();
+    const solid::SolidRef ref = page.selection().solids[0];
+    const solid::Solid moving = page.model().regions[static_cast<std::size_t>(ref.region)].solids[0];
+    std::vector<double> copy, fillet;
+    for (int k = 1; k <= 31; ++k) {
+        // A Copy drag's frame: kept clear of all 100 solids, then its deck line.
+        auto t0 = std::chrono::steady_clock::now();
+        solid::Model m = page.model();
+        const solid::Coord d = solid::keep_clear(m, {moving}, {ref}, 0, k * 130, 400);
+        REQUIRE(solid::duplicate_solid(m, ref, {d, 0, 0}) >= 0);
+        auto out = solid::write_model(text, m);
+        REQUIRE(out);
+        std::string line = modeller::deck_line(text, *out);
+        copy.push_back(1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        REQUIRE_FALSE(line.empty());
+        // A Fillet drag's frame: the chord count at 6 s, the fillet, its deck line.
+        t0 = std::chrono::steady_clock::now();
+        m = page.model();
+        const solid::Coord r = 300 + 10 * k;
+        const int n = geo::arc_segments(std::numbers::pi / 2, static_cast<double>(r), 600.0);
+        REQUIRE(solid::fillet_edge(m, ref, 2, r, std::max(n, 1)));
+        out = solid::write_model(text, m);
+        REQUIRE(out);
+        line = modeller::deck_line(text, *out);
+        fillet.push_back(1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        REQUIRE_FALSE(line.empty());
+    }
+    std::ranges::sort(copy);
+    std::ranges::sort(fillet);
+    std::printf("MC9 slice 2, 100 solids: Copy frame (keep_clear + line) median %.3f ms (max %.3f); Fillet frame median %.3f ms (max %.3f)\n",
+                copy[copy.size() / 2], copy.back(), fillet[fillet.size() / 2], fillet.back());
+#ifdef NDEBUG
+    CHECK(copy[copy.size() / 2] <= 1.0);
+    CHECK(fillet[fillet.size() / 2] <= 1.0);
+#endif
 }

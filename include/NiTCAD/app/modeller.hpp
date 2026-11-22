@@ -21,6 +21,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "NiTCAD/app/geometry.hpp"
 
@@ -41,7 +42,12 @@ enum class Action : unsigned char { tool, mode, duplicate, overlap };
 // Copy drags a copy (also Alt+drag in any mode); Mirror clicks a face (its centre plane; Ctrl: the face's own plane;
 // Shift: a quarter turn about the view's axis); Array drags the pitch, the wheel setting the count; Align clicks a
 // face, the other picked solids' matching faces moving to its plane.
-enum class Mode : unsigned char { none, copy, mirror, array, align };
+// Unit 26m slice 2 (MT6, MT7): the Faces group's Inset (drag the margin in from a face, release, then the depth, a
+// click ending it) and Extrude (drag the depth off a face); the Edges group's Chamfer and Fillet (drag in from an edge
+// along a prism's axis: the cut, or the radius), Round vertex (the same from a prism's vertex handle) and Taper (drag
+// the edge sideways). Each mode belongs to its group (group_of).
+enum class Mode : unsigned char { none, copy, mirror, array, align, inset, extrude, chamfer, fillet, round, taper };
+[[nodiscard]] Group group_of(Mode m) noexcept;
 // The bar's armed key: a tool's number, or 100 + a mode.
 [[nodiscard]] constexpr int armed_key(int tool, Mode m) noexcept { return m == Mode::none ? tool : 100 + static_cast<int>(m); }
 struct ToolEntry {
@@ -52,6 +58,8 @@ struct ToolEntry {
     std::string_view how_3d;
 };
 [[nodiscard]] std::span<const ToolEntry> tools(Group g) noexcept;
+// The tools of a group on one page: those with no how for that page (3D only, MQ6) left out.
+[[nodiscard]] std::vector<ToolEntry> tools_for(Group g, bool three_d);
 // What a group gets in a later slice ("" when it has all its tools).
 [[nodiscard]] std::string_view later(Group g) noexcept;
 

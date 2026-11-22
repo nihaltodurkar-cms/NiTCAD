@@ -1,13 +1,17 @@
 // The 3D solid modeller's model (Unit 26l slice 1; DECISIONS.md SD3, SE3-SE5, SE10): the deck read and written by
 // minimal edits, extrude3d decks read as prisms and converted, edits undone byte for byte, the write's time, snapping.
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <map>
+#include <numbers>
 #include <random>
 #include <sstream>
 #include <string>
@@ -17,6 +21,7 @@
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/mesh/complex.hpp"
+#include "NiTCAD/mesh/generate.hpp"
 
 using namespace NiTCAD::app::solid;
 
@@ -144,7 +149,7 @@ std::string deck_file(const char* name) { return read_file(std::filesystem::path
 
 // The text with CRLF line ends made LF (the decks may be checked out either way).
 std::string lf(std::string t) {
-    std::erase(t, '');
+    std::erase(t, '\r');
     return t;
 }
 
@@ -940,5 +945,597 @@ TEST_CASE("app solid: Array, Mirror, Align and the quarter turn, each one edit t
         for (int k = 0; k < 3; ++k) REQUIRE(rotate_solid(w, well, 2));
         CHECK(w.regions[2].solids[0].axis == 0);
         CHECK(w.regions[2].solids[0].bounds() == must_read(well_deck).regions[2].solids[0].bounds());
+    }
+}
+
+// --- Unit 26m slice 2 (MT6, MT7, MT12; MC6, MC13) -------------------------------------------------------------------
+
+namespace {
+
+// A silicon block under an oxide cap with a wide sio2 fin across it along y; s = 0.01um (6 s = 600 quanta, 4 s = 400).
+const std::string tool_deck = R"([mesh]
+type = generate3d
+layered = on
+domain = 0 2um 0 1um 0 1um
+patch body = 0 0 0  2um 1um 0
+max_size = 0.25um
+interface_resolution = 0.01um
+
+[region si]
+material = silicon
+
+[region ox]
+material = sio2
+box = 0 2um 0 1um 0.7um 1um
+
+[region fin]
+material = sio2
+box = 0.4um 1um 0 1um 0.1um 0.5um
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[equilibrium]
+)";
+
+// The box edge between corners i and i | bit.
+int box_edge(const Solid& s, int i, int bit) {
+    const auto e = s.edges();
+    for (std::size_t k = 0; k < e.size(); ++k) {
+        if (e[k] == std::pair{i, i | bit}) return static_cast<int>(k);
+    }
+    return -1;
+}
+
+double area_q2(const std::vector<Pt>& p) {
+    double a = 0;
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        const Pt q = p[i], r = p[(i + 1) % p.size()];
+        a += static_cast<double>(q.x) * static_cast<double>(r.y) - static_cast<double>(r.x) * static_cast<double>(q.y);
+    }
+    return std::abs(a) / 2;
+}
+
+// The partition's volume of a region, cm³.
+double region_volume(const Model& m, int region) {
+    const auto complex = NiTCAD::mesh::layered_partition3d(to_layered(m));
+    if (!complex) FAIL(complex.error().message);
+    const auto report = NiTCAD::mesh::check_complex(*complex);
+    if (!report) FAIL(report.error().message);
+    double v = 0;
+    for (std::size_t k = 0; k < complex->volumes.size(); ++k) {
+        if (complex->volumes[k].region == region) v += report->volume[k];
+    }
+    return v;
+}
+
+double prism_cm3(const Solid& s) { return area_q2(s.polygon) * static_cast<double>(s.to - s.from) * 1e-24; }
+
+// An edit's deck: only geometry lines changed, read back to the same model, its undo the deck byte for byte.
+std::string round_trip(const std::string& deck, const Model& m) {
+    const std::string out = must_write(deck, m);
+    CHECK(only_geometry(deck, out) == "");
+    CHECK(strip(must_read(out)) == strip(m));
+    CHECK(must_write(out, must_read(deck)) == deck);
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("app solid: arcs and corners on the quantum (Unit 26m MT7, MQ4)", "[app][solid][edges]") {
+    using namespace NiTCAD::app::geo;
+    const double right = std::numbers::pi / 2;
+    CHECK(arc_segments(right, 1e6, 0) == 6);  // ⌈90° / 15°⌉
+    CHECK(arc_segments(std::numbers::pi / 3, 1e6, 0) == 4);
+    CHECK(arc_segments(0.1, 1e6, 0) == 2);
+    CHECK(arc_segments(right, 2000, 600) == 5);  // 2 r sin(9°) = 626 >= 600, 2 r sin(7.5°) = 522 < 600
+    CHECK(arc_segments(right, 300, 600) == 0);   // even one chord (424) is short
+    CHECK(polygon_sides(2000, 600) == 16);
+    CHECK(polygon_sides(1000, 600) == 10);  // 2 r sin(18°) = 618
+    CHECK(polygon_sides(100, 600) == 0);
+    const std::vector<Pt> sq{{0, 0}, {4000, 0}, {4000, 4000}, {0, 4000}};
+    CHECK(std::abs(corner_turn(sq, 2) - right) < 1e-12);
+    CHECK(fillet_tangent(sq, 2, 1000) == Catch::Approx(1000));
+    CHECK(*chamfer_corner(sq, 2, 1000) == std::vector<Pt>{{0, 0}, {4000, 0}, {4000, 3000}, {3000, 4000}, {0, 4000}});
+    CHECK_FALSE(chamfer_corner(sq, 2, 4001));
+    CHECK(*chamfer_corner(sq, 2, 4000) == std::vector<Pt>{{0, 0}, {4000, 0}, {0, 4000}});  // merged with both neighbours
+    const auto f = fillet_corner(sq, 2, 1000, 6);
+    REQUIRE(f);
+    REQUIRE(f->size() == 10);
+    CHECK((*f)[2] == Pt{4000, 3000});
+    CHECK((*f)[8] == Pt{3000, 4000});
+    for (std::size_t k = 2; k <= 8; ++k) {  // on the circle about (3000, 3000), to the rounding
+        CHECK(std::abs(std::hypot((*f)[k].x - 3000.0, (*f)[k].y - 3000.0) - 1000) <= 0.75);
+    }
+    CHECK_FALSE(fillet_corner(sq, 2, 4001, 6));
+    CHECK_FALSE(fillet_corner({{0, 0}, {2000, 0}, {4000, 0}, {0, 4000}}, 1, 100, 2));  // a straight corner
+    // A reflex corner of an L takes a fillet too (the arc bulging into the notch).
+    const std::vector<Pt> ell{{0, 0}, {4000, 0}, {4000, 2000}, {2000, 2000}, {2000, 4000}, {0, 4000}};
+    const auto r = fillet_corner(ell, 3, 500, 3);
+    REQUIRE(r);
+    CHECK(polygon_ok(*r));
+    CHECK(area_q2(*r) > area_q2(ell));
+    const auto c = regular_polygon({0, 0}, 1000, 4);
+    CHECK(c == std::vector<Pt>{{1000, 0}, {0, 1000}, {-1000, 0}, {0, -1000}});
+    // 2D shapes: a box's corner chamfered becomes a polygon; a tensor deck refuses.
+    Geometry g;
+    g.mesh = NiTCAD::app::geo::MeshKind::layered;
+    g.domain = {{0, 0}, {10000, 10000}};
+    g.regions.push_back({"bg", "silicon", {}, -1});
+    REQUIRE(add_box(g, {{1000, 1000}, {5000, 5000}}, "sio2") == 1);
+    REQUIRE(chamfer_shape(g, {1, 0}, 2, 1000));
+    CHECK(g.regions[1].shapes[0].kind == ShapeKind::polygon);
+    CHECK(g.regions[1].shapes[0].points.size() == 5);
+    REQUIRE(fillet_shape(g, {1, 0}, 0, 1000, 6));
+    CHECK(g.regions[1].shapes[0].points.size() == 11);
+    g.mesh = NiTCAD::app::geo::MeshKind::tensor;
+    CHECK_FALSE(chamfer_shape(g, {1, 0}, 1, 500));
+}
+
+TEST_CASE("app solid: Chamfer, Fillet, Round vertex, Taper and Cylinder, each one edit that builds (Unit 26m MT7, MC6)",
+          "[app][solid][edges]") {
+    const Model m0 = must_read(tool_deck);
+    REQUIRE(build_error(tool_deck) == "");
+    const SolidRef fin{2, 0};
+    const Solid& box = m0.regions[2].solids[0];
+    const int top_right = box_edge(box, 1 | 4, 2);  // x hi, z hi, along y
+    REQUIRE(top_right >= 0);
+    // The edge as a prism's corner: along y, (u, v) = (z, x).
+    const auto ec = edge_corner(box, top_right);
+    REQUIRE(ec);
+    CHECK(ec->prism.axis == 1);
+    CHECK(ec->prism.polygon == std::vector<Pt>{{1000, 4000}, {5000, 4000}, {5000, 10000}, {1000, 10000}});
+    CHECK(ec->corner == 2);
+    {
+        Model m = m0;
+        CHECK_FALSE(chamfer_edge(m, fin, top_right, 4500));  // longer than the 4000 wall
+        REQUIRE(chamfer_edge(m, fin, top_right, 1000));
+        const Solid& t = m.regions[2].solids[0];
+        CHECK(t.polygon == std::vector<Pt>{{1000, 4000}, {5000, 4000}, {5000, 9000}, {4000, 10000}, {1000, 10000}});
+        CHECK(region_volume(m, 2) == Catch::Approx((6000.0 * 4000 - 500'000) * 10000 * 1e-24).epsilon(1e-12));
+        const std::string out = round_trip(tool_deck, m);
+        CHECK(build_error(out) == "");
+        // A cap's edge is not along the axis.
+        CHECK_FALSE(chamfer_edge(m, fin, 0, 500));
+    }
+    {
+        Model m = m0;
+        const int n = NiTCAD::app::geo::arc_segments(std::numbers::pi / 2, 2000, 6 * 100);
+        REQUIRE(n == 5);
+        REQUIRE(fillet_edge(m, fin, top_right, 2000, n));
+        const Solid& t = m.regions[2].solids[0];
+        CHECK(t.polygon.size() == 9);
+        CHECK(region_volume(m, 2) == Catch::Approx(prism_cm3(t)).epsilon(1e-12));
+        const std::string out = round_trip(tool_deck, m);
+        CHECK(build_error(out) == "");
+        // Round vertex: the prism's other top corner (vertex 3 of the original four, now the last).
+        Model v = m;
+        REQUIRE(fillet_vertex(v, fin, static_cast<int>(t.polygon.size()) - 1, 2000, n));
+        CHECK(v.regions[2].solids[0].polygon.size() == 13);  // its tangent point lands on the first arc's end: merged
+        CHECK(build_error(must_write(tool_deck, v)) == "");
+        CHECK_FALSE(fillet_vertex(v, fin, 99, 2000, n));
+    }
+    {
+        Model m = m0;  // Taper: the top-right edge 1000 in along x; the right wall leans in by atan(1000 / 4000)
+        REQUIRE(taper_edge(m, fin, top_right, {0, -1000}));
+        CHECK(m.regions[2].solids[0].polygon[2] == Pt{5000, 9000});
+        CHECK(region_volume(m, 2) == Catch::Approx((6000.0 * 4000 - 2'000'000) * 10000 * 1e-24).epsilon(1e-12));
+        CHECK(build_error(round_trip(tool_deck, m)) == "");
+        CHECK_FALSE(taper_edge(m, fin, top_right, {0, 0}));
+        CHECK_FALSE(taper_edge(m, fin, top_right, {0, -20000}));  // the polygon folds
+    }
+    {
+        Model m = m0;  // a nanowire of 16 sides through the silicon along y, beside the fin
+        const int sides = NiTCAD::app::geo::polygon_sides(2000, 600);
+        const int r = add_cylinder(m, 1, 0, 10000, {3500, 15000}, 2000, sides, "sio2");
+        REQUIRE(r == 3);
+        const Solid& t = m.regions[3].solids[0];
+        CHECK(t.polygon.size() == 16);
+        CHECK(region_volume(m, 3) == Catch::Approx(prism_cm3(t)).epsilon(1e-12));
+        CHECK(build_error(round_trip(tool_deck, m)) == "");
+        CHECK(add_cylinder(m, 1, 0, 10000, {3500, 15000}, 0, 16, "sio2") == -1);
+        CHECK(add_cylinder(m, 1, 0, 10000, {3500, 15000}, 2000, 2, "sio2") == -1);
+    }
+}
+
+TEST_CASE("app solid: Inset and Extrude, new solids on a face (Unit 26m MT6, MC6)", "[app][solid][faces]") {
+    const Model m0 = must_read(tool_deck);
+    const SolidRef fin{2, 0};
+    // Face normals: a box's, a prism's caps and sides (counter-clockwise or not), none for a slanted side.
+    CHECK(face_normal(m0.regions[2].solids[0], 5)->axis == 2);
+    CHECK(face_normal(m0.regions[2].solids[0], 0)->sign == -1);
+    {
+        const Solid p{SolidKind::prism, {}, 2, 0, 1000, {{0, 0}, {1000, 0}, {1000, 1000}, {0, 1000}}};
+        CHECK((face_normal(p, 2)->axis == 1 && face_normal(p, 2)->sign == -1));  // the edge along +x: outward is -y
+        CHECK((face_normal(p, 3)->axis == 0 && face_normal(p, 3)->sign == 1));
+        Solid cw = p;
+        std::ranges::reverse(cw.polygon);  // (0,1000) -> (1000,1000) -> ...: the first edge's outward is +y
+        CHECK((face_normal(cw, 2)->axis == 1 && face_normal(cw, 2)->sign == 1));
+        const Solid tri{SolidKind::prism, {}, 2, 0, 1000, {{0, 0}, {1000, 0}, {0, 1000}}};
+        CHECK_FALSE(face_normal(tri, 3));
+        // A cap: its polygon kept without a margin; a margin only on a rectangle.
+        const auto cap = face_solid(tri, 1, 0, 500);
+        REQUIRE(cap);
+        CHECK((cap->kind == SolidKind::prism && cap->from == 1000 && cap->to == 1500 && cap->polygon == tri.polygon));
+        CHECK_FALSE(face_solid(tri, 1, 100, 500));
+        const auto inset = face_solid(p, 1, 100, -300);
+        REQUIRE(inset);
+        CHECK(inset->box == Box3{{100, 100, 700}, {900, 900, 1000}});
+    }
+    {
+        Model m = m0;  // Extrude the fin's top by 0.1um as a new region: a full-face piece, so it builds
+        CHECK(extrude_face(m, fin, 5, -1000, "silicon") == -1);
+        const int r = extrude_face(m, fin, 5, 1000, "silicon");
+        REQUIRE(r == 3);
+        CHECK(m.regions[3].solids[0].box == Box3{{4000, 0, 5000}, {10000, 10000, 6000}});
+        check_partition(m);
+        const std::string out = round_trip(tool_deck, m);
+        CHECK(build_error(out) == "");
+    }
+    {
+        Model m = m0;  // Inset of the fin's own material joins its region (a bump, no interface between them)
+        const int r = inset_face(m, fin, 5, 1000, 1000, "sio2");
+        REQUIRE(r == 2);
+        REQUIRE(m.regions[2].solids.size() == 2);
+        CHECK(m.regions[2].solids[1].box == Box3{{5000, 1000, 5000}, {9000, 9000, 6000}});
+        check_partition(m);
+        const std::string out = round_trip(tool_deck, m);
+        // The fin's top is then a ring around the bump: a holed interface piece, the generator's refusal (recorded).
+        CHECK(build_error(out).find("an interface piece has holes") != std::string::npos);
+        // Pushed into the oxide from the domain's top face, the inset's pieces are its walls and its floor: it builds.
+        Model ox = m0;
+        REQUIRE(inset_face(ox, {1, 0}, 5, 1000, -1500, "insulator") == 3);
+        CHECK(ox.regions[3].solids[0].box == Box3{{1000, 1000, 8500}, {19000, 9000, 10000}});
+        std::string nitride = round_trip(tool_deck, ox);
+        nitride.replace(nitride.find("material = insulator\n"), 21, "material = insulator\neps_r = 7.5\n");
+        CHECK(build_error(nitride) == "");
+        // Of another material on the fin it is a new region meeting the fin inside its face: refused alike.
+        Model o = m0;
+        REQUIRE(inset_face(o, fin, 5, 1000, -1000, "silicon") == 3);
+        CHECK(o.regions[3].solids[0].box == Box3{{5000, 1000, 4000}, {9000, 9000, 5000}});
+        CHECK(build_error(must_write(tool_deck, o)).find("an interface piece has holes") != std::string::npos);
+        CHECK(inset_face(o, fin, 5, 3000, 1000, "sio2") == -1);  // the margin empties it
+        CHECK(inset_face(o, fin, 9, 0, 1000, "sio2") == -1);
+    }
+}
+
+TEST_CASE("app solid: keep_clear and the automatic s (Unit 26m MT12)", "[app][solid][meshable]") {
+    const Model m0 = must_read(tool_deck);
+    const Solid fin = m0.regions[2].solids[0];  // x 0.4-1.0um
+    // A copy moved along x so its x_min falls 100 quanta past the fin's x_max: margin 400 brings it back to touch.
+    const std::vector<SolidRef> none;
+    CHECK(keep_clear(m0, {fin}, none, 0, 6100, 400) == 6000);
+    CHECK(keep_clear(m0, {fin}, none, 0, 6300, 400) == 6400);  // 300 past: apart by the margin is nearer
+    CHECK(keep_clear(m0, {fin}, none, 0, 7000, 400) == 7000);  // already clear
+    CHECK(keep_clear(m0, {fin}, none, 0, 6100, 0) == 6100);
+    // The domain's faces count: the fin moved to 50 quanta from x = 0 snaps onto it.
+    CHECK(keep_clear(m0, {fin}, {{2, 0}}, 0, -3950, 400) == -4000);
+    // A solid far off on the other axes does not count.
+    Model far = m0;
+    REQUIRE(add_box(far, {{12000, 0, 0}, {13000, 10000, 500}}, "sio2") >= 0);
+    CHECK(keep_clear(far, {fin}, {{2, 0}}, 2, 3800, 400) == 3800);  // z 0.48-0.88um: nothing within 4 s on x
+
+    // The automatic s: the largest the rules take; 1 % more is refused by the build's own check.
+    const auto max = mesh_length(tool_deck, "max_size");
+    REQUIRE(max);
+    CHECK(*max == Catch::Approx(0.25e-4));
+    CHECK(mesh_length(tool_deck, "interface_resolution") == Catch::Approx(1e-6));
+    CHECK_FALSE(mesh_length(tool_deck, "refine"));
+    const auto s = automatic_resolution(m0, *max);
+    REQUIRE(s);
+    INFO("s = " << *s);
+    // The tightest gap is the fin's 0.1um from the oxide and from the bottom: 4 s <= 0.1um.
+    CHECK(*s <= 0.25e-5 * 1.0000001);
+    CHECK(*s >= 0.25e-5 * 0.998);
+    const auto complex = NiTCAD::mesh::layered_partition3d(to_layered(m0));
+    REQUIRE(complex);
+    NiTCAD::mesh::MeshOptions3D o;
+    o.max_size = *max;
+    o.interface_resolution = *s;
+    CHECK(NiTCAD::mesh::generate_mesh(*complex, o).has_value());
+    o.interface_resolution = *s * 1.01;
+    CHECK_FALSE(NiTCAD::mesh::generate_mesh(*complex, o).has_value());
+    // Without interfaces any s goes.
+    Model plain = m0;
+    plain.regions.resize(1);
+    CHECK(std::isinf(*automatic_resolution(plain, *max)));
+}
+
+TEST_CASE("app solid: mesh_length and set_mesh_length take one [mesh] and keep the deck's last line end (Unit 26m MT12)", "[app][solid][meshable][meshlen]") {
+    // Two [mesh] sections (the build refuses such a deck; the editor may hold one): both read and write the last, as
+    // read_model and write_model do.
+    const std::string two = "[mesh]\nmax_size = 0.1um\n\n[mesh]\nmax_size = 0.2um\n";
+    CHECK(mesh_length(two, "max_size") == Catch::Approx(0.2e-4));
+    const auto set = set_mesh_length(two, "max_size", 3000);
+    REQUIRE(set);
+    CHECK(*set == "[mesh]\nmax_size = 0.1um\n\n[mesh]\nmax_size = 0.3um\n");
+    CHECK(mesh_length(*set, "max_size") == Catch::Approx(0.3e-4));
+    // An entry continued over lines, last in a deck without a final newline: replaced, still without one.
+    const std::string tail = "[mesh]\ntype = generate3d\ninterface_resolution = \\\n    0.01um";
+    const auto one = set_mesh_length(tail, "interface_resolution", 50);
+    REQUIRE(one);
+    CHECK(*one == "[mesh]\ntype = generate3d\ninterface_resolution = 0.005um");
+    // With CRLF ends the new line keeps them.
+    const auto crlf = set_mesh_length("[mesh]\r\nmax_size = 0.1um\r\n", "interface_resolution", 100);
+    REQUIRE(crlf);
+    CHECK(*crlf == "[mesh]\r\nmax_size = 0.1um\r\ninterface_resolution = 0.01um\r\n");
+}
+
+namespace {
+
+// The MT12 table: tool_deck's layouts drawn with the tools, and the max_size each is meshed at.
+struct Layout {
+    const char* name;
+    Model m;
+    double h;  // cm
+};
+std::vector<Layout> mt12_table() {
+    const Model m0 = must_read(tool_deck);
+    const SolidRef fin{2, 0};
+    const int top_right = box_edge(m0.regions[2].solids[0], 1 | 4, 2);
+    std::vector<Layout> out;
+    out.push_back({"fin", m0, 0.25e-4});
+    out.push_back({"fin, h 0.15um", m0, 0.15e-4});
+    Model c = m0;
+    REQUIRE(chamfer_edge(c, fin, top_right, 1000));
+    out.push_back({"chamfer", c, 0.25e-4});
+    Model f = m0;
+    REQUIRE(fillet_edge(f, fin, top_right, 2000, 5));
+    out.push_back({"fillet", f, 0.25e-4});
+    Model w = m0;
+    REQUIRE(add_cylinder(w, 1, 0, 10000, {3500, 15000}, 2000, 16, "sio2") >= 0);
+    out.push_back({"nanowire", w, 0.25e-4});
+    Model a = m0;
+    REQUIRE(set_box(a, fin, {{4000, 0, 1000}, {7000, 10000, 5000}}));
+    REQUIRE(array_solid(a, fin, {5000, 0, 0}, 3) >= 0);
+    out.push_back({"three fins", a, 0.25e-4});
+    Model e = m0;
+    REQUIRE(extrude_face(e, fin, 5, 1000, "silicon") >= 0);
+    out.push_back({"extruded gate", e, 0.25e-4});
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("app solid: the automatic s on a table of drawn layouts; 1 % more is refused (Unit 26m MT12, MC13)", "[app][solid][meshable]") {
+    for (const Layout& l : mt12_table()) {
+        INFO(l.name);
+        const auto s = automatic_resolution(l.m, l.h);
+        REQUIRE(s);
+        REQUIRE(std::isfinite(*s));
+        const auto complex = NiTCAD::mesh::layered_partition3d(to_layered(l.m));
+        REQUIRE(complex);
+        NiTCAD::mesh::MeshOptions3D o;
+        o.max_size = l.h;
+        // The automatic s meshes; 1 % more the generator refuses.
+        o.interface_resolution = *s;
+        CHECK(NiTCAD::mesh::generate_mesh(*complex, o).has_value());
+        o.interface_resolution = *s * 1.01;
+        CHECK_FALSE(NiTCAD::mesh::generate_mesh(*complex, o).has_value());
+        // The rules alone: their largest s passes them, 1 % more does not; the automatic s is no larger.
+        const auto rules = NiTCAD::mesh::largest_resolution(*complex, o);
+        REQUIRE(rules);
+        CHECK(*s <= *rules);
+        o.interface_resolution = *rules;
+        CHECK(NiTCAD::mesh::check_rules(*complex, o).has_value());
+        o.interface_resolution = *rules * 1.01;
+        CHECK_FALSE(NiTCAD::mesh::check_rules(*complex, o).has_value());
+    }
+}
+
+// The estimate against built meshes at the deck's s (recorded, not a gate: MC13 says ±30 %); also the fit's data.
+TEST_CASE("app solid: the node estimate against built meshes (Unit 26m MT12, MC13; recorded)", "[.][app][solid][estimate]") {
+    for (const Layout& l : mt12_table()) {
+        const double s = 1e-6;
+        const auto complex = NiTCAD::mesh::layered_partition3d(to_layered(l.m));
+        REQUIRE(complex);
+        NiTCAD::mesh::MeshOptions3D o;
+        o.max_size = l.h;
+        o.interface_resolution = s;
+        const auto built = NiTCAD::mesh::generate_mesh(*complex, o);
+        INFO(l.name);
+        REQUIRE(built);
+        const auto e = extent(l.m);
+        REQUIRE(e);
+        const double hp = std::min(l.h, 4 * s);
+        const double n = static_cast<double>(built->mesh.node_count()), est = node_estimate(*e, l.h, s);
+        WARN(std::format("estimate {}: V/h3 {:.1f}, A/hp2 {:.1f}, L/hp {:.1f}, nodes {}, estimate {:.0f} ({:+.1f} %)", l.name, e->volume / (l.h * l.h * l.h),
+                         e->interface_area / (hp * hp), e->feature_length / hp, n, est, 100.0 * (est - n) / n));
+        CHECK(std::abs(est - n) <= 0.3 * n);  // MC13: ±30 % (in-sample: the constants were fitted on this table)
+    }
+}
+
+// MC13's layouts: seed 26231, drawn in order with the tools on a 2 x 1 x 1 µm silicon block (one to four solids each:
+// a box, chamfered, filleted, extruded or arrayed, or a cylinder along y).
+std::vector<Model> mc13_layouts(int count) {
+    std::mt19937 rng(26231);
+    const auto pick = [&](int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); };
+    Model base;
+    base.mesh = MeshKind::layered;
+    base.domain = {{0, 0, 0}, {20000, 10000, 10000}};
+    base.regions.push_back({"si", "silicon", {}, -1});
+    std::vector<Model> out;
+    for (int n = 0; n < count; ++n) {
+        Model m = base;
+        const int solids = pick(1, 4);
+        for (int k = 0; k < solids; ++k) {
+            const int tool = pick(0, 5);
+            const P3 lo{500 * pick(0, 36), 500 * pick(0, 16), 500 * pick(0, 16)};
+            const P3 hi{std::min<Coord>(20000, lo.x + 500 * pick(2, 12)), std::min<Coord>(10000, lo.y + 500 * pick(2, 12)),
+                        std::min<Coord>(10000, lo.z + 500 * pick(2, 8))};
+            if (tool == 5) {  // a cylinder along y through the device
+                const Coord r = 250 * pick(2, 6);
+                const Pt c{std::clamp<Coord>(lo.z, r + 500, 10000 - r - 500), std::clamp<Coord>(lo.x, r + 500, 20000 - r - 500)};
+                add_cylinder(m, 1, 0, 10000, c, r, 16, "sio2");
+                continue;
+            }
+            const int r = add_box(m, {lo, hi}, "sio2");
+            if (r < 0) continue;
+            const SolidRef s{r, 0};
+            const int edge = pick(0, 11);
+            if (tool == 1) chamfer_edge(m, s, edge, 250 * pick(1, 4));
+            if (tool == 2) fillet_edge(m, s, edge, 250 * pick(2, 6), pick(1, 6));
+            if (tool == 3) extrude_face(m, s, pick(0, 5), 500 * pick(1, 4), "silicon");
+            if (tool == 4) array_solid(m, s, {static_cast<Coord>(500 * pick(4, 10)), 0, 0}, pick(2, 3));
+        }
+        out.push_back(std::move(m));
+    }
+    return out;
+}
+
+// MC13: 500 seeded random layouts drawn with the tools. Accepted (the automatic s found: it meshes there): the generator
+// meshes it, and refuses 1 % more. Refused (no s meshes): the generator refuses it too. Counts are printed for the
+// record; hidden, as it meshes every layout (sharded by NITCAD_SHARD=k/n over processes; NITCAD_LAYOUT=n prints one).
+TEST_CASE("app solid: 500 random drawn layouts, accepted ones mesh, refused ones refused alike (Unit 26m MT12, MC13)", "[.][app][solid][mc13]") {
+    const std::vector<Model> layouts = mc13_layouts(500);
+    int accepted = 0, refused = 0, false_accepts = 0, false_refusals = 0, mismatched = 0, above_passes = 0;
+    std::map<std::string, int> reasons;
+    const auto env = [](const char* name) {
+        char* value = nullptr;
+        std::size_t length = 0;
+        std::string text;
+        if (_dupenv_s(&value, &length, name) == 0 && value != nullptr) text = value;
+        std::free(value);
+        return text;
+    };
+    int shard = 0, shards = 1, only = -1;
+    if (const std::string t = env("NITCAD_SHARD"); t.find('/') != std::string::npos) {
+        shard = std::stoi(t.substr(0, t.find('/')));
+        shards = std::max(1, std::stoi(t.substr(t.find('/') + 1)));
+    }
+    if (const std::string t = env("NITCAD_LAYOUT"); !t.empty()) only = std::stoi(t);
+    const auto stage = [&](const char* what) {
+        if (only < 0) return;
+        std::printf("MC13STAGE %s\n", what);
+        std::fflush(stdout);
+    };
+    for (int n = 0; n < 500; ++n) {
+        const Model& m = layouts[static_cast<std::size_t>(n)];
+        if (n % shards != shard || (only >= 0 && n != only)) continue;
+        if (only >= 0) {  // the layout's solids, to rebuild it elsewhere
+            for (std::size_t r = 1; r < m.regions.size(); ++r) {
+                for (const Solid& s : m.regions[r].solids) {
+                    std::printf("MC13SOLID region %zu %s: ", r, m.regions[r].material.c_str());
+                    if (s.kind == SolidKind::box) {
+                        std::printf("box %lld %lld %lld  %lld %lld %lld\n", s.box.lo.x, s.box.lo.y, s.box.lo.z, s.box.hi.x, s.box.hi.y, s.box.hi.z);
+                    } else {
+                        std::printf("prism axis %d from %lld to %lld:", s.axis, s.from, s.to);
+                        for (const Pt& p : s.polygon) std::printf(" (%lld,%lld)", p.x, p.y);
+                        std::printf("\n");
+                    }
+                }
+            }
+        }
+        if (shards > 1 || only >= 0) {  // the log names the layout it is on (a crash ends the process)
+            std::printf("MC13AT %d\n", n);
+            std::fflush(stdout);
+        }
+        const auto complex = NiTCAD::mesh::layered_partition3d(to_layered(m));
+        if (!complex) {  // the layers' own refusal (a solid leaving the domain, ...): not the generator's
+            ++reasons["partition: " + complex.error().message.substr(0, 60)];
+            continue;
+        }
+        NiTCAD::mesh::MeshOptions3D o;
+        o.max_size = 0.25e-4;  // max_nodes as automatic_resolution meshes (the default)
+        stage("automatic s");
+        const auto s = automatic_resolution(m, o.max_size);
+        if (s && std::isinf(*s)) continue;  // no interfaces
+        if (!s) {
+            ++refused;
+            ++reasons[s.error().substr(0, 70)];
+            o.interface_resolution = 0.5e-6;
+            stage("build at 0.005um");
+            const auto built = NiTCAD::mesh::generate_mesh(*complex, o);
+            const auto rules = NiTCAD::mesh::check_rules(*complex, o);
+            if (built) {
+                ++false_refusals;
+                std::printf("MC13NOTE layout %d refused (%s) but meshes at 0.005um\n", n, s.error().c_str());
+            } else if (!rules && rules.error().message != s.error()) {
+                // A refusal by the rules: a rule that does not scale with s says the same at any s. (A refusal by
+                // builds is not compared: the generator's reason at another s may differ.)
+                ++mismatched;
+                std::printf("MC13NOTE layout %d refused: %s | rules at 0.005um: %s\n", n, s.error().c_str(), rules.error().message.c_str());
+            }
+            continue;
+        }
+        ++accepted;
+        o.interface_resolution = *s;
+        stage("build at s");
+        const auto built = NiTCAD::mesh::generate_mesh(*complex, o);
+        if (!built) {
+            ++false_accepts;
+            std::printf("MC13NOTE layout %d accepted at s = %g but: %s\n", n, *s, built.error().message.c_str());
+        }
+        // 1 % above: the generator refuses (by its rules, or a check only the mesh makes).
+        o.interface_resolution = *s * 1.01;
+        stage("build at 1.01 s");
+        if (NiTCAD::mesh::generate_mesh(*complex, o)) {
+            ++above_passes;
+            std::printf("MC13NOTE layout %d meshes at 1.01 s = %g\n", n, *s * 1.01);
+        }
+    }
+    std::string why;
+    for (const auto& [r, k] : reasons) why += std::format("\n  {} x {}", k, r);
+    WARN(std::format("MC13: accepted {}, refused {}, false accepts {}, false refusals {}, messages differing {}, 1.01 s passing {}{}",
+                     accepted, refused, false_accepts, false_refusals, mismatched, above_passes, why));
+    std::printf("MC13SUM %d %d %d %d %d %d\n", accepted, refused, false_accepts, false_refusals, mismatched, above_passes);
+    for (const auto& [r, k] : reasons) std::printf("MC13WHY %d|%s\n", k, r.c_str());
+    CHECK(false_accepts == 0);
+    CHECK(mismatched == 0);
+    CHECK(above_passes == 0);
+}
+
+// MC13 layout 284: a 16-sided cylinder along y whose axis lies on a box's face. At s = 0.5 nm the rules pass and a
+// pair set's 2D mesh met two copies of one vertex an ulp apart: splitting the segment between them inserted a point
+// twice, ending in the 2D triangulation's contract. Now refused as a degenerate mesh; the automatic s search ends too.
+TEST_CASE("app solid: MC13 layout 284, a cylinder halved by a box face, is refused, not a crash (Unit 26m MC13)", "[app][solid][meshable][l284]") {
+    const Model m = mc13_layouts(285).back();
+    REQUIRE(m.regions.size() == 3);
+    const auto complex = NiTCAD::mesh::layered_partition3d(to_layered(m));
+    REQUIRE(complex);
+    NiTCAD::mesh::MeshOptions3D o;
+    o.max_size = 0.25e-4;
+    o.interface_resolution = 5e-8;
+    REQUIRE(NiTCAD::mesh::check_rules(*complex, o));
+    const auto built = NiTCAD::mesh::generate_mesh(*complex, o);
+    REQUIRE_FALSE(built);
+    // The pair set's refusal, as the 3D generator reports it (invalid_input: a finer s does not cure it).
+    CHECK(built.error().code == NiTCAD::base::ErrorCode::invalid_input);
+    CHECK(built.error().message.find("the pair set of an interface could not be meshed") != std::string::npos);
+    CHECK(built.error().message.find("too short to split") != std::string::npos);
+    const auto s = automatic_resolution(m, o.max_size);  // ends, with an s that meshes or a refusal
+    if (s) {
+        o.interface_resolution = *s;
+        CHECK(NiTCAD::mesh::generate_mesh(*complex, o));
+    }
+}
+
+// The automatic s's cost per table layout (NITCAD_TABLE=i picks one; recorded for MT12's button, hidden).
+TEST_CASE("app solid: the automatic s's time on each table layout (Unit 26m MT12; recorded)", "[.][app][solid][autotime]") {
+    char* value = nullptr;
+    std::size_t length = 0;
+    int only = -1;
+    if (_dupenv_s(&value, &length, "NITCAD_TABLE") == 0 && value != nullptr) only = std::stoi(value);
+    std::free(value);
+    const auto table = mt12_table();
+    for (std::size_t i = 0; i < table.size(); ++i) {
+        if (only >= 0 && static_cast<int>(i) != only) continue;
+        const auto complex = NiTCAD::mesh::layered_partition3d(to_layered(table[i].m));
+        REQUIRE(complex);
+        NiTCAD::mesh::MeshOptions3D o;
+        o.max_size = table[i].h;
+        auto t0 = std::chrono::steady_clock::now();
+        const auto rules = NiTCAD::mesh::largest_resolution(*complex, o);
+        const double rules_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        t0 = std::chrono::steady_clock::now();
+        const auto s = automatic_resolution(table[i].m, table[i].h);
+        const double auto_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("AUTOTIME %zu %s: rules s %.4g cm in %.2f s; automatic s %s in %.2f s\n", i, table[i].name, rules ? *rules : -1.0, rules_s,
+                    s ? std::format("{:.4g} cm", *s).c_str() : s.error().c_str(), auto_s);
+        std::fflush(stdout);
     }
 }

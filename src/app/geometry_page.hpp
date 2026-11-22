@@ -209,7 +209,11 @@ private:
     std::string clipboard_material_;
 
     // A drag in progress.
-    enum class Drag { none, move, handle, vertex, domain, contact_end, rubber, rectangle, contact, pan, measure, array };
+    enum class Drag { none, move, handle, vertex, domain, contact_end, rubber, rectangle, contact, pan, measure, array, corner };
+    // Unit 26m slice 2 (MQ6): a corner cut (Chamfer, Round vertex) dragged in from a shape's corner.
+    geo::ShapeRef corner_shape_;
+    geo::Coord corner_r_ = 0;
+    int corner_chords_ = 0;
     Drag drag_ = Drag::none;
     geo::Geometry g_start_;  // the model when the drag began
     geo::Pt anchor_{}, at_{};

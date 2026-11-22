@@ -173,6 +173,64 @@ int array_solid(Model& m, SolidRef s, P3 pitch, int count);
 // any is invalid or none would move).
 bool align_solids(Model& m, const std::vector<SolidRef>& solids, int face, Coord at);
 
+// --- Unit 26m slice 2 (MT6, MT7, MT12) ---
+// An edge (Solid::edges) parallel to a prism's axis (a box's: any edge) as a corner of a prism: the solid written as
+// the prism along the edge's axis (a box as its rectangle, counter-clockwise from (lo u, lo v)) and the polygon's
+// vertex at the edge. None for a prism's cap edges.
+struct EdgeCorner {
+    Solid prism;
+    int corner = -1;
+};
+[[nodiscard]] std::optional<EdgeCorner> edge_corner(const Solid& s, int edge);
+// The edge's corner chamfered (d along both faces) or filleted (radius r in `segments` chords, geo::fillet_corner),
+// a box first written as its prism; a prism's vertex k likewise (Round vertex).
+bool chamfer_edge(Model& m, SolidRef s, int edge, Coord d);
+bool fillet_edge(Model& m, SolidRef s, int edge, Coord r, int segments);
+bool fillet_vertex(Model& m, SolidRef s, int k, Coord r, int segments);
+// Taper: the edge's corner moved alone by `delta` in the prism's (u, v), so the walls meeting there slant.
+bool taper_edge(Model& m, SolidRef s, int edge, Pt delta);
+// A cylinder: a prism along `axis` from `from` to `to` whose polygon is geo::regular_polygon(centre, r, sides).
+int add_cylinder(Model& m, int axis, Coord from, Coord to, Pt centre, Coord r, int sides, std::string material);
+// A face's outward normal: its axis and sign (+1: along the axis); none for a slanted prism side.
+struct Normal {
+    int axis = 2, sign = 1;
+};
+[[nodiscard]] std::optional<Normal> face_normal(const Solid& s, int face);
+// The new solid on a face (move_face's numbering) inset by `margin` from its edges and reaching `depth` along its
+// outward normal (negative: into the solid). A box face, a u/v-parallel prism side, or a cap: a prism's cap keeps its
+// polygon with no margin, and takes a margin only when the polygon is its bounds' rectangle. None when it would be
+// empty or invalid.
+[[nodiscard]] std::optional<Solid> face_solid(const Solid& s, int face, Coord margin, Coord depth);
+// Inset and Extrude (MT6): that solid as a new region on top of `material` (Extrude: margin 0, depth > 0), or, of the
+// face's own material, a new solid of its region (no interface between them); the region's index, -1 refused. A margin
+// on every side of a face inside the device leaves that face a ring, a holed interface piece the generator refuses.
+int inset_face(Model& m, SolidRef s, int face, Coord margin, Coord depth, std::string material);
+int extrude_face(Model& m, SolidRef s, int face, Coord depth, std::string material);
+// MT12 (2): an offset of `moving` along `axis` kept clear: the nearest offset to `delta` (within 2 × margin of it) at
+// which no face of the moved solids' bounds across `axis` lies strictly within `margin` of a face of the domain or of
+// another solid's bounds whose bounds come within `margin` of it on the other two axes (`skip`: solids that move
+// with them). `delta` when no such offset is near.
+// MT12 (1): the largest interface_resolution s (cm) the layout's rules allow, within 0.1 % (mesh::largest_resolution
+// over the model's complex with `max_size` cm); +infinity without interfaces; the build's own message when no s
+// passes (a rule that does not scale with s) or the layers do not resolve.
+[[nodiscard]] std::expected<double, std::string> automatic_resolution(const Model& m, double max_size);
+// MT12 (3): the expected node count of the mesh at max_size h and interface_resolution s: the bulk at h, and the
+// interfaces' pair sets at hp = min(h, 4 s) on both sides, and the graded rows along their feature lines:
+// N = a V / h³ + b A / hp² + c L / hp, a, b and c fitted to built meshes (DECISIONS.md, slice 2). 0 when the layers do not resolve.
+struct Extent {
+    double volume = 0, interface_area = 0;  // cm³, cm²
+    double feature_length = 0;              // cm: edges where an interface bends, meets another, or meets the boundary
+};
+[[nodiscard]] std::optional<Extent> extent(const Model& m);
+[[nodiscard]] double node_estimate(const Extent& e, double max_size, double s);
+// A [mesh] length key of the deck (max_size, interface_resolution) in cm; none when absent or not a length.
+[[nodiscard]] std::optional<double> mesh_length(std::string_view deck, std::string_view key);
+// The deck with its [mesh] `key` set to `q` quanta (the line replaced, or added after the section's last entry), every
+// other line kept byte for byte. Errors: the deck does not parse or has no [mesh].
+[[nodiscard]] std::expected<std::string, std::string> set_mesh_length(std::string_view deck, std::string_view key, Coord q);
+[[nodiscard]] Coord keep_clear(const Model& m, const std::vector<Solid>& moving, const std::vector<SolidRef>& skip, int axis,
+                               Coord delta, Coord margin);
+
 // Contacts: a patch box inside the domain that reaches a face of it with some area (it selects boundary facets).
 [[nodiscard]] bool selects_boundary(const Box3& domain, const Box3& b) noexcept;
 int add_contact(Model& m, std::string name, std::string kind, Box3 b);

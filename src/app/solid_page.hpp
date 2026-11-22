@@ -30,6 +30,7 @@
 
 #include <windows.h>
 
+#include <expected>
 #include <optional>
 #include <span>
 #include <string>
@@ -58,7 +59,7 @@ public:
     };
 
     // The 2D editor's tools' order, so the Edit menu's tool commands work on both.
-    enum class Tool : int { select, box, prism, contact, pan, measure };
+    enum class Tool : int { select, box, prism, contact, pan, measure, cylinder };  // cylinder: 3D only (Unit 26m MT7)
 
     SolidPage(HWND parent, Host& host, int id, int inspector_id);
     ~SolidPage();
@@ -109,6 +110,12 @@ public:
     bool toggle_overlap();  // the picked solids' regions: fill <-> replace
     [[nodiscard]] int array_count() const noexcept { return array_count_; }
     [[nodiscard]] int view_axis() const;  // the model axis most nearly along the view
+    // --- Unit 26m slice 2 (MT12) ---
+    [[nodiscard]] solid::Coord resolution() const noexcept { return res_q_; }  // the deck's s, quanta
+    [[nodiscard]] int chords() const noexcept { return chords_; }
+    // The largest s the layout allows (cm; +inf without interfaces), or why none does.
+    [[nodiscard]] std::expected<double, std::string> automatic_resolution() const;
+    bool use_automatic_resolution();  // written to the deck's interface_resolution (on the quantum, rounded down)
 
     // State, for the tests.
     [[nodiscard]] const solid::Model& model() const noexcept { return m_; }
@@ -151,7 +158,7 @@ public:
         c_x0_label, c_x0, c_x1_label, c_x1, c_y0_label, c_y0, c_y1_label, c_y1, c_z0_label, c_z0, c_z1_label, c_z1,
         c_axis_label, c_axis, c_from_label, c_from, c_to_label, c_to, c_vertices_label, c_vertices, c_apply,
         c_kind_label, c_kind, c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset,
-        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_overlap, c_count
+        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_overlap, c_resolution, c_count
     };
     [[nodiscard]] HWND control(int c) const;
 
@@ -200,7 +207,8 @@ private:
     std::string material_ = "silicon";
 
     // A drag or a drawing in progress.
-    enum class Drag { none, orbit, pan, move, axis, plane, face, vertex, contact_move, base, height, polygon, contact, measure, array };
+    enum class Drag { none, orbit, pan, move, axis, plane, face, vertex, contact_move, base, height, polygon, contact, measure, array,
+                      cut, taper, extrude, inset, inset_depth, radius };
     Drag drag_ = Drag::none;
     bool button_ = false;  // the left button is down
     solid::Model m_start_;
@@ -250,6 +258,20 @@ private:
     std::optional<solid::Model> copy_from_;  // a copy drag: the model before the copies were made
     solid::Selection copy_sel_;
     bool transform_click(const solid::Pick& p, bool shift, bool ctrl);  // Mirror and Align
+
+    // Unit 26m slice 2 (MT6, MT7, MT12).
+    bool tool_press(const solid::Pick& p, double x, double y);  // the Faces and Edges modes' presses
+    void begin_drag(Drag d);
+    void finish_inset();
+    void read_mesh_keys();
+    [[nodiscard]] solid::Coord gap_up(solid::Coord v) const;  // a non-zero length under 4 s raised to 4 s (MT12)
+    [[nodiscard]] solid::Model cut_model(solid::Coord r);     // the edge cut (Chamfer, Fillet, Round vertex) of size r
+    int edge_ = -1;                // the edge a cut or taper drags
+    int chords_ = 0;               // a fillet's chords (0: under 6 s)
+    solid::Normal normal_;         // the face an inset or extrude starts on
+    solid::Coord margin_ = 0, radius_ = 0;
+    solid::Coord res_q_ = 0;       // the deck's interface_resolution, quanta (0: none)
+    double max_size_ = 0.0;        // the deck's max_size, cm
 };
 
 }  // namespace NiTCAD::app

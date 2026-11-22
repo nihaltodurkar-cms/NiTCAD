@@ -147,8 +147,10 @@ TEST_CASE("modeller: what is picked opens its group; each group's tools", "[app]
         CHECK_FALSE(group_name(static_cast<Group>(g)).empty());
     }
     // Slice 1: Fill / Replace joins Solid (MT4); Transform holds Move and its four modes (MT5).
-    CHECK(tools(Group::solid).size() == 4);
-    CHECK(tools(Group::solid)[3].action == Action::overlap);
+    // Slice 2: Cylinder joins Solid before it (MT7).
+    CHECK(tools(Group::solid).size() == 5);
+    CHECK(tools(Group::solid)[3].tool == 6);
+    CHECK(tools(Group::solid)[4].action == Action::overlap);
     REQUIRE(tools(Group::transform).size() == 5);
     CHECK(tools(Group::transform)[0].action == Action::tool);
     for (std::size_t k = 1; k < 5; ++k) {
@@ -158,6 +160,21 @@ TEST_CASE("modeller: what is picked opens its group; each group's tools", "[app]
     CHECK(later(Group::transform).empty());
     CHECK(armed_key(0, Mode::none) == 0);
     CHECK(armed_key(0, Mode::array) == 103);
-    CHECK(tools(Group::edges).empty());
-    CHECK_FALSE(later(Group::edges).empty());
+    // Slice 2 (MT6, MT7): Edges and Faces have their tools; each mode opens its own group; the 2D bar leaves out the
+    // 3D-only ones (MQ6: Cylinder, Fillet, Taper, Inset, Extrude).
+    REQUIRE(tools(Group::edges).size() == 4);
+    REQUIRE(tools(Group::faces).size() == 4);
+    CHECK(later(Group::edges).empty());
+    CHECK(later(Group::faces).empty());
+    CHECK(later(Group::solid).empty());
+    CHECK_FALSE(later(Group::doping).empty());
+    for (const Mode m : {Mode::chamfer, Mode::fillet, Mode::round, Mode::taper}) CHECK(group_of(m) == Group::edges);
+    for (const Mode m : {Mode::inset, Mode::extrude}) CHECK(group_of(m) == Group::faces);
+    for (const Mode m : {Mode::copy, Mode::mirror, Mode::array, Mode::align}) CHECK(group_of(m) == Group::transform);
+    CHECK(tools_for(Group::solid, false).size() == 4);
+    CHECK(tools_for(Group::solid, true).size() == 5);
+    CHECK(tools_for(Group::edges, false).size() == 2);
+    CHECK(tools_for(Group::edges, false)[1].tool == static_cast<int>(Mode::round));
+    CHECK(tools_for(Group::faces, false).size() == 2);
+    CHECK(tools_for(Group::transform, false).size() == 5);
 }

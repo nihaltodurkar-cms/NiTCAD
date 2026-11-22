@@ -2021,6 +2021,76 @@ is one deck edit and one undo step.
   In the 3D view only top faces of solids under the oxide are pickable, so a buried solid is reached by the
   inspector or the selection.
 
+**Slice 2 as built (MT6, MT7, MT12, 2026-11-22; owner "start slice 2"; Release, MSVC 14.51, 6 cores).** Shared corner
+geometry in `app::geo` (`arc_segments`, `polygon_sides`, `corner_turn`, `fillet_tangent`, `chamfer_corner`,
+`fillet_corner`, `regular_polygon`; 2D `chamfer_shape`, `fillet_shape`), on the quantum, a cut point landing on its
+edge's far vertex merged with it. 3D model (`app::solid`): `edge_corner` (an edge along an axis as a prism's corner, a
+box written as its rectangle), `chamfer_edge`, `fillet_edge`, `fillet_vertex`, `taper_edge`, `add_cylinder`,
+`face_normal`, `face_solid`, `inset_face`, `extrude_face`. MT12: `mesh::check_rules` (generate_mesh's rules only, no
+node placed; its body now `generate(…, rules)`, generate_mesh unchanged) and `mesh::largest_resolution` (down by
+eighths from the complex's extent to a pass, then bisection to 0.1 %); `solid::automatic_resolution`, `keep_clear`,
+`extent` (volume, interface area, feature-line length), `node_estimate`, `mesh_length`, `set_mesh_length`.
+Pages: the Faces group (Push/Pull, Inset, Extrude, Contact), the Edges group (Chamfer, Fillet, Round vertex, Taper),
+Cylinder (O) in Solid; `modeller::group_of`, `tools_for` (the 2D bar leaves out the 3D-only tools: MQ6 gives 2D
+Chamfer and Round vertex on a shape's corners). Inset is two steps (drag the margin, release, move for the depth,
+click); Cylinder three (centre, radius, height). The inspector's "Use the largest interface_resolution" writes the
+automatic s (rounded down to the quantum) as one edit and reports the node estimate.
+- MC6: app tests `[edges]`, `[faces]` (arcs and corners; Chamfer, Fillet, Round vertex, Taper, Cylinder and Extrude each
+  written by minimal edits, read back, undone to the byte, the partition's volume exact (to 1e-12) and the deck
+  building; Inset: see limits). Window tests `[tools]` (2 cases, 127 assertions): every tool in 3D and Chamfer and
+  Round vertex in 2D by messages, each deck equal to the model function's own edit, every step undone and redone.
+- MC4: the deck line shown during every slice 2 drag equals the line written (window tests).
+- MT12 (2): fillet chords and cylinder sides drop while one is under 6 s (the chip says how many, or that they are under
+  6 s); Copy and Array offsets keep clear (onto a plane or 4 s off; `keep_clear`); Inset's margin and depth and
+  Extrude's depth are 0 or at least 4 s.
+- The automatic s is `mesh::largest_meshable_resolution`: largest_resolution's s (the rules only), then built; a
+  refusal a finer s can cure (degenerate_mesh: the interface certificate) steps s down by a fifth a build, at most 4
+  builds (about half the rules' s; each finer build costs more), then a bisection on builds to 0.5 %; any other
+  refusal (invalid_input: a pair set's geometry) ends it at once. Cost on the 7-layout table: 0.9-4.9 s a layout (one
+  build each: the rules' s meshes there).
+- MC13 table (7 drawn layouts): the automatic s meshes and s × 1.01 the generator refuses; the rules' own s passes
+  check_rules and its 1.01 does not, each layout.
+  Node estimate N = 2.65 V/h³ + 1.12 A/hp² + 13.3 L/hp (hp = min(h, 4 s)), fitted by least squares on that table's 7
+  meshes (7k-15k nodes): within ±10 % there. In-sample only: no held-out table (recorded).
+  500 random layouts (seed 26231, hidden test `[mc13]`, 6 processes by NITCAD_SHARD): accepted 301, all meshing (0
+  false accepts); refused 81 (118 more stop in the partition: slanted prisms along two axes). **MC13 missed** on two
+  counts, recorded, not loosened: 4 false refusals (the 4-build cap gives up where a finer s meshes) and 4 layouts
+  that also mesh at 1.01 s (meshing is not monotone in s once the certificate counts). A first run with the rules-only
+  s had 19 false accepts (P4b certificate) and a crash (layout 284): both fixed, below.
+- Bugs found and fixed in slice 2's checks: (1) the rules-only s was refused by the certificate after meshing (19 of
+  500): the build-confirmed search above. (2) Layout 284 (a cylinder whose axis lies on a box face) at s = 0.5 nm: a
+  pair set's 2D mesh held two copies of one vertex an ulp apart, and splitting the segment between them inserted a
+  point twice, ending in Triangulation2D's contract (`in_circle`, existing generate2d code): generate2d now refuses
+  a point already a vertex (`coincides`, the first insertion, segment splits, circumcentres) as degenerate_mesh;
+  regression test `[l284]`. (3) Inset's depth was measured from the release pixel's ray, not the face: after the
+  margin drag, 0.1um straight up read 0.15um (view-dependent); now from the face (found by mutant 16). (4) At 200 %
+  the Solid group's five buttons overflowed the canvas: the bar narrows its buttons to the viewport (48 px floor at
+  96 dpi).
+  (5) mesh_length read the first [mesh], set_mesh_length the last: both the last, as read_model. (6) Replacing a
+  continued entry at the end of a deck without a final newline added one: kept.
+- MC1: app tests 45 570 assertions (full app binary) and `[solid]` 10 744/22 after the fixes; window tests
+  `[modeller]`, `[solid]`, `[geometry]` 1231/0; mesh `[complex_generate]`, `[complex_interfaces]`, `[layered]` all
+  pass; deck tests pass (9 expected failures). clangd (`--check`) and clang-tidy (bugprone, analyzer) on the changed
+  files: no error in slice 2's code (one raw CR in a test char literal fixed).
+- MC9: slice 2's per-frame work with 100 solids: a Copy frame (keep_clear and its deck line) median 0.152 ms, a
+  Fillet frame 0.148 ms (≤ 1 ms); slice 1's 0.149 ms; SE5 orbit 4.97 ms; GE5 2.67 ms.
+- MC12: met (no Win32 in the models, no app or deck in mesh, no new dependency).
+- MC11: 20/20 caught (~/mut-gv/s26m2.sh, s26m2b.sh through run6.sh, sharded on 6 cores). First pass 17 of 21: three
+  did not compile (an unused variable under /WX; rewritten) and "a handle press keeps no start point" survived. It
+  was no fault of the tests: a handle's pick already carries its place on the face, so the page code it mutated
+  (added for a test that could not find a face under the handles) did nothing; removed, so that mutant is gone. The
+  window tests now check the dragged value before anything is typed (Extrude, Inset's depth), which found bug (3).
+- MC1 (after the last fixes): window `[modeller]`, `[solid]`, `[geometry]` 1233/27.
+- Limits (recorded): Inset with a margin on every side of a face inside the device leaves that face a ring, a holed
+  interface piece this branch's generator refuses (Unit 64, merged on main, is not on this branch); the refusal shows,
+  and the automatic s says it. Inset of the face's own material joins its region. Pushing a solid's faces needs them
+  pickable: solids inside the domain are hidden by its faces (26l), reached with the section plane. Align is not
+  kept clear (it places a face exactly). `check_rules` leaves out what only a mesh shows (the pair sets, the
+  certificate): the automatic s builds to confirm it, up to a few seconds a layout (more where it steps down). The
+  automatic s is shown on demand (the button), not live in the chip; the node estimate shows in the button's status,
+  not during drags. Arrays keep clear on the first copy's offset only. MC13's 500-layout test is hidden (it meshes
+  every layout; about an hour on 6 processes).
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

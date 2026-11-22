@@ -11,6 +11,7 @@
 
 #include "deck_text.hpp"
 #include "NiTCAD/deck/syntax.hpp"
+#include "NiTCAD/mesh/generate.hpp"
 
 namespace NiTCAD::app::solid {
 
@@ -945,6 +946,294 @@ bool align_solids(Model& m, const std::vector<SolidRef>& picked, int face, Coord
     }
     return moved;
 }
+
+// --- Unit 26m slice 2 (MT6, MT7, MT12) ---
+
+std::optional<EdgeCorner> edge_corner(const Solid& s, int edge) {
+    const auto list = s.edges();
+    if (edge < 0 || edge >= static_cast<int>(list.size())) return std::nullopt;
+    if (s.kind == SolidKind::prism) {
+        if (edge % 3 != 2) return std::nullopt;  // a cap's edge
+        return EdgeCorner{s, edge / 3};
+    }
+    const auto [i, j] = list[static_cast<std::size_t>(edge)];
+    const int bit = i ^ j, axis = bit == 1 ? 0 : bit == 2 ? 1 : 2, u = (axis + 1) % 3, v = (axis + 2) % 3;
+    const Box3& b = s.box;
+    Solid p{SolidKind::prism, {}, axis, b.lo[axis], b.hi[axis],
+            {{b.lo[u], b.lo[v]}, {b.hi[u], b.lo[v]}, {b.hi[u], b.hi[v]}, {b.lo[u], b.hi[v]}}};
+    const bool hu = (i >> u) & 1, hv = (i >> v) & 1;
+    return EdgeCorner{std::move(p), hv ? (hu ? 2 : 3) : (hu ? 1 : 0)};
+}
+
+namespace {
+
+template <class Cut>
+bool cut_edge(Model& m, SolidRef s, int edge, Cut&& cut) {
+    if (!valid(m, s)) return false;
+    auto ec = edge_corner(at(m, s), edge);
+    if (!ec) return false;
+    auto poly = cut(ec->prism.polygon, ec->corner);
+    if (!poly) return false;
+    ec->prism.polygon = std::move(*poly);
+    return replace(at(m, s), std::move(ec->prism));
+}
+
+}  // namespace
+
+bool chamfer_edge(Model& m, SolidRef s, int edge, Coord d) {
+    return cut_edge(m, s, edge, [&](const std::vector<Pt>& p, int k) { return geo::chamfer_corner(p, k, d); });
+}
+
+bool fillet_edge(Model& m, SolidRef s, int edge, Coord r, int segments) {
+    return cut_edge(m, s, edge, [&](const std::vector<Pt>& p, int k) { return geo::fillet_corner(p, k, r, segments); });
+}
+
+bool fillet_vertex(Model& m, SolidRef s, int k, Coord r, int segments) {
+    if (!valid(m, s) || at(m, s).kind != SolidKind::prism) return false;
+    const int n = static_cast<int>(at(m, s).polygon.size());
+    if (k < 0 || k >= n) return false;
+    return fillet_edge(m, s, 3 * k + 2, r, segments);
+}
+
+bool taper_edge(Model& m, SolidRef s, int edge, Pt delta) {
+    if (!valid(m, s) || delta == Pt{}) return false;
+    auto ec = edge_corner(at(m, s), edge);
+    if (!ec) return false;
+    Pt& p = ec->prism.polygon[static_cast<std::size_t>(ec->corner)];
+    p = {p.x + delta.x, p.y + delta.y};
+    return replace(at(m, s), std::move(ec->prism));
+}
+
+int add_cylinder(Model& m, int axis, Coord from, Coord to, Pt centre, Coord r, int sides, std::string material) {
+    if (r <= 0 || sides < 3 || sides > 360 || axis < 0 || axis > 2) return -1;
+    return add_prism(m, axis, std::min(from, to), std::max(from, to), geo::regular_polygon(centre, r, sides), std::move(material));
+}
+
+std::optional<Normal> face_normal(const Solid& s, int face) {
+    if (s.kind == SolidKind::box) {
+        if (face < 0 || face >= 6) return std::nullopt;
+        return Normal{face / 2, face % 2 ? 1 : -1};
+    }
+    if (face == 0 || face == 1) return Normal{s.axis, face == 1 ? 1 : -1};
+    const std::size_t n = s.polygon.size(), k = static_cast<std::size_t>(face - 2);
+    if (face < 2 || k >= n) return std::nullopt;
+    const Pt a = s.polygon[k], b = s.polygon[(k + 1) % n];
+    const int o = twice_area(s.polygon) > 0 ? 1 : -1;  // counter-clockwise: the outward normal is (dv, -du)
+    if (a.y == b.y) return Normal{(s.axis + 2) % 3, (b.x > a.x ? -1 : 1) * o};
+    if (a.x == b.x) return Normal{(s.axis + 1) % 3, (b.y > a.y ? 1 : -1) * o};
+    return std::nullopt;
+}
+
+std::optional<Solid> face_solid(const Solid& s, int face, Coord margin, Coord depth) {
+    const auto n = face_normal(s, face);
+    if (!n || margin < 0 || depth == 0) return std::nullopt;
+    Box3 f;  // the face, flat across n->axis
+    if (s.kind == SolidKind::box) {
+        f = s.box;
+    } else if (face <= 1) {
+        const Box3 b = s.bounds();
+        const Pt lo = uv_of(s.axis, b.lo), hi = uv_of(s.axis, b.hi);
+        const bool rectangle = s.polygon.size() == 4 && std::ranges::all_of(s.polygon, [&](Pt p) {
+            return (p.x == lo.x || p.x == hi.x) && (p.y == lo.y || p.y == hi.y);
+        });
+        if (!rectangle) {
+            if (margin != 0) return std::nullopt;
+            const Coord c = face == 0 ? s.from : s.to, e = c + n->sign * depth;
+            Solid t{SolidKind::prism, {}, s.axis, std::min(c, e), std::max(c, e), s.polygon};
+            if (!solid_ok(t)) return std::nullopt;
+            return t;
+        }
+        f = b;
+    } else {
+        const std::size_t k = static_cast<std::size_t>(face - 2);
+        const Pt a = s.polygon[k], b = s.polygon[(k + 1) % s.polygon.size()];
+        f = normalized(from_uv(s.axis, a, s.from), from_uv(s.axis, b, s.to));
+    }
+    const int ax = n->axis;
+    const Coord c = n->sign > 0 ? f.hi[ax] : f.lo[ax], e = c + n->sign * depth;
+    f.lo[ax] = std::min(c, e);
+    f.hi[ax] = std::max(c, e);
+    for (const int o : {(ax + 1) % 3, (ax + 2) % 3}) {
+        f.lo[o] += margin;
+        f.hi[o] -= margin;
+    }
+    if (!box_ok(f)) return std::nullopt;
+    return Solid{SolidKind::box, f, 2, 0, 0, {}};
+}
+
+int inset_face(Model& m, SolidRef s, int face, Coord margin, Coord depth, std::string material) {
+    if (!valid(m, s)) return -1;
+    auto t = face_solid(at(m, s), face, margin, depth);
+    if (!t) return -1;
+    Region& own = m.regions[static_cast<std::size_t>(s.region)];
+    if (material == own.material) {  // its own material: joins its region, so no interface forms between them
+        own.solids.push_back(std::move(*t));
+        return s.region;
+    }
+    return add_region(m, std::move(*t), std::move(material));
+}
+
+int extrude_face(Model& m, SolidRef s, int face, Coord depth, std::string material) {
+    if (depth <= 0) return -1;
+    return inset_face(m, s, face, 0, depth, std::move(material));
+}
+
+std::expected<double, std::string> automatic_resolution(const Model& m, double max_size) {
+    const auto complex = mesh::layered_partition3d(to_layered(m));
+    if (!complex) return std::unexpected(complex.error().message);
+    mesh::MeshOptions3D o;
+    o.max_size = max_size;
+    const auto s = mesh::largest_meshable_resolution(*complex, o);
+    if (!s) return std::unexpected(s.error().message);
+    return *s;
+}
+
+std::optional<Extent> extent(const Model& m) {
+    const auto complex = mesh::layered_partition3d(to_layered(m));
+    if (!complex) return std::nullopt;
+    const auto& g = *complex;
+    std::vector<std::vector<int>> owners(g.facets.size());  // the regions of the volumes each facet bounds
+    std::map<std::pair<std::size_t, std::size_t>, std::vector<std::pair<std::array<double, 3>, std::pair<int, int>>>> edges;
+    Extent e;
+    for (const auto& v : g.volumes) {
+        for (const std::size_t f : v.facets) owners[f].push_back(v.region);
+    }
+    for (std::size_t f = 0; f < g.facets.size(); ++f) {
+        const auto& vs = g.facets[f].vertices;
+        std::array<double, 3> n{};  // Newell's normal: twice the area along it
+        for (std::size_t i = 0; i < vs.size(); ++i) {
+            const auto& a = g.vertices[vs[i]];
+            const auto& b = g.vertices[vs[(i + 1) % vs.size()]];
+            n[0] += (a[1] - b[1]) * (a[2] + b[2]);
+            n[1] += (a[2] - b[2]) * (a[0] + b[0]);
+            n[2] += (a[0] - b[0]) * (a[1] + b[1]);
+        }
+        const double area = 0.5 * std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        const bool interface = owners[f].size() == 2 && owners[f][0] != owners[f][1];
+        if (interface) e.interface_area += area;
+        if (!(area > 0.0) || (!interface && owners[f].size() != 1)) continue;
+        for (double& c : n) c /= 2.0 * area;
+        for (std::size_t i = 0; i < vs.size(); ++i) {
+            const std::size_t a = vs[i], b = vs[(i + 1) % vs.size()];
+            auto& on = edges[{std::min(a, b), std::max(a, b)}];
+            on.push_back({n, interface ? std::pair<int, int>(std::minmax(owners[f][0], owners[f][1])) : std::pair<int, int>{-1, -1}});
+        }
+    }
+    // A feature line: an edge of an interface where its facets turn (a bend, or the boundary) or two region pairs meet.
+    for (const auto& [ab, on] : edges) {
+        const bool any = std::ranges::any_of(on, [](const auto& o) { return o.second.first >= 0; });
+        bool feature = false;
+        for (std::size_t i = 0; any && i < on.size() && !feature; ++i) {
+            for (std::size_t j = i + 1; j < on.size() && !feature; ++j) {
+                const auto& p = on[i].first;
+                const auto& q = on[j].first;
+                const double cx = p[1] * q[2] - p[2] * q[1], cy = p[2] * q[0] - p[0] * q[2], cz = p[0] * q[1] - p[1] * q[0];
+                feature = cx * cx + cy * cy + cz * cz > 1e-12 || (on[i].second != on[j].second && on[i].second.first >= 0 && on[j].second.first >= 0);
+            }
+        }
+        if (!feature) continue;
+        const auto& a = g.vertices[ab.first];
+        const auto& b = g.vertices[ab.second];
+        e.feature_length += std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+    }
+    const auto report = mesh::check_complex(g);
+    if (!report) return std::nullopt;
+    for (const double v : report->volume) e.volume += v;
+    return e;
+}
+
+double node_estimate(const Extent& e, double h, double s) {
+    // Least squares on the slice 2 table (7 meshes of tool_deck layouts, 7k-15k nodes): within ±10 % there (in-sample).
+    constexpr double a = 2.65, b = 1.12, c = 13.3;
+    if (!(h > 0.0)) return 0.0;
+    const double hp = s > 0.0 ? std::min(h, 4.0 * s) : h;
+    return a * e.volume / (h * h * h) + b * e.interface_area / (hp * hp) + c * e.feature_length / hp;
+}
+
+std::optional<double> mesh_length(std::string_view text, std::string_view key) {
+    const auto d = deck::parse(text);
+    if (!d) return std::nullopt;
+    const deck::Section* mesh = nullptr;  // the last, as read_model, write_model and set_mesh_length take it
+    for (const auto& s : d->sections) {
+        if (s.kind == "mesh") mesh = &s;
+    }
+    if (!mesh) return std::nullopt;
+    const deck::Entry* e = find_entry(*mesh, key);
+    if (!e) return std::nullopt;
+    const auto q = geo::parse_length(trim(e->value));
+    if (!q) return std::nullopt;
+    return static_cast<double>(*q) / (per_um * 1e4);
+}
+
+std::expected<std::string, std::string> set_mesh_length(std::string_view text, std::string_view key, Coord q) {
+    const auto d = deck::parse(text);
+    if (!d) return std::unexpected(d.error().message);
+    const deck::Section* mesh = nullptr;
+    for (const auto& s : d->sections) {
+        if (s.kind == "mesh") mesh = &s;
+    }
+    if (!mesh) return std::unexpected(std::string("the deck has no [mesh] section"));
+    Lines l = split(text);
+    const std::string line = std::string(key) + " = " + geo::format_length(q);
+    const deck::Entry* e = find_entry(*mesh, key);
+    int at = 0;
+    if (e) {
+        const int first = e->line - 1, last = entry_last(l, first);
+        l.eol[static_cast<std::size_t>(first)] = l.eol[static_cast<std::size_t>(last)];  // the entry's own end (none at EOF)
+        l.body.erase(l.body.begin() + first + 1, l.body.begin() + last + 1);
+        l.eol.erase(l.eol.begin() + first + 1, l.eol.begin() + last + 1);
+        l.body[static_cast<std::size_t>(first)] = line;
+    } else {
+        at = section_last(l, *mesh) + 1;
+        l.body.insert(l.body.begin() + at, line);
+        l.eol.insert(l.eol.begin() + at, l.nl);
+        if (at > 0 && l.eol[static_cast<std::size_t>(at - 1)].empty()) l.eol[static_cast<std::size_t>(at - 1)] = l.nl;
+    }
+    std::string out;
+    for (std::size_t k = 0; k < l.body.size(); ++k) out += l.body[k] + l.eol[k];
+    return out;
+}
+
+Coord keep_clear(const Model& m, const std::vector<Solid>& moving, const std::vector<SolidRef>& skip, int axis, Coord delta,
+                 Coord margin) {
+    if (margin <= 0 || axis < 0 || axis > 2 || moving.empty()) return delta;
+    std::vector<std::pair<Coord, Coord>> pairs;  // (a moving face's coordinate, a plane it must keep clear of)
+    for (const Solid& mv : moving) {
+        const Box3 mb = mv.bounds();
+        std::vector<Coord> planes{m.domain.lo[axis], m.domain.hi[axis]};
+        for (std::size_t r = 0; r < m.regions.size(); ++r) {
+            for (std::size_t k = 0; k < m.regions[r].solids.size(); ++k) {
+                if (std::ranges::find(skip, SolidRef{static_cast<int>(r), static_cast<int>(k)}) != skip.end()) continue;
+                const Box3 b = m.regions[r].solids[k].bounds();
+                bool near = true;
+                for (const int o : {(axis + 1) % 3, (axis + 2) % 3}) near = near && b.lo[o] - margin <= mb.hi[o] && mb.lo[o] <= b.hi[o] + margin;
+                if (near) {
+                    planes.push_back(b.lo[axis]);
+                    planes.push_back(b.hi[axis]);
+                }
+            }
+        }
+        for (const Coord f : {mb.lo[axis], mb.hi[axis]}) {
+            for (const Coord p : planes) pairs.emplace_back(f, p);
+        }
+    }
+    const auto clear = [&](Coord d) {
+        return std::ranges::none_of(pairs, [&](const auto& fp) {
+            const Coord gap = std::abs(fp.first + d - fp.second);
+            return gap > 0 && gap < margin;
+        });
+    };
+    if (clear(delta)) return delta;
+    std::optional<Coord> best;
+    for (const auto& [f, p] : pairs) {
+        for (const Coord d : {p - f, p - f - margin, p - f + margin}) {
+            if (std::abs(d - delta) > 2 * margin || !clear(d)) continue;
+            if (!best || std::abs(d - delta) < std::abs(*best - delta) || (std::abs(d - delta) == std::abs(*best - delta) && d < *best)) best = d;
+        }
+    }
+    return best.value_or(delta);
+}
+
 bool selects_boundary(const Box3& d, const Box3& b) noexcept {
     for (int a = 0; a < 3; ++a) {
         if (b.lo[a] > b.hi[a] || b.lo[a] < d.lo[a] || b.hi[a] > d.hi[a]) return false;
