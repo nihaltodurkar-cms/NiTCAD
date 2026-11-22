@@ -53,7 +53,27 @@ struct Span {
     double lo = 0.0, hi = 0.0;  // cm along the axis, at the deck's value
     std::array<double, 3> at{};  // cm: the lo end; the other two coordinates place the line (a box's low corner)
     std::string source;         // "region oxide", "contact gate", "mesh x", "doping 2" (1-based profile index)
+    int grows = 1;              // +1: the moving end goes toward +axis as the value grows; -1 toward -axis
 };
 [[nodiscard]] std::vector<Span> dimension_spans(std::string_view deck_text, std::string_view name);
+
+// What the editors draw (DT2): a line per length row and span, from `a` (the span's lo end) to `b` (its hi end), cm,
+// labelled "<label> = <value>"; dragging it toward `grows` along `axis` makes the value larger.
+struct Mark {
+    std::string name, label;
+    int axis = 0;
+    std::array<double, 3> a{}, b{};
+    int grows = 1;
+};
+[[nodiscard]] std::vector<Mark> dimension_marks(std::string_view deck_text);
+
+// A length row's value `cm` as a literal rounded to the lattice (0.1 nm) in the row's unit (a derived row: nm below
+// 1 µm, else um); a positive row stays at least one lattice step.
+[[nodiscard]] std::string length_literal(const Dimension& d, double cm);
+
+// The deck's text with every reference in [mesh], [region], [contact] and [doping] written out (deck::substitute), each
+// line rewritten in place, [parameters] and every other line kept: what the 2D editor draws a parametric deck from
+// (view only). Errors: the deck does not parse or a reference does not resolve.
+[[nodiscard]] std::expected<std::string, std::string> substituted_text(std::string_view deck_text);
 
 }  // namespace NiTCAD::app::dims

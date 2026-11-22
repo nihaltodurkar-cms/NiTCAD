@@ -324,3 +324,42 @@ TEST_CASE("dimension spans: a length's line is the shortest extent it changes wi
         CHECK(near(s[0].at[2], 0.0));
     }
 }
+
+TEST_CASE("dimension marks: one per length with a span, labelled, with the side that grows", "[app][dimensions]") {
+    const auto marks = dims::dimension_marks(mos2d);
+    REQUIRE(marks.size() == 3);  // Lg, Lsd (the source window), x_d; Nsd is a number
+    CHECK(marks[0].name == "Lg");
+    CHECK(marks[0].label == "Gate length = 20 nm");
+    CHECK(marks[0].axis == 0);
+    CHECK(near(marks[0].a[0], 5e-6));
+    CHECK(near(marks[0].b[0], 7e-6));
+    CHECK(near(marks[0].a[1], 4.2e-6));
+    CHECK(near(marks[0].b[1], 4.2e-6));
+    CHECK(marks[0].grows == 1);  // its hi end moves out as Lg grows
+    CHECK(marks[1].name == "Lsd");
+    CHECK(marks[1].grows == 1);
+    CHECK(marks[2].name == "x_d");
+    CHECK(marks[2].label == "x_d = 70 nm");
+}
+
+TEST_CASE("dimension marks: a length literal rounded to the lattice, in the row's unit", "[app][dimensions]") {
+    const auto rows = dims::read_dimensions(mos2d);
+    REQUIRE(rows);
+    CHECK(dims::length_literal((*rows)[0], 2.03e-6) == "20.3nm");
+    CHECK(dims::length_literal((*rows)[0], 2.0349e-6) == "20.3nm");
+    CHECK(dims::length_literal((*rows)[0], 0.0) == "0.1nm");  // a positive length stays at least one lattice step
+    CHECK(dims::length_literal((*rows)[2], 7.5e-6) == "75nm");  // derived: written as a value, nm below 1 µm
+}
+
+TEST_CASE("dimensions: the deck's text with every reference written out, line for line", "[app][dimensions]") {
+    const auto out = dims::substituted_text(mos2d);
+    REQUIRE(out);
+    INFO(*out);
+    CHECK(changed(mos2d, *out).size() == 5);  // mesh x, oxide box, two doping lines, the gate box; [parameters] kept
+    CHECK(out->find("box = 0 1.1999999999999999e-05cm  40nm 42nm") != std::string::npos);  // the deck layer's own bits
+    CHECK(out->find("box = 50nm 6.999999999999999e-06cm  42nm 42nm") != std::string::npos);
+    CHECK(out->find("Lg = 20nm  # Gate length") != std::string::npos);
+    const auto after = out->substr(out->find("[mesh]"));
+    CHECK(after.find('$') == std::string::npos);
+    CHECK_FALSE(dims::substituted_text("[parameters]\nLg = 20nm\n\n[region a]\nbox = $nope 1nm 0 1nm\n"));
+}

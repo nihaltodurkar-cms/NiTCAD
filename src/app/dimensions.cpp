@@ -301,7 +301,8 @@ std::vector<Span> dimension_spans(std::string_view deck_text, std::string_view n
     if (!d0 || !d1) return {};
     const auto s0 = deck::substituted(*d0), s1 = deck::substituted(*d1);
     if (!s0 || !s1) return {};
-    const auto c0 = candidates(*s0), c1 = candidates(*s1);
+    auto c0 = candidates(*s0);
+    const auto c1 = candidates(*s1);
     if (c0.size() != c1.size()) return {};
     const auto same = [&](double a, double b) { return std::abs(a - b) <= 1e-6 * delta; };
     std::array<const Candidate*, 3> best{};
@@ -311,6 +312,7 @@ std::vector<Span> dimension_spans(std::string_view deck_text, std::string_view n
         const bool lo_moved = !same(a.lo, b.lo), hi_moved = !same(a.hi, b.hi);
         if (lo_moved == hi_moved) continue;
         if (!same(std::abs((b.hi - b.lo) - (a.hi - a.lo)), delta)) continue;
+        c0[k].span.grows = (hi_moved ? b.hi - a.hi : b.lo - a.lo) > 0 ? 1 : -1;
         const Candidate*& slot = best[static_cast<std::size_t>(a.axis)];
         const double len = std::abs(a.hi - a.lo);
         if (!slot) {
@@ -324,6 +326,68 @@ std::vector<Span> dimension_spans(std::string_view deck_text, std::string_view n
     std::vector<Span> out;
     for (const Candidate* c : best) {
         if (c) out.push_back(c->span);
+    }
+    return out;
+}
+
+}  // namespace NiTCAD::app::dims
+
+namespace NiTCAD::app::dims {
+
+std::vector<Mark> dimension_marks(std::string_view deck_text) {
+    std::vector<Mark> out;
+    const auto rows = read_dimensions(deck_text);
+    if (!rows) return out;
+    for (const Dimension& d : *rows) {
+        if (!d.length) continue;
+        for (const Span& s : dimension_spans(deck_text, d.name)) {
+            Mark m;
+            m.name = d.name;
+            m.label = d.label + " = " + d.value_text;
+            m.axis = s.axis;
+            m.a = s.at;
+            m.b = s.at;
+            m.b[static_cast<std::size_t>(s.axis)] = s.hi;
+            m.grows = s.grows;
+            out.push_back(std::move(m));
+        }
+    }
+    return out;
+}
+
+std::string length_literal(const Dimension& d, double cm) {
+    std::string_view unit = d.expr.find('$') == std::string::npos ? unit_of(d.expr) : std::string_view();
+    if (unit.empty()) unit = std::abs(cm) < 1e-4 ? "nm" : "um";
+    auto q = static_cast<std::int64_t>(std::llround(cm / geo::quantum_cm));
+    if (d.value > 0.0) q = std::max<std::int64_t>(q, 1);
+    return format_in(q, unit);
+}
+
+std::expected<std::string, std::string> substituted_text(std::string_view deck_text) {
+    const auto d = deck::parse(deck_text);
+    if (!d) return std::unexpected(d.error().message);
+    const auto params = deck::parameters(*d);
+    if (!params) return std::unexpected(params.error().message);
+    auto lines = lines_of(deck_text);
+    std::vector<std::string> edited(lines.size());
+    std::vector<bool> changed(lines.size(), false);
+    for (const deck::Section& s : d->sections) {
+        if (s.kind != "mesh" && s.kind != "region" && s.kind != "contact" && s.kind != "doping") continue;
+        for (const deck::Entry& e : s.entries) {
+            if (e.value.find('$') == std::string::npos) continue;
+            const auto at = static_cast<std::size_t>(e.line - 1);
+            if (trim(lines[at]).ends_with("\\")) return std::unexpected("line " + std::to_string(e.line) + ": a continued line with references");
+            const auto v = deck::substitute(e.value, *params);
+            if (!v) return std::unexpected("line " + std::to_string(e.line) + ": " + v.error());
+            edited[at] = with_value(lines[at], *v);
+            changed[at] = true;
+        }
+    }
+    std::string out;
+    out.reserve(deck_text.size() + 64);
+    for (std::size_t k = 0; k < lines.size(); ++k) {
+        if (k) out += '\n';
+        out += changed[k] ? std::string_view(edited[k]) : lines[k];
     }
     return out;
 }

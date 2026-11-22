@@ -146,9 +146,6 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
     add(c_convert, L"BUTTON", L"Convert to layered generate3d", WS_TABSTOP | BS_PUSHBUTTON);
     add(c_overlap, L"BUTTON", L"Fills only empty space (overlap = fill)", WS_TABSTOP | BS_AUTOCHECKBOX);
     add(c_resolution, L"BUTTON", L"Use the largest interface_resolution", WS_TABSTOP | BS_PUSHBUTTON);  // MT12
-    add(c_params_label, L"STATIC", L"Parameters (name = value; $name in solids)", SS_LEFT);  // MT8
-    add(c_params, L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, WS_EX_CLIENTEDGE);
-    add(c_params_apply, L"BUTTON", L"Apply parameters", WS_TABSTOP | BS_PUSHBUTTON);
     for (const int c : {c_material, c_draw}) {
         for (const std::string& mat : choices_of("region", "material")) SendMessageW(control(c), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(win32::widen(mat).c_str()));
     }
@@ -157,6 +154,9 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
     for (const char* p : plane_names) SendMessageW(control(c_plane), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(win32::widen(p).c_str()));
     for (const wchar_t* s : {L"Off", L"Cut above x", L"Cut above y", L"Cut above z"}) SendMessageW(control(c_section), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
     SendMessageW(control(c_draw), CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(L"silicon"));
+    dims_host_.page = this;  // Unit 26n (DT1)
+    dims_ = std::make_unique<DimensionsPanel>(inspector_, dims_host_, inspector_id + 900);
+    ShowWindow(dims_->hwnd(), SW_SHOWNA);
     update_tool_buttons();
     update_inspector();
 }
@@ -181,6 +181,7 @@ void SolidPage::set_dpi(int dpi, HFONT font, HFONT bold) {
     bar_->set_font(font, dpi);
     for (HWND h : controls_) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     SendMessageW(control(c_heading), WM_SETFONT, reinterpret_cast<WPARAM>(bold), TRUE);
+    if (dims_) dims_->set_dpi(dpi, font, bold);
     layout();
     layout_inspector();
 }
@@ -236,9 +237,6 @@ void SolidPage::layout_inspector() {
     pair(c_kind_label, c_kind, MulDiv(160, dpi_, 96));
     line(c_convert);
     line(c_resolution);
-    line(c_params_label);
-    line(c_params, MulDiv(80, dpi_, 96));
-    line(c_params_apply);
     y += pad;
     pair(c_draw_label, c_draw, MulDiv(200, dpi_, 96));
     pair(c_plane_label, c_plane, MulDiv(90, dpi_, 96));
@@ -246,6 +244,9 @@ void SolidPage::layout_inspector() {
     pair(c_section_label, c_section, MulDiv(110, dpi_, 96));
     pair(c_cut_label, c_cut);
     line(c_translucent);
+    // Unit 26n (DT1): the dimensions panel below.
+    y += pad;
+    MoveWindow(dims_->hwnd(), 0, y, r.right, std::max(1, dims_->preferred_height(r.right)), TRUE);
 }
 
 // --- the deck ------------------------------------------------------------------------------------------------------
@@ -276,6 +277,7 @@ void SolidPage::reload(bool fit_view) {
     }
     prune_selection();
     locate_problems();
+    reload_dimensions();
     update_inspector();
     invalidate();
 }
@@ -299,6 +301,7 @@ void SolidPage::apply_text(const std::string& text) {
     }
     prune_selection();
     locate_problems();
+    reload_dimensions();
     update_inspector();
     invalidate();
 }
@@ -1170,6 +1173,32 @@ double SolidPage::render() {
     }
     if (pending_volume_) overlay.volumes.push_back(*pending_volume_);
     scene_ = solid_scene(m_, v_, sel_, preview_, overlay);
+    // Unit 26n (DT2): the dimension lines on top, with end ticks, and their labels; the selected one wider.
+    if (!marks_.empty()) {
+        const render::Rgba ink{0.13f, 0.40f, 0.80f, 1.0f};
+        render::LineBatch all{"dimensions", ink, 1.5f, true, {}}, lit{"dimensions selected", ink, 3.0f, true, {}};
+        const auto um = [](const std::array<double, 3>& p) { return render::Float3{static_cast<float>(p[0] * 1e4), static_cast<float>(p[1] * 1e4), static_cast<float>(p[2] * 1e4)}; };
+        for (const dims::Mark& mk : marks_) {
+            render::LineBatch& b = mk.name == dims_->selected() ? lit : all;
+            b.points.push_back(um(mk.a));
+            b.points.push_back(um(mk.b));
+            const std::size_t across = static_cast<std::size_t>((mk.axis + 1) % 3);
+            const double tick = 0.04 * std::abs(mk.b[static_cast<std::size_t>(mk.axis)] - mk.a[static_cast<std::size_t>(mk.axis)]);
+            for (const auto& end : {mk.a, mk.b}) {
+                auto lo = end, hi = end;
+                lo[across] -= tick;
+                hi[across] += tick;
+                b.points.push_back(um(lo));
+                b.points.push_back(um(hi));
+            }
+            std::array<double, 3> mid{};
+            for (std::size_t k = 0; k < 3; ++k) mid[k] = 0.5 * (mk.a[k] + mk.b[k]);
+            scene_.labels.push_back({um(mid), mk.label, ink});
+        }
+        for (auto* b : {&all, &lit}) {
+            if (!b->points.empty()) scene_.lines.push_back(std::move(*b));
+        }
+    }
     scene_ms_ = 1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!target_) {
         auto t = renderer_->window_target(canvas_, v_.width, v_.height);
@@ -1258,8 +1287,7 @@ void SolidPage::update_inspector() {
          false);
     for (int k = 0; k < 12; ++k) show({c_x0_label + k}, false);
     const bool usable = m_.mesh != MeshKind::unsupported;
-    show({c_resolution, c_params_label, c_params, c_params_apply}, m_.editable());
-    if (GetFocus() != control(c_params)) set(c_params, parameters_text());
+    show({c_resolution}, m_.editable());
     show({c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset, c_section_label, c_section, c_cut_label, c_cut, c_translucent},
          usable);
     SendMessageW(control(c_plane), CB_SETCURSEL, static_cast<WPARAM>(v_.plane.normal), 0);
@@ -1350,10 +1378,6 @@ bool SolidPage::commit(int c) {
         convert();
         return true;
     }
-    if (c == c_params_apply) {
-        apply_parameters(text(c_params));
-        return true;
-    }
     if (c == c_resolution) {
         use_automatic_resolution();
         return true;
@@ -1430,6 +1454,7 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
     last_y_ = y;
     if (m_.mesh == MeshKind::unsupported) return;
     const bool editable = m_.editable();
+    if (tool_ == Tool::select && dimension_down(x, y)) return;  // Unit 26n (DT2): a dimension line first
     const auto refuse_edit = [&] {
         host_.solid_status("An extrude3d deck is edited once converted: Convert, in the Geometry section.");
     };
@@ -1707,6 +1732,7 @@ void SolidPage::close_polygon() {
 }
 
 void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
+    if (dimension_move(x, y)) return;  // Unit 26n (DT2)
     const double dx = x - last_x_, dy = y - last_y_;
     last_x_ = x;
     last_y_ = y;
@@ -2479,7 +2505,7 @@ LRESULT CALLBACK SolidPage::inspector_proc(HWND hwnd, UINT message, WPARAM w, LP
         if (message == WM_COMMAND) {
             const int c = LOWORD(w) - self->inspector_id_;
             const int code = HIWORD(w);
-            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert || c == c_overlap || c == c_resolution || c == c_params_apply)) ||
+            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert || c == c_overlap || c == c_resolution)) ||
                 (code == CBN_SELCHANGE && (c == c_material || c == c_kind || c == c_draw || c == c_axis || c == c_plane || c == c_section))) {
                 self->commit(c);
                 return 0;
@@ -2523,6 +2549,7 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         after_drag_step(x, y);
         return 0;
     case WM_LBUTTONUP:
+        if (dimension_up()) return 0;  // Unit 26n (DT2)
         if (drag_ != Drag::none && button_) on_up(x, y);
         return 0;
     case WM_RBUTTONDOWN:
@@ -2602,6 +2629,91 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
     default: break;
     }
     return DefWindowProcW(canvas_, message, w, l);
+}
+
+// --- Unit 26n (DT1, DT2): the dimensions panel and the dimension lines -------------------------------------------------
+
+std::string SolidPage::DimsHost::dimensions_deck() { return page->host_.solid_deck(); }
+
+void SolidPage::DimsHost::dimensions_edited(const std::string& text) {
+    page->history_.record(page->host_.solid_deck());  // one undo for the edit
+    page->apply_text(text);
+}
+
+void SolidPage::DimsHost::dimensions_selected(const std::string&) { page->invalidate(); }
+
+void SolidPage::reload_dimensions() {
+    dims_->reload();
+    marks_ = dims::dimension_marks(text_seen_);
+    layout_inspector();
+}
+
+std::vector<std::array<float, 4>> SolidPage::dimension_lines() const {
+    std::vector<std::array<float, 4>> out;
+    for (const dims::Mark& mk : marks_) {
+        const auto um = [](const std::array<double, 3>& p) { return solid::V3{p[0] * 1e4, p[1] * 1e4, p[2] * 1e4}; };
+        const auto a = solid::screen_of(m_, v_, um(mk.a)), b = solid::screen_of(m_, v_, um(mk.b));
+        out.push_back({static_cast<float>(a[0]), static_cast<float>(a[1]), static_cast<float>(b[0]), static_cast<float>(b[1])});
+    }
+    return out;
+}
+
+namespace {
+
+double segment_distance(const std::array<float, 4>& s, double x, double y) {
+    const double dx = s[2] - s[0], dy = s[3] - s[1], len2 = dx * dx + dy * dy;
+    const double t = len2 > 0.0 ? std::clamp(((x - s[0]) * dx + (y - s[1]) * dy) / len2, 0.0, 1.0) : 0.0;
+    return std::hypot(x - (s[0] + t * dx), y - (s[1] + t * dy));
+}
+
+}  // namespace
+
+bool SolidPage::dimension_down(double x, double y) {
+    const auto lines = dimension_lines();
+    for (std::size_t k = 0; k < lines.size(); ++k) {
+        if (segment_distance(lines[k], x, y) > 6.0 * dpi_ / 96.0) continue;
+        dim_drag_ = static_cast<int>(k);
+        dim_x_ = x;
+        dim_y_ = y;
+        dim_literal_.clear();
+        dims_->select(marks_[k].name);
+        SetCapture(canvas_);
+        invalidate();
+        return true;
+    }
+    return false;
+}
+
+bool SolidPage::dimension_move(double x, double y) {
+    if (dim_drag_ < 0) return false;
+    const dims::Mark& mk = marks_[static_cast<std::size_t>(dim_drag_)];
+    const auto& rows = dims_->dimensions();
+    const auto row = std::ranges::find(rows, mk.name, &dims::Dimension::name);
+    if (row == rows.end()) return true;
+    // The pointer's travel along the line's screen direction, in cm by the line's own length.
+    const auto s = dimension_lines()[static_cast<std::size_t>(dim_drag_)];
+    const double sx = s[2] - s[0], sy = s[3] - s[1], px = std::hypot(sx, sy);
+    const double len = std::abs(mk.b[static_cast<std::size_t>(mk.axis)] - mk.a[static_cast<std::size_t>(mk.axis)]);
+    if (px < 1.0 || len <= 0.0) return true;
+    const double along = ((x - dim_x_) * sx + (y - dim_y_) * sy) / px;
+    dim_literal_ = dims::length_literal(*row, row->value + mk.grows * along * len / px);
+    host_.solid_status(row->name + " = " + dim_literal_);
+    return true;
+}
+
+bool SolidPage::dimension_up() {
+    if (dim_drag_ < 0) return false;
+    const std::string name = marks_[static_cast<std::size_t>(dim_drag_)].name;
+    dim_drag_ = -1;
+    if (GetCapture() == canvas_) ReleaseCapture();
+    const auto& rows = dims_->dimensions();
+    const auto row = std::ranges::find(rows, name, &dims::Dimension::name);
+    if (row != rows.end() && !dim_literal_.empty() && dim_literal_ != row->expr) {
+        dims_->commit(static_cast<std::size_t>(row - rows.begin()), dim_literal_);  // one edit, on release
+    }
+    dim_literal_.clear();
+    invalidate();
+    return true;
 }
 
 }  // namespace NiTCAD::app

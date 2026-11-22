@@ -30,6 +30,7 @@
 #include <windows.h>
 
 #include <chrono>
+#include <expected>
 #include <optional>
 #include <string>
 #include <vector>
@@ -39,6 +40,7 @@
 
 #include "NiTCAD/app/document.hpp"
 #include "NiTCAD/app/geometry.hpp"
+#include "dimensions_panel.hpp"
 #include "modeller_bar.hpp"
 
 #include <memory>
@@ -160,6 +162,12 @@ public:
     };
     [[nodiscard]] HWND control(int c) const;
 
+    // Unit 26n (DT1, DT2): the dimensions panel in the inspector, the dimension lines on the canvas.
+    [[nodiscard]] DimensionsPanel& dimensions_panel() noexcept { return *dims_; }
+    [[nodiscard]] const std::vector<dims::Mark>& dimension_marks() const noexcept { return marks_; }
+    [[nodiscard]] std::vector<std::array<float, 4>> dimension_lines() const;  // screen segments, x0 y0 x1 y1, one per mark
+    [[nodiscard]] bool view_only() const noexcept { return view_only_; }
+
 private:
     static LRESULT CALLBACK panel_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
     static LRESULT CALLBACK canvas_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
@@ -247,6 +255,25 @@ private:
 
     // Unit 26m slice 0.
     std::unique_ptr<ModellerBar> bar_;
+    // Unit 26n: the dimensions panel's host (the deck through this page's undo), the panel, the marks, a line's drag.
+    struct DimsHost final : DimensionsPanel::Host {
+        GeometryPage* page = nullptr;
+        std::string dimensions_deck() override;
+        void dimensions_edited(const std::string& text) override;
+        void dimensions_selected(const std::string& name) override;
+    };
+    DimsHost dims_host_;
+    std::unique_ptr<DimensionsPanel> dims_;
+    std::vector<dims::Mark> marks_;
+    int dim_drag_ = -1;  // the mark being dragged, or -1
+    double dim_x_ = 0.0, dim_y_ = 0.0;
+    std::string dim_literal_;
+    bool view_only_ = false;  // a parametric deck drawn from its substituted text: dimensions only, no shape edits
+    [[nodiscard]] std::expected<geo::Geometry, std::string> read_page(const std::string& text);
+    void reload_dimensions();
+    bool dimension_down(double x, double y);
+    bool dimension_move(double x, double y);
+    bool dimension_up();
     bool camera_fixed_ = false;  // MQ2: free on open
     modeller::Entry entry_;
     int typed_axis_ = -1;  // the axis (0 x, 1 y) a typed value sets

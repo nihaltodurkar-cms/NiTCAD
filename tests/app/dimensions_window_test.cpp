@@ -5,6 +5,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -142,4 +143,147 @@ TEST_CASE("dimensions panel: rows from the deck; Enter writes one line; a refusa
         CHECK(panel.rows() == 0);
         CHECK(panel.message().find("No named dimensions") != std::string::npos);
     }
+}
+
+// --- Task 5: the editors host the panel and draw the dimension lines --------------------------------------------------
+
+#include "main_window.hpp"
+#include "fixtures.hpp"
+
+#include "NiTCAD/app/commands.hpp"
+#include "NiTCAD/app/geometry.hpp"
+#include "NiTCAD/app/solid_view.hpp"
+
+#include <cmath>
+#include <fstream>
+
+namespace {
+
+void pump() {
+    MSG m;
+    while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+}
+
+std::unique_ptr<MainWindow> window() {
+    WindowOptions o;
+    o.adapter = NiTCAD::render::Adapter::warp;
+    o.show = false;
+    o.quit_on_close = false;
+    auto w = MainWindow::create(o);
+    REQUIRE(w);
+    return w;
+}
+
+std::filesystem::path write_deck(const std::string& name, const std::string& text) {
+    const auto dir = app_test::scratch("dimensions_window_" + name);
+    const auto p = dir / (name + ".deck");
+    std::ofstream(p, std::ios::binary) << text;
+    return p;
+}
+
+const std::string tied3d = R"([parameters]
+x0 = 30nm
+Lg = 20nm  # Gate length
+
+[mesh]
+type = generate3d
+layered = on
+domain = 0 100nm 0 60nm 0 14nm
+patch body = 0 0 0  100nm 60nm 0
+max_size = 0.05um
+interface_resolution = 2nm
+
+[region si]
+material = silicon
+
+[region gate]
+material = sio2
+box = $x0 $x0 + $Lg 40nm 50nm 0 14nm
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact body]
+kind = ohmic
+patch = body
+
+[equilibrium]
+)";
+
+}  // namespace
+
+TEST_CASE("dimensions in the 2D editor: the panel, the lines over their faces, a drag of one line, one undo", "[app][window][dimensions]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write_deck("mos2d", mos2d)));
+    pump();
+    w->execute(Command::tab_geometry);
+    REQUIRE_FALSE(w->solid_shown());
+    GeometryPage& page = w->geometry_page();
+    INFO(page.geometry().why);
+    REQUIRE(page.geometry().editable());
+    CHECK(page.view_only());  // its shapes hold $references: drawn from the substituted text
+    CHECK(page.dimensions_panel().rows() == 4);
+    REQUIRE(page.render() >= 0.0);
+    const auto& marks = page.dimension_marks();
+    REQUIRE(marks.size() == 3);
+    const auto lines = page.dimension_lines();
+    REQUIRE(lines.size() == marks.size());
+    // Lg: along the gate contact's x extent, 12 px above its y.
+    const auto& v = page.view();
+    const double lift = v.px(12.0);
+    CHECK(std::abs(lines[0][0] - v.sx(500)) <= 1.0);
+    CHECK(std::abs(lines[0][2] - v.sx(700)) <= 1.0);
+    CHECK(std::abs(lines[0][1] - (v.sy(420) - lift)) <= 1.0);
+    CHECK(std::abs(lines[0][3] - lines[0][1]) <= 0.01);
+
+    // A click on the line selects its row; a drag along x by some pixels writes Lg + those quanta.
+    const int mx = static_cast<int>(std::lround(0.5 * (lines[0][0] + lines[0][2]))), my = static_cast<int>(std::lround(lines[0][1]));
+    const std::string before = w->deck().text();
+    SendMessageW(page.canvas(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(mx, my));
+    CHECK(page.dimensions_panel().selected() == "Lg");
+    SendMessageW(page.canvas(), WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(mx + 3, my));
+    SendMessageW(page.canvas(), WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(mx + 6, my));
+    SendMessageW(page.canvas(), WM_LBUTTONUP, 0, MAKELPARAM(mx + 6, my));
+    const geo::Coord dq = v.model(mx + 6, my).x - v.model(mx, my).x;
+    REQUIRE(dq > 0);
+    const std::string expected = "Lg = " + std::to_string((200 + dq) / 10) +
+                                 ((200 + dq) % 10 ? "." + std::to_string((200 + dq) % 10) : std::string()) + "nm  # Gate length\n";
+    CAPTURE(dq, expected);
+    CHECK(w->deck().text().find(expected) != std::string::npos);
+    CHECK(changed_lines(before, w->deck().text()) == 1);
+    // One undo restores the deck byte for byte.
+    w->execute(Command::undo);
+    pump();
+    CHECK(w->deck().text() == before);
+}
+
+TEST_CASE("dimensions in the 3D modeller: the panel replaces the parameters box; the lines and labels are in the scene", "[app][window][dimensions]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write_deck("tied3d", tied3d)));
+    pump();
+    w->execute(Command::tab_geometry);
+    REQUIRE(w->solid_shown());
+    SolidPage& page = w->solid_page();
+    CHECK(FindWindowExW(page.inspector(), nullptr, L"BUTTON", L"Apply parameters") == nullptr);
+    CHECK(page.dimensions_panel().rows() == 2);
+    REQUIRE(page.render() >= 0.0);
+    const auto& s = page.scene();
+    const auto batch = std::ranges::find(s.lines, std::string("dimensions"), &NiTCAD::render::LineBatch::name);
+    REQUIRE(batch != s.lines.end());
+    CHECK(batch->on_top);
+    REQUIRE(batch->points.size() >= 2);
+    CHECK(std::abs(batch->points[0][0] - 0.03f) < 1e-6f);
+    CHECK(std::abs(batch->points[1][0] - 0.05f) < 1e-6f);
+    CHECK(std::abs(batch->points[0][1] - 0.04f) < 1e-6f);
+    REQUIRE(s.labels.size() == 1);  // x0 has no span (its gate box ends both move)
+    CHECK(s.labels[0].text == "Gate length = 20 nm");
+    // A click on the line selects its row.
+    const solid::V3 mid{0.04, 0.04, 0.0};
+    const auto p = solid::screen_of(page.model(), page.view(), mid);
+    SendMessageW(page.canvas(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(static_cast<int>(std::lround(p[0])), static_cast<int>(std::lround(p[1]))));
+    SendMessageW(page.canvas(), WM_LBUTTONUP, 0, MAKELPARAM(static_cast<int>(std::lround(p[0])), static_cast<int>(std::lround(p[1]))));
+    CHECK(page.dimensions_panel().selected() == "Lg");
 }
