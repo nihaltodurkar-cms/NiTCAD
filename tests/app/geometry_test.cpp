@@ -459,7 +459,10 @@ TEST_CASE("app geometry: 200 random edits, undone one by one, give the deck back
         }
         REQUIRE(done == 200);
         WARN("GE5: " << (tensor ? "tensor" : "layered") << " deck, mean write " << write_ms / done << " ms over " << done << " edits");
+        // Release only, as KG6 (owner, 2026-11-19): CI's Debug runner wrote 2.9 ms (4db99cd); there it is recorded.
+#ifdef NDEBUG
         CHECK(write_ms / done <= 2.0);  // GE5
+#endif
         for (int k = done; k > 0; --k) {
             auto t = h.undo(text);
             REQUIRE(t);

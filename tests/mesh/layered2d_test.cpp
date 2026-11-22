@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <format>
 #include <random>
+#include <string>
 #include <vector>
 
 #include "NiTCAD/mesh/generate.hpp"
@@ -146,6 +147,59 @@ TEST_CASE("mesh layered: 1000 seeded random layouts tile exactly (GE2)", "[mesh]
         REQUIRE(t.has_value());
         check_tiling(*t, n, expect);
     }
+}
+
+// The painting by runs repaints a row only where a shape's crossings change (GE5): L shapes, whose crossings change
+// part way up, mixed with rectangles, and no background, so that a gap left anywhere must be found.
+TEST_CASE("mesh layered: 1000 seeded random L-shaped layouts tile exactly (GE2, GE5)", "[mesh][layered]") {
+    std::mt19937 rng(26050);
+    int refused = 0;
+    for (int trial = 0; trial < 1000; ++trial) {
+        CAPTURE(trial);
+        const int n = 12;
+        LayeredGeometry2D g{.lo = {0, 0, 0}, .hi = {n, n, 0}, .background = -1, .shapes = {}, .patches = {}};
+        std::vector<std::int32_t> expect(static_cast<std::size_t>(n * n), -1);
+        const int count = std::uniform_int_distribution<int>(1, 30)(rng);
+        for (int s = 0; s < count; ++s) {
+            std::uniform_int_distribution<int> at(-2, n + 2);
+            int x0 = at(rng), x1 = at(rng), y0 = at(rng), y1 = at(rng);
+            if (x0 > x1) std::swap(x0, x1);
+            if (y0 > y1) std::swap(y0, y1);
+            if (x1 - x0 < 2 || y1 - y0 < 2) continue;
+            const std::int32_t region = std::uniform_int_distribution<std::int32_t>(0, 4)(rng);
+            const int xm = std::uniform_int_distribution<int>(x0 + 1, x1 - 1)(rng);
+            const int ym = std::uniform_int_distribution<int>(y0 + 1, y1 - 1)(rng);
+            const bool l = std::uniform_int_distribution<int>(0, 1)(rng) == 1;
+            const auto d = [](int c) { return static_cast<double>(c); };
+            if (l) {  // the rectangle without its top right corner [xm, x1) x [ym, y1)
+                g.shapes.push_back({{{d(x0), d(y0), 0}, {d(x1), d(y0), 0}, {d(x1), d(ym), 0}, {d(xm), d(ym), 0},
+                                     {d(xm), d(y1), 0}, {d(x0), d(y1), 0}},
+                                    region});
+            } else {
+                g.shapes.push_back(box(x0, x1, y0, y1, region));
+            }
+            for (int j = std::max(y0, 0); j < std::min(y1, n); ++j) {
+                for (int i = std::max(x0, 0); i < std::min(x1, n); ++i) {
+                    if (!(l && i >= xm && j >= ym)) expect[static_cast<std::size_t>(j * n + i)] = region;
+                }
+            }
+        }
+        const auto t = layered_partition2d(g);
+        const auto gap = std::ranges::find(expect, -1);
+        if (gap != expect.end()) {
+            const auto c = static_cast<int>(gap - expect.begin());
+            REQUIRE_FALSE(t.has_value());
+            CHECK(t.error().message == "the layers leave part of the domain uncovered (near (" + std::to_string(static_cast<double>(c % n)) +
+                                           ", " + std::to_string(static_cast<double>(c / n)) + ")) and no region is the background");
+            ++refused;
+            continue;
+        }
+        REQUIRE(t.has_value());
+        check_tiling(*t, n, expect);
+    }
+    // Both outcomes are exercised.
+    CHECK(refused > 50);
+    CHECK(refused < 950);
 }
 
 TEST_CASE("mesh layered: the errors", "[mesh][layered]") {

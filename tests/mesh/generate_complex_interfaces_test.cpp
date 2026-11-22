@@ -329,10 +329,14 @@ TEST_CASE("complex interfaces: the FD7 rules are refused (FC2, FC6)", "[mesh][co
                             [](double u, double v, std::size_t k) { return in(u, 1.0, 1.5) && in(v, 1.0, 1.5) && k == 1 ? 1 : 0; });
         refused(x, o, "feature line is shorter than 6 s");
     }
-    SECTION("an interface piece with a hole") {
+    SECTION("an interface piece with a hole: meshed since Unit 64 slice 1 (IP2), no longer refused") {
         const auto x = grid({0.0, 1.0, 2.0, 3.0}, {0.0, 1.0, 2.0, 3.0}, {0.0, 1.0, 2.0},
                             [](double u, double v, std::size_t k) { return k == 1 && !(in(u, 1.0, 2.0) && in(v, 1.0, 2.0)) ? 1 : 0; });
-        refused(x, o, "has holes");
+        const auto g = extrude(x);
+        REQUIRE(g);
+        const auto m = generate_mesh(*g, o);
+        if (!m) FAIL(m.error().message);
+        check_certified(*m, s, 3.0 * 3.0 * 2.0);
     }
     SECTION("two unrelated features within 4 s") {
         // Two blocks inside region 0, 0.3 apart: their side bends are unrelated lines.

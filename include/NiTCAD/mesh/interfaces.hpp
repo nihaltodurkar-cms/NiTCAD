@@ -20,7 +20,11 @@
 // by the plane distance plus the grown reach when it lies in the polygon grown outward by 1e-6 s
 // (mitred; the reach its largest vertex displacement), for face vertices rounded just across a
 // feature line; and otherwise by the min over the triangles of its ear-clip decomposition of max
-// over V(F) (an upper bound; always for oblique pieces).
+// over V(F) (an upper bound). An oblique non-convex piece (Unit 64 slice 3) also takes, the
+// smaller kept, the plane distance plus the reach lifted to the plane (/ |n_drop|) when the hull
+// of V(F)'s orthogonal feet, in the projection dropping the normal's largest component n_drop,
+// lies in the polygon grown by 1e-14 X (X the largest coordinate magnitude: the feet's rounding)
+// or a larger offset (1e-6 s up to s / 4).
 // The minimum over pieces makes deviation(F) an upper bound on the largest distance from F to the
 // interface (exact where one piece is nearest everywhere on F; an over-estimate near a bend, the
 // safe direction).

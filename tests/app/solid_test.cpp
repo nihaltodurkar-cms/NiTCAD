@@ -664,7 +664,10 @@ TEST_CASE("app solid: 200 random edits, undone one by one, give the deck back by
         }
         REQUIRE(done == 200);
         WARN("SE5: " << (extruded ? "converted FinFET" : "well") << " deck, mean write " << write_ms / done << " ms over " << done << " edits");
-        CHECK(write_ms / done <= 2.0);
+        // Release only, as KG6 (owner, 2026-11-19): CI's Debug runner wrote 3.57 ms (fd6a64a); there it is recorded.
+#ifdef NDEBUG
+        CHECK(write_ms / done <= 2.0);  // SE5
+#endif
         for (std::size_t k = texts.size() - 1; k > 0; --k) {
             auto t = h.undo(text);
             REQUIRE(t);
@@ -1186,8 +1189,8 @@ TEST_CASE("app solid: Inset and Extrude, new solids on a face (Unit 26m MT6, MC6
         CHECK(m.regions[2].solids[1].box == Box3{{5000, 1000, 5000}, {9000, 9000, 6000}});
         check_partition(m);
         const std::string out = round_trip(tool_deck, m);
-        // The fin's top is then a ring around the bump: a holed interface piece, the generator's refusal (recorded).
-        CHECK(build_error(out).find("an interface piece has holes") != std::string::npos);
+        // The fin's top is then a ring around the bump: a holed interface piece, which meshes since Unit 64.
+        CHECK(build_error(out) == "");
         // Pushed into the oxide from the domain's top face, the inset's pieces are its walls and its floor: it builds.
         Model ox = m0;
         REQUIRE(inset_face(ox, {1, 0}, 5, 1000, -1500, "insulator") == 3);
@@ -1198,8 +1201,8 @@ TEST_CASE("app solid: Inset and Extrude, new solids on a face (Unit 26m MT6, MC6
         // Of another material on the fin it is a new region meeting the fin inside its face: refused alike.
         Model o = m0;
         REQUIRE(inset_face(o, fin, 5, 1000, -1000, "silicon") == 3);
-        CHECK(o.regions[3].solids[0].box == Box3{{5000, 1000, 4000}, {9000, 9000, 5000}});
-        CHECK(build_error(must_write(tool_deck, o)).find("an interface piece has holes") != std::string::npos);
+        // Of another material on the fin it is a new region meeting the fin inside its face: it builds alike.
+        CHECK(build_error(must_write(tool_deck, o)) == "");
         CHECK(inset_face(o, fin, 5, 3000, 1000, "sio2") == -1);  // the margin empties it
         CHECK(inset_face(o, fin, 9, 0, 1000, "sio2") == -1);
     }

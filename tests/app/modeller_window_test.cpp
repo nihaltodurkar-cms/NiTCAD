@@ -1082,11 +1082,12 @@ TEST_CASE("app window modeller: Extrude, Chamfer, Fillet, Round vertex, Taper, I
     }
     page.set_tool(SolidPage::Tool::select);
 
-    // The inset left the top's face a ring: no s passes, and the button says so, the deck kept (MT12).
+    // The inset left the top's face a ring: a holed piece meshes since Unit 64, but this layout's interfaces end on the
+    // boundary along one line, so still no s passes; the button says so, the deck kept (MT12).
     {
         const auto s = page.automatic_resolution();
         REQUIRE_FALSE(s);
-        CHECK(has(s.error(), "an interface piece has holes"));
+        CHECK(has(s.error(), "two or more interfaces end on the boundary along one line"));
         CHECK_FALSE(page.use_automatic_resolution());
         CHECK(w->deck().text() == texts.back());
     }
