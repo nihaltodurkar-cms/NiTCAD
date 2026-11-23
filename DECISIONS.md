@@ -617,6 +617,10 @@ vocabulary and section list. Example `examples/seu_diode_2d.deck` (2 × 3 µm n+
 - Targeted runs (Release): io 33/33, analysis 29/29, render 100/100, physics 131/131, app 162/162, deck 140/140
   (its 5 expected failures), solve heavy ion + transient + restart 31/31. Full suites not run (HC11).
 
+**Slice 2 record (2026-11-23, owner "start Unit 65 slice 2").** ARCHITECTURE.md: the Unit 65 as-built block in 6.2
+(model, assembly, time, refusals, report, results, deck, restart, gates, limitations) and a "Radiation effects" row
+in 11.3. HC11 (Release and Debug suites) and HC1's NG1 trace set wait for the owner's word.
+
 ### Unit 26e — hover readout and one default colormap (proposed 2026-11-18; on `app/hover-readout`)
 
 **Owner request (2026-11-18):** "start Hover readout of values; choose viridis or turbo as the default colour map
