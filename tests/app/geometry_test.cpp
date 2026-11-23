@@ -306,7 +306,12 @@ patch = source
         if (!bs) FAIL(bs.error().message);
     }
     SECTION("tensor: boxes and contact boxes") {
-        const std::string mosfet = example("mosfet_2d.deck");
+        // CRLF made here, not taken from the checkout: decks check out with LF everywhere (.gitattributes, PR #118).
+        std::string mosfet;
+        for (const char c : example("mosfet_2d.deck")) {
+            if (c == '\n') mosfet += '\r';
+            if (c != '\r') mosfet += c;
+        }
         Geometry g = must_read(mosfet, mosfet_bounds);
         CHECK(add_polygon(g, {{0, 0}, {1, 0}, {1, 1}, {0, 1}}, "silicon") == -1);
         REQUIRE(set_box(g, {1, 0}, {{0, 9000}, {2 * um, um}}));
