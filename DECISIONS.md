@@ -538,7 +538,7 @@ time profile, normalised over t:
 | HD4 | Steady state at t = 0 without generation (T(0) ≤ 1.1e-7 / (s√π) by HD6; the missing fraction ½ erfc(4) = 7.7e-9 is recorded, not added). | The transient starts from the steady state of 11 (Unit 21). | — |
 | HD5 | Step control: breakpoints (restart with backward Euler, steps land on them) at t₀ − 4s, t₀ and t₀ + 4s of every track; inside [t₀ − 4s, t₀ + 4s] no step exceeds s/4 (32 steps across the pulse at least). | The error estimate reads the state, not the source: from a long step before the pulse it would step over it. | — |
 | HD6 | Refused (`invalid_input`, before solving): t₀ < 4 s; a track depositing no charge in any semiconductor node; electrothermal and energy balance (HQ3: the pair energy and the carriers' energy at creation are follow-ups); a 2D track without `depth`, a 1D track without `area` or not along ±x, a 3D/2D track with `area`. Tracks are a transient option only: the deck refuses `[heavy_ion]` with any analysis but `[transient]`. | Each refusal names a model or input that would be silently wrong. | — |
-| HD7 | Resolution report: the run record gets, per track, the analytic deposit Q_a = LET · (length inside semiconductor along the axis, exact for a track whose radius lies inside it) and the mesh deposit Q_m = q Σ_i V_i G_i/T̄ (point evaluation); the run log warns when they differ by more than 5%. Not an error. | Under-resolution is the common user error with heavy ions; it must be visible. | Q_a counts the axial length only; a track grazing a region edge reports a difference that is geometry, not mesh. |
+| HD7 | Resolution report: per track, the analytic deposit Q_a = LET · L (over A in 1D, D in 2D) and the mesh deposit Q_m = q Σ_i V_i G_i/T̄ (point evaluation, semiconductor nodes off contacts; `System::heavy_ion_deposits`); the run record's warnings name the track and both values when they differ by more than 5%. Not an error. (Changed before code, slice 0: Q_a was to count the length inside semiconductor only, which needs a track–region intersection the mesh graph does not carry.) | Under-resolution is the common user error with heavy ions; it must be visible. | A track leaving the semiconductor or reaching a contact warns too: the difference is geometry, not mesh. |
 | HD8 | Results: snapshots carry the generation field `heavy_ion_generation` [cm⁻³ s⁻¹] (the instantaneous rate at the snapshot time) when a track is given, as Unit 52 added T_n, T_p (files, `nitcad plot`, the app's field list). Each `TimePoint` carries the deposited charge so far [C / cm^(3−D)]. `analysis::collected_charge(transient, contact)`: ∫ (I_c(t) − I_c(0)) dt by the trapezoid rule over the accepted steps. | The collected charge is the SEU figure of merit; the deposit is its reference. | — |
 | HD9 | Deck (HQ4: no defaults): repeatable `[heavy_ion <name>]` sections, keys `start` (µm, D values), `direction` (D values), `length` (µm), `let` (pC/µm) or `let_mev` (MeV·cm²/mg; exactly one), `radius` (µm), `t0`, `sigma` (time suffixes of Unit 61), `depth` (µm, 2D), `area` (µm², 1D). The transient table gains `Q_<contact>` (collected charge) and `Q_deposited` columns when a track is given. The app's deck vocabulary and live check learn the section. | Same deck style as every section; no unverified default values (HQ4). | — |
 | HD10 | Restart (Unit 61): the tracks are part of the options and the run identity; a resumed run continues them bit for bit (the source depends on time only). | Commercial parity with every other transient model. | — |
@@ -571,6 +571,28 @@ time profile, normalised over t:
 
 **Slices.** 0: HD1–HD7, HD10 (physics, term, transient), HC1–HC8. 1: HD8–HD9 (results, files, deck, app, example),
 HC9–HC10. 2: ARCHITECTURE.md (11.3 row, 6.x model text), HC11 on the owner's word.
+
+**Slice 0 record (2026-11-23).** `physics/heavy_ion.hpp`, the `heavy-ion generation` term (terms.cpp), the tracks in
+`System::create` (drift_diffusion.cpp), `TimeStep::start_time_s`, `TransientOptions::heavy_ions` with HD5's landings
+and cap, the run record (HD10) and HD7's warning. Tests: `tests/physics/heavy_ion_test.cpp`,
+`tests/solve/heavy_ion_test.cpp` (HC5 hidden `[.heavy_ion]`, ctest `solve_heavy_ion`, 80 s Release).
+- HC1: partly — nitcad_assemble_test 181/181 and every transient, resume and restart case 26/26 unchanged; the NG1
+  trace set and the full suites are not run (HC11, owner's word).
+- HC2: **met** — 1 MeV·cm²/mg = 1.036519272e-10 C/cm = 0.01036519 pC/µm (96.48 MeV·cm²/mg per pC/µm), equal to
+  long double within 1e-14.
+- HC3: **met** — Q_m/Q_a − 1: 1D exact (1e-12), 2D −2.0e-8, 3D −5.7e-8 (spacing w/4, ends between nodes).
+- HC4: **met** — the source's charge equals the exact integral within 1e-12 in five runs (BE and BDF2, adaptive and
+  fixed, dt_initial = t_end/10 included).
+- HC5: **met** — collected/deposited: 1D 1.0027, 2D 1.0052 (−5 V, recombination off; the 2D mesh is coarser than
+  the 1D one, 1e-7–4e-6 cm graded × 21 rows, for run time; track radius 0.1 µm); with SRH and the track into the
+  neutral p side 0.842 < 1.
+- HC6: **met, to rounding** — every landing hit; no step in the window exceeds s/4 plus two ulps of its end time
+  (the steps asked are s/4 exactly; t + h rounds); ≥ 32 steps in the window in each run.
+- HC7: two tracks on one line **met** (2.2e-16 ≤ 1e-14); the reversed track **MISSED** — 7.6e-15 against 1e-15.
+  The reversed start r₀ + L d is rounded, and exp(−ρ²/w²) carries that rounding times ρ²/w². Not loosened: the
+  test holds the measured order (1e-14) and names the miss.
+- HC8: **met** — stopped after the first step past t₀ and continued: every later point's time and terminal
+  currents bit-identical, same identity.
 
 ### Unit 26e — hover readout and one default colormap (proposed 2026-11-18; on `app/hover-readout`)
 

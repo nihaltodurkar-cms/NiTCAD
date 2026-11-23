@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <limits>
 #include <string>
 #include <utility>
@@ -226,6 +227,13 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             if (t > 0.0 && t <= t_end) restarts.push_back(t);
         }
     }
+    // Heavy-ion tracks (Unit 65, HD5): steps land on t0 - 4 sigma, t0 and t0 + 4 sigma and restart
+    // there (the source turns on and off on the pulse's scale, not the state's).
+    for (const physics::HeavyIonTrack& tr : options.heavy_ions) {
+        for (const double t : {tr.t0_s - 4.0 * tr.sigma_s, tr.t0_s, tr.t0_s + 4.0 * tr.sigma_s}) {
+            if (t > 0.0 && t <= t_end) restarts.push_back(t);
+        }
+    }
     std::ranges::sort(restarts);
     restarts.erase(std::unique(restarts.begin(), restarts.end()), restarts.end());
     const auto bias_at = [&](double t, bool left) {
@@ -278,7 +286,9 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     if (!scaling) return std::unexpected(std::move(scaling.error()));
     auto solver = linalg::LinearSolver::create(steady.linear);
     if (!solver) return std::unexpected(std::move(solver.error()));
-    auto system = assemble::System::create(device, *scaling, steady.models);
+    assemble::PhysicsModels models = steady.models;  // with the heavy-ion tracks (Unit 65)
+    if (!options.heavy_ions.empty()) models.heavy_ions = &options.heavy_ions;
+    auto system = assemble::System::create(device, *scaling, models);
     if (!system) return std::unexpected(std::move(system.error()));
     set_minority_floor(*system, steady.minority_floor);
     if (thermal) (void)set_thermal_bias(*system, thermal_bias);  // checked
@@ -328,6 +338,24 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
 
     results::Transient run;
     run.run = make_run_record(device, options, waveforms, initial);
+    // Heavy-ion resolution report (Unit 65, HD7): the mesh deposit against LET L (over the area
+    // in 1D, the depth in 2D); a warning when they differ by more than 5%.
+    {
+        const std::vector<double> deposits = dd.heavy_ion_deposits();
+        for (std::size_t k = 0; k < deposits.size(); ++k) {
+            const physics::HeavyIonTrack& tr = options.heavy_ions[k];
+            const double per = D == 1 ? tr.area_cm2 : D == 2 ? tr.depth_cm : 1.0;
+            const double analytic = tr.let_C_per_cm * tr.length_cm / per;
+            if (std::abs(deposits[k] / analytic - 1.0) > 0.05) {
+                char text[200];
+                std::snprintf(text, sizeof text,
+                              "heavy-ion track %zu: the mesh deposits %.4g C, LET x length %.4g C (the mesh "
+                              "under-resolves the track, or the track leaves the semiconductor)",
+                              k, deposits[k], analytic);
+                run.run.warnings.emplace_back(text);
+            }
+        }
+    }
     // The identity a continuation is checked against (Unit 61, RD3): the run's without its initial
     // state.
     const std::uint64_t identity =
@@ -524,8 +552,16 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         }
         // The step: land on the next landing time if it is within 1.1 steps.
         const double target = landings[landing];
-        const double h_try = std::min(h, dt_max);
-        const bool lands = target - t <= 1.1 * h_try;
+        // Inside a heavy-ion pulse's window [t0 - 4 sigma, t0 + 4 sigma) a step is at most sigma / 4
+        // and lands only when it reaches the landing time (no 1.1 slack; Unit 65, HD5).
+        double cap = dt_max;
+        for (const physics::HeavyIonTrack& tr : options.heavy_ions) {
+            if (t >= tr.t0_s - 4.0 * tr.sigma_s && t < tr.t0_s + 4.0 * tr.sigma_s) {
+                cap = std::min(cap, 0.25 * tr.sigma_s);
+            }
+        }
+        const double h_try = std::min(h, cap);
+        const bool lands = target - t <= (cap < dt_max ? 1.0 : 1.1) * h_try;
         const double t_new = lands ? target : t + h_try;
         const double step_s = t_new - t;
         // Order: backward Euler for the first two steps after a (re)start (the second has an
@@ -540,7 +576,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             combine(formula, now.storage, prev != nullptr ? &prev->storage : nullptr);
         const std::vector<double> traps =
             combine(formula, now.traps, prev != nullptr ? &prev->traps : nullptr);
-        const TimeStep step{1.0 / (formula.beta * step_s / t0), storage, traps, t_new};
+        const TimeStep step{1.0 / (formula.beta * step_s / t0), storage, traps, t_new, t};
         const std::vector<double> bias = bias_at(t_new, true);
         (void)system->set_bias(bias);  // checked
         x = now.x;

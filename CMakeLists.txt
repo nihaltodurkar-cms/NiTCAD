@@ -392,7 +392,8 @@ add_library(nitcad_physics STATIC
   src/physics/surface_mobility.cpp
   src/physics/quantum_confinement.cpp
   src/physics/gate_tunnelling.cpp
-  src/physics/energy_balance.cpp)
+  src/physics/energy_balance.cpp
+  src/physics/heavy_ion.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -416,7 +417,8 @@ add_executable(nitcad_physics_test
   tests/physics/band_set_test.cpp
   tests/physics/ionization_density_test.cpp
   tests/physics/gate_tunnelling_test.cpp
-  tests/physics/energy_balance_test.cpp)
+  tests/physics/energy_balance_test.cpp
+  tests/physics/heavy_ion_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -682,6 +684,7 @@ add_executable(nitcad_solve_test
   tests/solve/insulator_test.cpp
   tests/solve/transient_test.cpp
   tests/solve/transient_resume_test.cpp
+  tests/solve/heavy_ion_test.cpp
   tests/solve/trace_resume_test.cpp
   tests/solve/small_signal_test.cpp
   tests/solve/impact_ionization_test.cpp
@@ -730,6 +733,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME solve_unstructured COMMAND nitcad_solve_test "[unstructured]")
   # And the MLDA MOS-C gates (tests/solve/quantum_confinement_test.cpp, [.mlda]; Unit 47).
   add_test(NAME solve_mlda COMMAND nitcad_solve_test "[mlda]")
+  # And the heavy-ion collection gates (tests/solve/heavy_ion_test.cpp, [.heavy_ion]; Unit 65).
+  add_test(NAME solve_heavy_ion COMMAND nitcad_solve_test "[heavy_ion]")
 endif()
 
 # --- deck layer (the text input deck, its meaning and the batch runner; Unit 31) ----------

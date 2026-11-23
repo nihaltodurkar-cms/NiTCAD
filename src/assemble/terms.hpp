@@ -174,6 +174,7 @@ struct SystemData::Terms {
     class Radiative;
     class Storage;
     class Manufactured;
+    class HeavyIons;
     class Interfaces;
     class InterfacesFrequency;
     class PoissonFlux;
