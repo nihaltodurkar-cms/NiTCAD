@@ -2432,6 +2432,62 @@ before slice 2 (Unlock) on the owner's word ("start the next slice (sweeps)").
   a sweep in the window; reopening a deck does not find an earlier sweep. The dialog has no dialog keys (as New
   device's).
 
+**Slice 2 record (2026-11-23, branch `app/device-templates`, commits 7ba6205..HEAD, local only):** DT5, after slice 3.
+
+- **Built.** `app/unlock` (no Win32): `kind_of` (a 3D tensor deck; an extrude3d deck) and `unlock`. A 3D tensor deck is
+  rewritten by minimal edits: `[mesh]` becomes `type = generate3d`, `layered = on`, a `domain` from the mesh lines'
+  ends as written (`0 $L 0 $y_ox 0 $W`), a `patch <contact> = ...` per contact on its face (the contact's box, its
+  references kept; a contact without a box takes the whole face), `max_size` the widest mesh-line spacing and
+  `interface_resolution` the largest the 3D generator's rules allow (`mesh::largest_resolution`, two significant
+  figures, rounded down); the x, y, z and straddle lines go. Region boxes stay box solids byte for byte (one reaching
+  past the domain cut to it, one wholly outside dropped, both in the note). Each contact's `patch = <face>` becomes
+  `patch = <name>` and its box line goes. Refused, with the reason: an `[adapt]` section, a contact on a patch that is
+  not a face or with two boxes, a layout the 3D generator refuses (its message), an s under 0.1 nm. An extrude3d deck
+  goes through 26l's `convert_to_layered`. The dimensions panel shows "Unlock shapes (edit in the 3D modeller)" for a
+  3D tensor deck (the preview) and an extrude3d deck (the modeller); a refusal shows in red under it and nothing is
+  written. Once unlocked the Geometry tab shows the 3D modeller, and its Undo takes the deck back to the tensor deck
+  and the preview (`SolidPage::record_undo`; `MainWindow::solid_edited` switches the page back).
+- **Measured.** DC8 (hidden `[.unlock_library]`, Release): the planar MOSFET (3D) converts (s = 1.2 nm, max_size
+  100 nm, estimate 119k nodes) and builds: 170,711 nodes, 285 s, its regions equal to the tensor deck's at 200 seeded
+  points (points within 2 s of a box face left out). The bulk FinFET is refused by the 3D generator: "a patch edge
+  meets an interface other than at a single trace in its face (unsupported)". The SOI FinFET is refused: its layout
+  needs s = 0.025 nm. DC11: 12 of 12 mutants killed (one, the linspace spacing, after a check on a coarse x axis). DC12: `app/unlock` has no Win32 header. Targeted suites pass (`[unlock]`, the
+  dimensions, geometry, modeller, solid, sweep and New device window files and model tests).
+- **Rulings.** The automatic s comes from the rules alone (`largest_resolution`), not trial meshes
+  (`largest_meshable_resolution` meshed the MOSFET for over 20 minutes); the build then meshes it. No node cap: the
+  estimate is in the note. For an extrude3d deck Unlock does what the inspector's Convert does (both kept).
+- **Limitations (recorded).** Neither library FinFET unlocks (the generator's rules, Unit 64). An unlocked deck's
+  mesh is far larger than its tensor mesh (MOSFET 3D: 170,711 nodes against 8,525). After Undo back to the preview,
+  Redo is gone (the 2D page's history restarts there).
+
+**Slice 4 record (2026-11-23, branch `app/device-templates`, commits after slice 2's, local only):** DT8, on the
+owner's word ("after slice 2 is done, start slice 4 (choose recommended for decisions)").
+
+- **Built.** `solid::outside_domain` (the first solid past the domain: region, face and distance), `clamp_to`,
+  `clamp_offset`, `clamp_scalar` (bisection); `geo::outside_domain`, `geo::domain_holds`. 3D modeller: points on the
+  work plane are held on the domain (a box's base, a cylinder's centre, a prism's vertices), heights and radii are
+  held, and so are the move gizmo's offsets (axis, plane, move, an array's farthest copy). Face drags, Extrude and
+  Inset depths stop at the last offset inside, found by bisection, and vertex drags are held. Any other drag frame
+  that would leave a solid outside is not taken ("Held at the domain: ..."). `commit_model` refuses an edit that
+  takes a solid out (a typed size, a smaller domain) with the reason ("Refused: region 'ox' reaches 0.3um past the
+  domain's z_max face (a solid stays inside the domain).") and leaves the deck unchanged; a deck already past its
+  domain is not held. The inspector's position and size fields show and take references (`$W`, `$W + 1um`); a number
+  typed over a reference replaces it. "Name this value…" on the fields' context menu (a box or the domain) adds
+  `L<k> = <value>` and writes `$L<k>` in the field, one undo. 2D editor: snapped points are held on a domain that is
+  given (a tensor deck's, a layered deck's `domain` line); a commit taking a shape out is refused the same way.
+- **Measured.** DC7 (`[guardrails]`, Release, WARP): 500 seeded random drags of Box, Prism, Cylinder and the move
+  gizmo, 383 of them written, none leaving a solid outside (in the model or the deck), 14.4 s; a typed size past the
+  domain is refused with the reason and the deck byte-identical. DC1: one 26m check changed: MC6's Inset drags 0.1 µm
+  up from a top at 0.55 µm in a 0.6 µm domain, now held at 0.05 µm (the check said "depth 0.1"; it now says
+  "depth 0.05"); recorded, not loosened. DC11: 10 of 13 mutants killed (two after a test of a box drawn and moved past the faces; three rewritten after their first form did not compile, two of them then killed). Survivors: the cylinder radius clamp (no test draws a cylinder at a face), the move/plane offset clamp (the gizmo tests drag an axis arrow, clamped on its own path) and the frame guard (behind the clamps). DC12: the new model code has no Win32 header.
+- **Rulings.** What is typed in a field is what is written: a number over `$Lg` replaces the reference (MT8's ties
+  still follow drags). Name this value takes the next free `L<k>`, as N does while dragging. In 2D a drag frame is not
+  held mid-drag; the release is refused if a shape would leave the domain. A generated 2D deck without a `domain`
+  line holds nothing (its domain is its shapes' bounds).
+- **Limitations (recorded).** Contact patches are not clamped while moving (they stay on their face). Name this value
+  is for boxes and the domain, not prisms. The menu replaces the edit's own context menu (Cut, Copy, Paste kept; Undo
+  and Select all not).
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
