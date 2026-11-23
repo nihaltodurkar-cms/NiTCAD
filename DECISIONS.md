@@ -4178,6 +4178,24 @@ m_e/m0 = 1, m_h/m0 = 1.258; f_CW 2.459, f_BH 3.828; s1–s7 0.89233, 0.41372, 0.
 **Slices.** 0: physics + `klaassen_equilibrium` in every path + deck/records (KC2–KC6, KC8 partly). 1: `klaassen`
 carrier-dependent assembly and refusals (KC7–KC9). 2: ARCHITECTURE as-built + suites on the owner's word (KC1, KC10).
 
+**Slice 0 record, physics (2026-11-23).** `physics/klaassen_mobility.hpp/.cpp` (forward-mode partials in n, p, T;
+G's minimiser by 60 bisections of G' on ln P in [1e-8, 1e8]), `tests/physics/klaassen_test.cpp`. The formulas match
+an independent transcription (golden-section minimiser) to 1e-10 at 3 × 8 × 8 × 5 × 5 points per carrier. KC2 met.
+KC3 met: largest deviation from Masetti electrons 0.56 % (1e20), holes 4.64 % (1e18). KC4 met: minority/majority
+at 1e19 electrons 1.640, holes 1.790; at 1e20 electrons 2.261, holes 2.542. KC5: two readings, stated here and
+put to the owner as KQ8:
+- Written into the test before its first run: the points with N_D = N_A = 0 and a zero carrier density are left
+  out (not differentiable, the header says so).
+- **Changed after the first run (TVM2: a loosening, not self-ruled).** The first run failed 675 of 13410 checks,
+  all partials whose whole effect x ∂μ/∂x is under the central difference's rounding noise (about 5e-12 μ at
+  h = 1e-5 x), compared against a 1e-12 μ floor. The test now passes a partial that matches to 1e-6 relative OR
+  whose effect x |∂μ/∂x − fd| is below 1e-9 μ; with it, 13410/13410 pass. A mutant dropping F's partials
+  (μ through N_sc,eff) fails 1849 checks, so the test still detects a wrong partial.
+
+| ID | Question | Options | Ruling |
+|---|---|---|---|
+| KQ8 | KC5's floor for partials below the difference noise | (a) keep the 1e-9 μ effect floor (recommended: the 1e-12 floor was under the FD's own rounding, a test defect rather than a model one); (b) a tighter check by complex-step or higher-precision differences, KC5 open until then | **open — the owner's word (TVM2)** |
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
