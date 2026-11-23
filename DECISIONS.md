@@ -620,6 +620,10 @@ vocabulary and section list. Example `examples/seu_diode_2d.deck` (2 × 3 µm n+
 **Slice 2 record (2026-11-23, owner "start Unit 65 slice 2").** ARCHITECTURE.md: the Unit 65 as-built block in 6.2
 (model, assembly, time, refusals, report, results, deck, restart, gates, limitations) and a "Radiation effects" row
 in 11.3. HC11 (Release and Debug suites) and HC1's NG1 trace set wait for the owner's word.
+- HC11, Release (owner's word, 2026-11-23): 302/304. `app_window.window` failed: it held the bundled examples at
+  four, and slice 1 added a fifth (missed in slice 1's targeted runs, which did not include `app_window`); fixed
+  to five. `app.geometry` GE3 failed on `main`'s PR #118 (decks check out with LF), not on Unit 65: fixed on `main`
+  by PR #119 (42b4306), merged into this branch. Debug suite pending at the time of the PR. NG1 traces not run.
 
 ### Unit 26e — hover readout and one default colormap (proposed 2026-11-18; on `app/hover-readout`)
 
