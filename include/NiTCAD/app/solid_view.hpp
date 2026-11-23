@@ -18,6 +18,7 @@
 #include <optional>
 #include <vector>
 
+#include "NiTCAD/app/dimensions.hpp"
 #include "NiTCAD/app/solid.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/render/scene.hpp"
@@ -75,6 +76,10 @@ struct Overlay {
 };
 [[nodiscard]] render::FieldScene solid_scene(const Model& m, const ViewState& v, const Selection& s, const Preview& p = {},
                                            const Overlay& o = {});
+
+// Unit 26n (DT2): the dimension lines on top of a scene (end ticks across them; the `selected` one wider) and their
+// labels at their middles, um.
+void add_dimension_marks(render::FieldScene& scene, const std::vector<dims::Mark>& marks, const std::string& selected);
 
 // Where a point lands on the screen (pixels), and the ray under a pixel.
 [[nodiscard]] std::array<double, 2> screen_of(const Model& m, const ViewState& v, const V3& p);

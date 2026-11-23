@@ -19,6 +19,7 @@
 #include <compare>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -302,6 +303,19 @@ struct SizeBox3 {
 [[nodiscard]] Coord keep_clear(const Model& m, const std::vector<Solid>& moving, const std::vector<SolidRef>& skip, int axis,
                                Coord delta, Coord margin);
 
+
+// --- Unit 26n slice 4 (DT8): solids kept inside the domain ---------------------------------------------------------
+// Why a solid reaches past the domain: the first such solid in layer order, its region and the face it crosses and by
+// how much ("region 'gate' reaches 5 nm past the domain's x_max face"); empty when every solid lies inside.
+[[nodiscard]] std::string outside_domain(const Model& m);
+// `p` held on the domain: each coordinate clamped to the domain's range.
+[[nodiscard]] P3 clamp_to(const Box3& domain, P3 p) noexcept;
+// The offset nearest `d`, axis by axis, that keeps the bounds of every solid of `moving` inside the domain (on an
+// axis where one already lies past a face, no offset farther out).
+[[nodiscard]] P3 clamp_offset(const Box3& domain, const std::vector<Solid>& moving, P3 d) noexcept;
+// The value nearest `v` between 0 and `v` (lattice steps) for which `inside` holds, by bisection: `inside` is taken to
+// hold at 0 and to fail at most once on the way out (a face dragged out, a depth, a radius). 0 when it fails at once.
+[[nodiscard]] Coord clamp_scalar(Coord v, const std::function<bool(Coord)>& inside);
 // Contacts: a patch box inside the domain that reaches a face of it with some area (it selects boundary facets).
 [[nodiscard]] bool selects_boundary(const Box3& domain, const Box3& b) noexcept;
 int add_contact(Model& m, std::string name, std::string kind, Box3 b);

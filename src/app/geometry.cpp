@@ -1180,6 +1180,25 @@ bool set_contact_kind(Geometry& g, int contact, std::string kind) {
     return true;
 }
 
+// --- Unit 26n slice 4 (DT8) ------------------------------------------------------------------------------------------
+
+bool domain_holds(const Geometry& g) noexcept { return g.mesh == MeshKind::tensor || (g.mesh == MeshKind::layered && g.domain_given); }
+
+std::string outside_domain(const Geometry& g) {
+    if (!domain_holds(g)) return {};
+    for (const Region& r : g.regions) {
+        for (const Shape& s : r.shapes) {
+            const Rect b = s.bounds();
+            const Coord past[4] = {g.domain.lo.x - b.lo.x, b.hi.x - g.domain.hi.x, g.domain.lo.y - b.lo.y, b.hi.y - g.domain.hi.y};
+            static constexpr const char* side[4] = {"x_min", "x_max", "y_min", "y_max"};
+            for (int k = 0; k < 4; ++k) {
+                if (past[k] > 0) return "region '" + r.name + "' reaches " + format_length(past[k]) + " past the domain's " + side[k] + " side";
+            }
+        }
+    }
+    return {};
+}
+
 bool set_domain(Geometry& g, Rect d) {
     if (!editing(g) || g.mesh != MeshKind::layered || d.lo.x >= d.hi.x || d.lo.y >= d.hi.y) return false;
     // Each contact moves with its side, clipped to it; refused when one would be empty.

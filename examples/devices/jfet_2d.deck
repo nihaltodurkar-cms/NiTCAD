@@ -1,0 +1,77 @@
+# JFET (2D)
+# An n-channel junction FET in cross-section: the transfer curve Id-Vg at a drain bias of 0.1 V.
+#
+# A silicon die: an n channel between a p+ bottom gate (a buried layer at the die's bottom) and a p+ top gate
+# diffused from the surface; n+ source and drain diffusions at the ends, each under its contact. The two gates are
+# swept together from -2 V (pinched off) to a slightly forward 0.3 V; the Curves tab shows Id-Vg. The mesh lines
+# follow the dimensions: 40 nm along x at the defaults, 10 nm in the top of the die.
+
+[parameters]
+# group: Main
+L = 3um  # Die length
+Lg = 1um  # Top gate length
+t = 1.5um  # Die thickness
+Nch = 2e16  # Channel donors (cm^-3)
+Ng = 1e19  # Gate acceptors (cm^-3)
+# group: Gates, source and drain
+xg0 = 1um  # Top gate start
+xg = 0.1um  # Top gate depth
+xb = 0.2um  # Bottom gate depth
+Lc = 0.4um  # Source/drain contact length
+xsd = 0.3um  # Source/drain depth
+Nsd = 1e20  # Source/drain donors (cm^-3)
+lat = 50nm  # Lateral spread of the diffusions
+# group: Mesh
+yf = 0.3um  # Fine-mesh depth below the surface
+# group: Positions (derived)
+x_g1 = $xg0 + $Lg  # Top gate end
+x_dc = $L - $Lc  # Drain contact start
+y_f = $t - $yf  # Fine-mesh start
+
+[mesh]
+type = tensor
+x = linspace(0, $Lc, 11) + linspace($Lc, $xg0, 16) + linspace($xg0, $x_g1, 26) + linspace($x_g1, $x_dc, 16) + linspace($x_dc, $L, 11)
+y = linspace(0, $y_f, 25) + linspace($y_f, $t, 31)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant $Nch
+profile = acceptor gaussian $Ng axis=y center=0 width=$xb
+profile = acceptor gaussian $Ng axis=y center=$t width=$xg x=$xg0:$x_g1 lateral=$lat
+profile = donor gaussian $Nsd axis=y center=$t width=$xsd x=0:$Lc lateral=$lat
+profile = donor gaussian $Nsd axis=y center=$t width=$xsd x=$x_dc:$L lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = y_max
+box = 0 $Lc  $t $t
+
+[contact drain]
+kind = ohmic
+patch = y_max
+box = $x_dc $L  $t $t
+
+[contact gate_top]
+kind = ohmic
+patch = y_max
+box = $xg0 $x_g1  $t $t
+
+[contact gate_bottom]
+kind = ohmic
+patch = y_min
+
+[solver]
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate_top = -2 : 0.3 : 0.1
+contact gate_bottom = -2 : 0.3 : 0.1
+contact drain = 0.1
+
+[output]
+sweep = jfet_2d.nitsweep
+device = jfet_2d.nitdev
+table = jfet_2d.csv

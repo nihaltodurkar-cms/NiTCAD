@@ -85,7 +85,8 @@ constexpr int id_recent = 10, id_examples = 11;
 StartPage::StartPage(HWND parent, Host& host, int id) : host_(host) {
     panel_ = make_panel(parent, id, this, proc);
     for (const wchar_t* h : {L"Start", L"Recent", L"Examples"}) headings_.push_back(make(L"STATIC", h, 0, panel_, 0));
-    for (const auto& [command, text] : {std::pair{Command::new_deck, L"&New deck"}, std::pair{Command::open_deck, L"&Open deck..."},
+    for (const auto& [command, text] : {std::pair{Command::new_device, L"New de&vice..."}, std::pair{Command::new_deck, L"&New deck"},
+                                        std::pair{Command::open_deck, L"&Open deck..."},
                                         std::pair{Command::open_result, L"Open &result..."}}) {
         buttons_.push_back(make(L"BUTTON", text, WS_TABSTOP | BS_PUSHBUTTON, panel_, static_cast<int>(command)));
     }

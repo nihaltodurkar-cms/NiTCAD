@@ -1,0 +1,122 @@
+# FinFET (bulk, 3D)
+# A bulk n-channel FinFET, every size a named dimension: the transfer curve Id-Vg at 50 mV.
+#
+# A silicon substrate; an insulator (STI) on it; a thin silicon fin rising out of the substrate through the
+# insulator, from source to drain; a gate block on the insulator across the fin; a thin gate oxide wrapping the
+# fin's top and both sides under the gate. x runs along the fin, y up, z across it. The gate metal is a block of
+# very high permittivity (eps_r 1e4) with the gate contact on its top, so it holds the gate's potential as a metal
+# would; elsewhere above the insulator is air. Source and drain contacts are the fin's end faces above the
+# insulator; the body contact is the substrate's bottom. Coarse mesh: refine before trusting currents.
+
+[parameters]
+# group: Main
+Lg = 20nm  # Gate length
+Wfin = 10nm  # Fin width
+Hfin = 30nm  # Fin height above the insulator
+tox = 1nm  # Gate oxide thickness
+Nsd = 1e20  # Source/drain donors (cm^-3)
+# group: Body, insulator and gate
+Ls = 35nm  # Source length
+Ld = 35nm  # Drain length
+tsub = 40nm  # Substrate thickness
+tsti = 30nm  # Insulator thickness
+zw = 25nm  # Space beside the fin (left)
+zr = 25nm  # Space beside the fin (right)
+tg = 19nm  # Gate block height above the oxide
+Na = 1e17  # Body acceptors (cm^-3)
+# group: Source and drain
+xj = 8nm  # Source/drain depth below the fin top
+ud = 2nm  # Source/drain underlap (from the gate edge)
+lat = 2nm  # Lateral spread of the source/drain
+ext = 10nm  # Source/drain windows past the fin ends
+# group: Positions (derived)
+x_g1 = $Ls + $Lg  # Gate end
+L = $Ls + $Lg + $Ld  # Fin length
+y_sti = $tsub + $tsti  # Insulator top
+y_fin = $tsub + $tsti + $Hfin  # Fin top
+y_ox = $y_fin + $tox  # Oxide top
+y_top = $y_ox + $tg  # Gate block top
+z_f1 = $zw + $Wfin  # Fin right face
+z_o0 = $zw - $tox  # Oxide left face
+z_o1 = $z_f1 + $tox  # Oxide right face
+W = $z_f1 + $zr  # Domain width
+x_s = $Ls - $ud  # Source window end
+x_d = $x_g1 + $ud  # Drain window start
+x_neg = 0 - $ext  # Source window start
+x_far = $L + $ext  # Drain window end
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, $Ls, 8) + linspace($Ls, $x_g1, 6) + linspace($x_g1, $L, 8)
+y = linspace(0, $tsub, 5) + linspace($tsub, $y_sti, 7) + linspace($y_sti, $y_fin, 7) + linspace($y_fin, $y_ox, 2) + linspace($y_ox, $y_top, 4)
+z = linspace(0, $z_o0, 5) + linspace($z_o0, $zw, 2) + linspace($zw, $z_f1, 6) + linspace($z_f1, $z_o1, 2) + linspace($z_o1, $W, 5)
+
+[region air]
+material = insulator
+eps_r = 1
+
+[region insulator]
+material = sio2
+box = 0 $L  $tsub $y_sti  0 $W
+
+[region gate_metal]
+material = insulator
+eps_r = 1e4
+box = $Ls $x_g1  $y_sti $y_top  0 $W
+
+[region gate_oxide]
+material = sio2
+box = $Ls $x_g1  $y_sti $y_ox  $z_o0 $z_o1
+
+[region silicon]
+material = silicon
+box = 0 $L  0 $tsub  0 $W
+box = 0 $L  $tsub $y_fin  $zw $z_f1
+
+[doping]
+profile = acceptor constant $Na
+profile = donor gaussian $Nsd axis=y center=$y_fin width=$xj x=$x_neg:$x_s z=$zw:$z_f1 lateral=$lat
+profile = donor gaussian $Nsd axis=y center=$y_fin width=$xj x=$x_d:$x_far z=$zw:$z_f1 lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  $y_sti $y_fin  $zw $z_f1
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = $L $L  $y_sti $y_fin  $zw $z_f1
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = $Ls $x_g1  $y_top $y_top  0 $W
+electrode = metal
+work_function = 4.5
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[models]
+fermi_dirac = on
+field_mobility = on
+electron_mobility = masetti
+
+[solver]
+backend = gmres_ilut
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate = 0 : 1 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = finfet_bulk_3d.nitsweep
+device = finfet_bulk_3d.nitdev
+table = finfet_bulk_3d.csv

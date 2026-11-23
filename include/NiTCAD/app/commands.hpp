@@ -12,6 +12,7 @@ namespace NiTCAD::app {
 enum class Command : std::uint16_t {
     // File
     new_deck = 100, open_deck, open_result, save, save_as, recent_first, exit = recent_first + 16, compare_result,
+    new_device,  // Unit 26n slice 1 (DT4)
     // Edit
     undo = 200, cut, copy, paste, select_all, find_error, complete,
     // Unit 26k (GD7): redo, duplicate, delete, and the Geometry tab's tools

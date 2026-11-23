@@ -40,6 +40,7 @@
 #include "NiTCAD/app/solid.hpp"
 #include "NiTCAD/app/solid_view.hpp"
 #include "NiTCAD/render/image.hpp"
+#include "dimensions_panel.hpp"
 #include "modeller_bar.hpp"
 
 #include <memory>
@@ -53,6 +54,7 @@ public:
         virtual void solid_edited(const std::string& text) = 0;  // the deck after an edit, undo or redo
         virtual void solid_status(const std::string& text) = 0;  // the cursor's position, a measure, a refusal
         [[nodiscard]] virtual render::Renderer* solid_renderer() = 0;
+        virtual void solid_sweep(const std::string& /*name*/) {}  // Unit 26n slice 3: a dimension row's Sweep...
 
     protected:
         ~Host() = default;
@@ -75,6 +77,9 @@ public:
     void release();
 
     void reload(bool fit = false);
+    // Unit 26n slice 2 (DT5): the text before the edit that brought the deck to this page (Unlock shapes, New 3D
+    // layout), so its undo takes the deck back.
+    void record_undo(std::string before) { history_.record(std::move(before)); }
     void fit();
     void set_tool(Tool t);
     [[nodiscard]] Tool tool() const noexcept { return tool_; }
@@ -90,6 +95,11 @@ public:
     bool convert();  // an extrude3d deck made layered (SQ5)
     bool select_region(const std::string& name);
     bool commit(int control);
+    // Unit 26n slice 4 (DT8): Name this value on a position or size field (c_x0 ...): a new length parameter (L1, L2, ...)
+    // with the field's value, the field then $L<k>; one undo step. For a picked box or the background's domain.
+    [[nodiscard]] bool can_name_field(int control) const;
+    bool name_field(int control);
+    [[nodiscard]] const std::string& refused() const noexcept { return refused_; }  // the last refusal past the domain
 
     // --- Unit 26m slice 0 (MT1-MT3) ---
     void set_camera_fixed(bool fixed);
@@ -162,14 +172,20 @@ public:
         c_x0_label, c_x0, c_x1_label, c_x1, c_y0_label, c_y0, c_y1_label, c_y1, c_z0_label, c_z0, c_z1_label, c_z1,
         c_axis_label, c_axis, c_from_label, c_from, c_to_label, c_to, c_vertices_label, c_vertices, c_apply,
         c_kind_label, c_kind, c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset,
-        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_overlap, c_resolution, c_params_label, c_params, c_params_apply, c_count
+        c_section_label, c_section, c_cut_label, c_cut, c_translucent, c_convert, c_overlap, c_resolution, c_count
     };
     [[nodiscard]] HWND control(int c) const;
+
+    // Unit 26n (DT1, DT2): the dimensions panel in the inspector, the dimension lines on the canvas.
+    [[nodiscard]] DimensionsPanel& dimensions_panel() noexcept { return *dims_; }
+    [[nodiscard]] const std::vector<dims::Mark>& dimension_marks() const noexcept { return marks_; }
+    [[nodiscard]] std::vector<std::array<float, 4>> dimension_lines() const;  // screen segments, x0 y0 x1 y1, one per mark
 
 private:
     static LRESULT CALLBACK panel_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
     static LRESULT CALLBACK canvas_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
     static LRESULT CALLBACK inspector_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
+    static LRESULT CALLBACK field_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR self);
     LRESULT on_canvas(UINT message, WPARAM w, LPARAM l);
     void layout();
     void on_down(double x, double y, bool shift, bool ctrl, bool double_click);
@@ -187,6 +203,12 @@ private:
     // A point on the work plane under the pixel, snapped (grid, vertices, edges, faces), on the plane.
     [[nodiscard]] std::optional<solid::P3> plane_point(double x, double y) const;
     [[nodiscard]] solid::Coord quantize(double um) const;  // a drag's length, to the grid step
+    // Unit 26n slice 4 (DT8): a drawn height and a cylinder's radius (about centre `c`, plane coordinates) held inside the domain.
+    [[nodiscard]] solid::Coord height_inside(solid::Coord h) const;
+    [[nodiscard]] solid::Coord radius_inside(geo::Pt c, solid::Coord r) const;
+    // A drag's model taken only while its solids stay inside the domain (else the last one kept, the reason shown).
+    bool inside_or_keep(const solid::Model& next);
+    std::string refused_;  // the last refusal of an edit past the domain (commit_model)
     [[nodiscard]] solid::Coord grid() const;
 
     Host& host_;
@@ -244,6 +266,27 @@ private:
 
     // Unit 26m slice 0.
     std::unique_ptr<ModellerBar> bar_;
+    // Unit 26n: the dimensions panel's host (the deck through this page's undo), the panel, the marks, a line's drag.
+    struct DimsHost final : DimensionsPanel::Host {
+        SolidPage* page = nullptr;
+        std::string dimensions_deck() override;
+        void dimensions_edited(const std::string& text) override;
+        void dimensions_selected(const std::string& name) override;
+        bool dimensions_sweeps() override { return true; }
+        void dimensions_sweep(const std::string& name) override;
+        bool dimensions_unlocks() override;            // Unit 26n slice 2 (DT5)
+        std::string dimensions_unlock() override;
+    };
+    DimsHost dims_host_;
+    std::unique_ptr<DimensionsPanel> dims_;
+    std::vector<dims::Mark> marks_;
+    int dim_drag_ = -1;  // the mark being dragged, or -1
+    double dim_x_ = 0.0, dim_y_ = 0.0;
+    std::string dim_literal_;
+    void reload_dimensions();
+    bool dimension_down(double x, double y);
+    bool dimension_move(double x, double y);
+    bool dimension_up();
     bool camera_fixed_ = false;  // MQ2: free on open
     render::Camera start_camera_;
     modeller::Entry entry_;

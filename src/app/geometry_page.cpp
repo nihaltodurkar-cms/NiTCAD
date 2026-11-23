@@ -13,6 +13,7 @@
 
 #include "NiTCAD/app/deck_vocabulary.hpp"
 #include "NiTCAD/app/solid.hpp"
+#include "NiTCAD/app/unlock.hpp"
 #include "win32.hpp"
 
 // Last: they bring objbase.h's `interface` macro.
@@ -219,6 +220,9 @@ GeometryPage::GeometryPage(HWND parent, Host& host, int id, int inspector_id, bo
     D2D1_FACTORY_OPTIONS fo{};
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory), &fo, reinterpret_cast<void**>(&d2d_));
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(&dwrite_));
+    dims_host_.page = this;  // Unit 26n (DT1)
+    dims_ = std::make_unique<DimensionsPanel>(inspector_, dims_host_, inspector_id + 900);
+    ShowWindow(dims_->hwnd(), SW_SHOWNA);
     update_tool_buttons();
     update_inspector();
 }
@@ -248,6 +252,7 @@ void GeometryPage::set_dpi(int dpi, HFONT font, HFONT bold) {
     bar_->set_font(font, dpi);
     for (HWND h : controls_) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     SendMessageW(control(c_heading), WM_SETFONT, reinterpret_cast<WPARAM>(bold), TRUE);
+    dims_->set_dpi(dpi, font, bold);
     release(text_);
     layout();
     layout_inspector();
@@ -312,6 +317,9 @@ void GeometryPage::layout_inspector() {
     pair(c_kind_label, c_kind, MulDiv(160, dpi_, 96));
     y += pad;
     pair(c_draw_label, c_draw, MulDiv(200, dpi_, 96));
+    // Unit 26n (DT1): the dimensions panel below.
+    y += pad;
+    MoveWindow(dims_->hwnd(), 0, y, r.right, std::max(1, dims_->preferred_height(r.right)), TRUE);
 }
 
 // --- the deck -------------------------------------------------------------------------------------------------
@@ -330,7 +338,7 @@ void GeometryPage::reload(bool fit_view, bool force) {
     }
     const bool first = text_seen_.empty() && !g_.editable();
     text_seen_ = text;
-    auto g = read_geometry(text, host_.geometry_bounds());
+    auto g = read_page(text);
     if (!g) {
         g_ = {};
         message_ = "The deck does not parse: " + g.error();
@@ -341,6 +349,7 @@ void GeometryPage::reload(bool fit_view, bool force) {
     prune_selection();
     if (fit_view || first) fit();
     locate_problems();
+    reload_dimensions();
     update_inspector();
     invalidate();
 }
@@ -359,12 +368,13 @@ void GeometryPage::prune_selection() {
 void GeometryPage::apply_text(const std::string& text) {
     host_.geometry_edited(text);
     text_seen_ = text;
-    if (auto g = read_geometry(text, host_.geometry_bounds())) {
+    if (auto g = read_page(text)) {
         g_ = std::move(*g);
         message_ = g_.editable() ? std::string() : g_.why;
     }
     prune_selection();  // an undo can take the selected shape or contact away
     locate_problems();
+    reload_dimensions();
     update_inspector();
     invalidate();
 }
@@ -416,7 +426,19 @@ std::string GeometryPage::banner() const {
 }
 
 bool GeometryPage::commit_model(Geometry next) {
+    if (view_only_) return false;  // Unit 26n: dimensions only
     const std::string text = host_.geometry_deck();
+    // Unit 26n slice 4 (DT8): no edit takes a shape past the domain (a deck that already has one is not held).
+    if (const std::string why = outside_domain(next); !why.empty()) {
+        const auto was = read_page(text);
+        if (was && outside_domain(*was).empty()) {
+            refused_ = "Refused: " + why + " (a shape stays inside the domain).";
+            host_.geometry_status(refused_);
+            g_ = *was;
+            invalidate();
+            return false;
+        }
+    }
     auto out = write_geometry(text, next);
     if (!out) {
         host_.geometry_status(out.error());
@@ -1028,6 +1050,7 @@ bool GeometryPage::commit(int c) {
 Pt GeometryPage::snapped(double x, double y, bool shift, std::optional<ShapeRef> skip) const {
     Pt p = snap(g_, view_, view_.model(x, y), skip).p;
     if (shift && drag_ != Drag::none) p = constrain(anchor_, p);
+    if (domain_holds(g_)) p = {std::clamp(p.x, g_.domain.lo.x, g_.domain.hi.x), std::clamp(p.y, g_.domain.lo.y, g_.domain.hi.y)};  // DT8
     return p;
 }
 
@@ -1048,11 +1071,17 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
         return;
     }
     if (!g_.editable()) return;
+    if ((tool_ == Tool::select || view_only_) && dimension_down(x, y)) return;  // Unit 26n (DT2): a dimension line first
     const auto begin = [&](Drag d) {
         drag_ = d;
         g_start_ = g_;
         SetCapture(canvas_);
     };
+    if (view_only_) {  // Unit 26n: a parametric deck's shapes move by their dimensions only
+        if (!camera_fixed_) begin(Drag::pan);
+        host_.geometry_status("This device is shaped by named dimensions: change them in the panel, or drag their lines.");
+        return;
+    }
     if (space_ || tool_ == Tool::pan) {
         // MT1: the Pan tool and Space+drag move the view only while the camera is free.
         if (!camera_fixed_) begin(Drag::pan);
@@ -1252,6 +1281,7 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
 }
 
 void GeometryPage::on_move(double x, double y, bool shift) {
+    if (dimension_move(x, y)) return;  // Unit 26n (DT2)
     const Pt raw = view_.model(x, y);
     host_.geometry_status(std::format("x {} µm, y {} µm", ui_length(raw.x), ui_length(raw.y)));
     if (start_ == Start::footprint) {
@@ -1816,6 +1846,27 @@ double GeometryPage::render() {
         }
         target_->PopAxisAlignedClip();
     }
+    // Unit 26n (DT2): the dimension lines, each 12 px off its extent, with end ticks and its label.
+    if (!can_start() && !marks_.empty()) {
+        target_->PushAxisAlignedClip(D2D1::RectF(R, R, W, H), D2D1_ANTIALIAS_MODE_ALIASED);
+        const auto lines = dimension_lines();
+        for (std::size_t k = 0; k < lines.size(); ++k) {
+            const auto& s = lines[k];
+            const bool lit = marks_[k].name == dims_->selected();
+            const D2D1_COLOR_F ink = rgb(0.13f, 0.40f, 0.80f);
+            target_->DrawLine({s[0], s[1]}, {s[2], s[3]}, color(ink), lit ? 2.0f * px : 1.0f * px);
+            const bool across = marks_[k].axis == 0;  // ticks run across the line
+            for (const auto& [x, y] : {std::pair{s[0], s[1]}, std::pair{s[2], s[3]}}) {
+                if (across) target_->DrawLine({x, y - 4 * px}, {x, y + 4 * px}, color(ink), 1.0f * px);
+                else target_->DrawLine({x - 4 * px, y}, {x + 4 * px, y}, color(ink), 1.0f * px);
+            }
+            const float mx = 0.5f * (s[0] + s[2]), my = 0.5f * (s[1] + s[3]);
+            text_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            text(wide(marks_[k].label), mx - 120 * px, my - 18 * px, 240 * px, 16 * px, ink);
+            text_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
+        target_->PopAxisAlignedClip();
+    }
     // The rulers, in µm, labelled at the 1, 2, 5 step at least 60 px apart.
     target_->FillRectangle(D2D1::RectF(0, 0, W, R), color(rgb(0.92f, 0.92f, 0.92f)));
     target_->FillRectangle(D2D1::RectF(0, 0, R, H), color(rgb(0.92f, 0.92f, 0.92f)));
@@ -1947,6 +1998,7 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         after_drag_step(x, y);
         return 0;
     case WM_LBUTTONUP:
+        if (dimension_up()) return 0;  // Unit 26n (DT2)
         if (start_ != Start::none || (drag_ != Drag::none && drag_ != Drag::pan)) on_up(x, y, shift);
         else if (drag_ == Drag::pan) {
             drag_ = Drag::none;
@@ -2011,6 +2063,122 @@ LRESULT GeometryPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
     default: break;
     }
     return DefWindowProcW(canvas_, message, w, l);
+}
+
+// --- Unit 26n (DT1, DT2): the dimensions panel and the dimension lines -------------------------------------------------
+
+// A deck the editor reads as written; else, when its shapes hold $references, read from the text with every reference
+// written out and shown view only (the dimensions edit it; shape tools refuse).
+std::expected<geo::Geometry, std::string> GeometryPage::read_page(const std::string& text) {
+    view_only_ = false;
+    auto g = read_geometry(text, host_.geometry_bounds());
+    if ((!g || !g->editable()) && text.find('$') != std::string::npos) {
+        if (const auto sub = dims::substituted_text(text)) {
+            if (auto gs = read_geometry(*sub, host_.geometry_bounds()); gs && gs->editable()) {
+                view_only_ = true;
+                return gs;
+            }
+        }
+    }
+    return g;
+}
+
+std::string GeometryPage::DimsHost::dimensions_deck() { return page->host_.geometry_deck(); }
+
+void GeometryPage::DimsHost::dimensions_edited(const std::string& text) {
+    page->history_.record(page->host_.geometry_deck());  // one undo for the edit
+    page->apply_text(text);
+}
+
+void GeometryPage::DimsHost::dimensions_selected(const std::string&) { page->invalidate(); }
+
+void GeometryPage::DimsHost::dimensions_sweep(const std::string& name) { page->host_.geometry_sweep(name); }
+
+// Unit 26n slice 2 (DT5): a 3D tensor deck (shown as the preview) becomes a layered one; the Geometry tab then shows
+// the 3D modeller, whose undo takes it back (MainWindow::geometry_edited).
+bool GeometryPage::DimsHost::dimensions_unlocks() { return unlock::kind_of(page->host_.geometry_deck()) == unlock::Kind::tensor; }
+
+std::string GeometryPage::DimsHost::dimensions_unlock() {
+    const std::string text = page->host_.geometry_deck();
+    auto u = unlock::unlock(text);
+    if (!u) return "Unlock refused: " + u.error();
+    page->history_.record(text);
+    page->apply_text(u->text);
+    page->host_.geometry_status("Unlocked: " + u->note);
+    return {};
+}
+
+void GeometryPage::reload_dimensions() {
+    dims_->reload();
+    marks_ = dims::dimension_marks(text_seen_);
+    layout_inspector();
+}
+
+std::vector<std::array<float, 4>> GeometryPage::dimension_lines() const {
+    std::vector<std::array<float, 4>> out;
+    const auto q = [](double cm) { return static_cast<geo::Coord>(std::llround(cm / geo::quantum_cm)); };
+    const auto lift = static_cast<float>(view_.px(12.0));
+    for (const dims::Mark& m : marks_) {
+        const float x0 = static_cast<float>(view_.sx(q(m.a[0]))), y0 = static_cast<float>(view_.sy(q(m.a[1])));
+        const float x1 = static_cast<float>(view_.sx(q(m.b[0]))), y1 = static_cast<float>(view_.sy(q(m.b[1])));
+        if (m.axis == 0) out.push_back({x0, y0 - lift, x1, y1 - lift});
+        else out.push_back({x0 - lift, y0, x1 - lift, y1});
+    }
+    return out;
+}
+
+namespace {
+
+double segment_distance(const std::array<float, 4>& s, double x, double y) {
+    const double dx = s[2] - s[0], dy = s[3] - s[1], len2 = dx * dx + dy * dy;
+    const double t = len2 > 0.0 ? std::clamp(((x - s[0]) * dx + (y - s[1]) * dy) / len2, 0.0, 1.0) : 0.0;
+    return std::hypot(x - (s[0] + t * dx), y - (s[1] + t * dy));
+}
+
+}  // namespace
+
+bool GeometryPage::dimension_down(double x, double y) {
+    const auto lines = dimension_lines();
+    for (std::size_t k = 0; k < lines.size(); ++k) {
+        if (segment_distance(lines[k], x, y) > view_.px(6.0)) continue;
+        dim_drag_ = static_cast<int>(k);
+        dim_x_ = x;
+        dim_y_ = y;
+        dim_literal_.clear();
+        dims_->select(marks_[k].name);
+        SetCapture(canvas_);
+        invalidate();
+        return true;
+    }
+    return false;
+}
+
+bool GeometryPage::dimension_move(double x, double y) {
+    if (dim_drag_ < 0) return false;
+    const dims::Mark& m = marks_[static_cast<std::size_t>(dim_drag_)];
+    const auto& rows = dims_->dimensions();
+    const auto row = std::ranges::find(rows, m.name, &dims::Dimension::name);
+    if (row == rows.end()) return true;
+    const geo::Pt p = view_.model(x, y), p0 = view_.model(dim_x_, dim_y_);
+    const geo::Coord d = m.axis == 0 ? p.x - p0.x : p.y - p0.y;
+    dim_literal_ = dims::length_literal(*row, row->value + m.grows * static_cast<double>(d) * geo::quantum_cm);
+    host_.geometry_status(row->name + " = " + dim_literal_);
+    return true;
+}
+
+bool GeometryPage::dimension_up() {
+    if (dim_drag_ < 0) return false;
+    const std::string name = marks_[static_cast<std::size_t>(dim_drag_)].name;
+    dim_drag_ = -1;
+    if (GetCapture() == canvas_) ReleaseCapture();
+    const auto& rows = dims_->dimensions();
+    const auto row = std::ranges::find(rows, name, &dims::Dimension::name);
+    if (row != rows.end() && !dim_literal_.empty() && dim_literal_ != row->expr) {
+        dims_->commit(static_cast<std::size_t>(row - rows.begin()), dim_literal_);  // one edit, on release
+    }
+    dim_literal_.clear();
+    invalidate();
+    return true;
 }
 
 }  // namespace NiTCAD::app

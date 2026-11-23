@@ -1748,8 +1748,11 @@ TEST_CASE("parameters: a tied drag frame with 100 tied solids adds at most 1 ms 
     tie_edits(*m0, m);
     for (int k = 0; k < 100; ++k) CHECK(m.regions[static_cast<std::size_t>(k) + 1].solids[0].box.hi.x - m.regions[static_cast<std::size_t>(k) + 1].solids[0].box.lo.x == 80);
     // The CI runner records it (owner, 2026-11-22, as SE5 and KG6 (b)): there it took 1.055 ms on PR #116, four tests
-    // sharing its four cores; this workstation is the gate.
+    // sharing its four cores; this workstation is the gate. Release only (owner, 2026-11-19, as KG6 and SE5): the
+    // unoptimised Debug build records the time (15.1 ms, Unit 26n's full Debug run).
+#ifdef NDEBUG
     if (!app_test::on_ci()) CHECK(ms[ms.size() / 2] <= 1.0);
+#endif
 }
 
 // --- Unit 26m slice 4 (MT9, MT10, MC8): doping and mesh tools -------------------------------------------------------

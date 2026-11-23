@@ -39,6 +39,9 @@
 #include "NiTCAD/app/integration.hpp"
 #include "NiTCAD/app/live_check.hpp"
 #include "deck_pane.hpp"
+#include "new_device_dialog.hpp"
+#include "sweep_dialog.hpp"
+#include "NiTCAD/app/sweep_results.hpp"
 #include "geometry_page.hpp"
 #include "solid_page.hpp"
 #include "pages.hpp"
@@ -64,6 +67,7 @@ struct WindowOptions {
     // and where a user's copies go (empty: the user's Documents, NiTCAD\examples).
     std::filesystem::path examples_dir;
     std::filesystem::path examples_copy_dir;
+    std::filesystem::path devices_copy_dir;  // Unit 26n slice 1: where New device writes by default (empty: Documents/NiTCAD/devices)
 };
 
 // The posted message that wakes the window for the run controller's events.
@@ -77,6 +81,10 @@ inline constexpr UINT live_delay_ms = 400;
 inline constexpr UINT live_message = WM_APP + 2;
 // Posted when a box in the scene tree may have changed (Unit 26c, YD4).
 inline constexpr UINT tree_check_message = WM_APP + 3;
+// Unit 26n slice 1: the New device dialog closed (a deck created, or cancelled), handled after its own message.
+inline constexpr UINT new_device_message = WM_APP + 4;
+// Unit 26n slice 3: the sweep dialog closed (Run or Cancel), handled once it has returned from its own message.
+inline constexpr UINT sweep_message = WM_APP + 5;
 // Transient playback (Unit 26c, YD5): the timer that shows the snapshot due while playing. Each tick shows the
 // snapshot the time since Play has reached (playback_frame), so a frame drawn late skips the ones it missed.
 inline constexpr UINT_PTR playback_timer = 0x54;
@@ -91,7 +99,9 @@ class MainWindow final : public Viewport::Host,
                          public StartPage::Host,
                          public RunPage::Host,
                          public GeometryPage::Host,
-                         public SolidPage::Host {
+                         public SolidPage::Host,
+                         public NewDeviceDialog::Host,
+                         public SweepDialog::Host {
 public:
     enum Tab : int { tab_start = 0, tab_geometry, tab_view, tab_curves, tab_deck, tab_run, tab_results, tab_count };
 
@@ -128,6 +138,13 @@ public:
     [[nodiscard]] Viewport& viewport() noexcept { return *viewport_; }
     [[nodiscard]] DeckPane& deck() noexcept { return *deck_; }
     [[nodiscard]] StartPage& start_page() noexcept { return *start_; }
+    [[nodiscard]] NewDeviceDialog* new_device_dialog() noexcept { return new_device_.get(); }  // Unit 26n slice 1; null when closed
+    // Unit 26n slice 3 (DT6, DT7): the sweep dialog (null when closed); the last sweep's results (null before one);
+    // the Curves tab's sweep views ("sweep: curves", then "sweep: <figure> vs <name>"), and choosing one.
+    [[nodiscard]] SweepDialog* sweep_dialog() noexcept { return sweep_dialog_.get(); }
+    [[nodiscard]] const SweepResults* sweep_results() const noexcept { return sweep_results_ ? &*sweep_results_ : nullptr; }
+    [[nodiscard]] std::vector<std::string> sweep_views() const;
+    void select_sweep_view(std::size_t k);
     [[nodiscard]] RunPage& run_page() noexcept { return *run_page_; }
     [[nodiscard]] ResultsPage& results_page() noexcept { return *results_; }
     [[nodiscard]] GeometryPage& geometry_page() noexcept { return *geometry_; }
@@ -373,10 +390,26 @@ private:
     void solid_status(const std::string& text) override;
     [[nodiscard]] render::Renderer* solid_renderer() override;
     void update_geometry_page();  // which of the two pages the Geometry tab shows
+    // Unit 26n (DT2): the Geometry tab shows the device preview (the viewport) for a deck neither editor draws.
+    [[nodiscard]] bool geometry_preview() const;
     // StartPage::Host and RunPage::Host
     void start_command(int command) override;
     void start_recent(std::size_t index) override;
     void start_example(std::size_t index) override;
+    void new_device_created(const std::filesystem::path& deck) override;  // Unit 26n slice 1 (DT4)
+    void new_device_closed() override;
+    void open_new_device();
+    void finish_new_device();
+    // Unit 26n slice 3 (DT6): Sweep... on a dimension row; the dialog's Run and Cancel; the sweep started.
+    void geometry_sweep(const std::string& name) override;
+    void solid_sweep(const std::string& name) override;
+    void open_sweep_dialog(const std::string& name);
+    void sweep_run(const std::string& name, const std::vector<std::string>& values) override;
+    void sweep_closed() override;
+    void finish_sweep_dialog();
+    void sweep_finished();
+    void start_deck_run(const std::pair<std::string, std::vector<std::string>>* sweep);
+    [[nodiscard]] std::expected<render::PlotScene, base::Error> sweep_scene() const;
     void run_page_stop() override;
 
     WindowOptions options_;
@@ -407,6 +440,17 @@ private:
     std::unique_ptr<SolidPage> solid_;
     bool solid_shown_ = false;
     std::vector<Example> examples_;
+    std::filesystem::path devices_dir_;  // the library (examples/devices), Unit 26n slice 1
+    std::unique_ptr<NewDeviceDialog> new_device_;
+    std::filesystem::path new_device_path_;  // the deck created, opened by finish_new_device
+    // Unit 26n slice 3: the sweep dialog, the sweep it asked for (started once it has closed), the text swept, the
+    // results, their figures and the sweep view shown on the Curves tab (-1: the run's own views).
+    std::unique_ptr<SweepDialog> sweep_dialog_;
+    std::optional<std::pair<std::string, std::vector<std::string>>> sweep_request_;
+    std::string sweep_text_;
+    std::optional<SweepResults> sweep_results_;
+    SweepFigures sweep_figures_;
+    int sweep_view_ = -1;
     HACCEL accelerators_ = nullptr;
     HFONT font_ = nullptr, bold_ = nullptr;
     int dpi_ = 96;

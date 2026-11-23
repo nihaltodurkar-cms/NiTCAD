@@ -401,13 +401,36 @@ std::size_t swept_contact(const std::vector<std::vector<double>>& biases) {
     return best;
 }
 
-std::vector<Figure> extracted_figures(const Workspace& w) {
-    std::vector<Figure> out;
-    if (!w.sweep || w.sweep->points.size() < 2) return out;
+std::optional<FigureCurve> figure_curve(const Workspace& w) {
+    if (!w.sweep || w.sweep->points.size() < 2) return std::nullopt;
     const auto contacts = w.device->contacts();
     std::vector<std::vector<double>> biases;
     for (const auto& p : w.sweep->points) biases.push_back(p.bias_V);
     const std::size_t swept = swept_contact(biases);
+    if (contacts[swept].kind == device::ContactKind::ohmic || contacts[swept].kind == device::ContactKind::schottky) {
+        return FigureCurve{.swept = swept, .sense = swept, .transfer = false};
+    }
+    // A transfer curve: the contact carrying the most current at the last point is sensed (the swept gate or
+    // electrode carries none in a steady state).
+    std::size_t sense = swept;
+    double best = -1.0;
+    const auto& last = w.sweep->points.back().terminal_current;
+    for (std::size_t k = 0; k < contacts.size() && k < last.size(); ++k) {
+        if (std::abs(last[k]) > best) {
+            best = std::abs(last[k]);
+            sense = k;
+        }
+    }
+    if (sense == swept) return std::nullopt;
+    return FigureCurve{.swept = swept, .sense = sense, .transfer = true};
+}
+
+std::vector<Figure> extracted_figures(const Workspace& w) {
+    std::vector<Figure> out;
+    const auto fc = figure_curve(w);
+    if (!fc) return out;
+    const auto contacts = w.device->contacts();
+    const std::size_t swept = fc->swept;
     std::string curve_name;
     const auto add = [&](std::string name, const std::expected<analysis::Extraction, base::Error>& e, std::string unit) {
         if (!e) return;
@@ -416,20 +439,8 @@ std::vector<Figure> extracted_figures(const Workspace& w) {
     };
     const int dim = w.device->mesh().dimension();
     const std::string current_unit = dim == 1 ? "A/cm\xC2\xB2" : dim == 2 ? "A/cm" : "A";
-    if (contacts[swept].kind != device::ContactKind::ohmic &&
-        contacts[swept].kind != device::ContactKind::schottky) {
-        // A transfer curve: the contact carrying the most current at the last point is sensed (the swept
-        // gate or electrode carries none in a steady state).
-        std::size_t sense = swept;
-        double best = -1.0;
-        const auto& last = w.sweep->points.back().terminal_current;
-        for (std::size_t k = 0; k < contacts.size() && k < last.size(); ++k) {
-            if (std::abs(last[k]) > best) {
-                best = std::abs(last[k]);
-                sense = k;
-            }
-        }
-        if (sense == swept) return out;
+    if (fc->transfer) {
+        const std::size_t sense = fc->sense;
         auto curve = analysis::current_curve(*w.sweep, swept, sense);
         if (!curve) return out;
         // An n-channel current rises with the gate; a p-channel curve is read negated.

@@ -689,4 +689,33 @@ Coord view_grid(const Model& m, const ViewState& v, const V3& p) {
     return grid_step(1.0 / std::max(um, 1e-12), v.dpi);
 }
 
+void add_dimension_marks(render::FieldScene& scene, const std::vector<dims::Mark>& marks, const std::string& selected) {
+    if (marks.empty()) return;
+    const render::Rgba ink{0.13f, 0.40f, 0.80f, 1.0f};
+    render::LineBatch all{"dimensions", ink, 1.5f, true, {}}, lit{"dimensions selected", ink, 3.0f, true, {}};
+    const auto um = [](const std::array<double, 3>& p) {
+        return render::Float3{static_cast<float>(p[0] * 1e4), static_cast<float>(p[1] * 1e4), static_cast<float>(p[2] * 1e4)};
+    };
+    for (const dims::Mark& mk : marks) {
+        render::LineBatch& b = mk.name == selected ? lit : all;
+        b.points.push_back(um(mk.a));
+        b.points.push_back(um(mk.b));
+        const auto along = static_cast<std::size_t>(mk.axis), across = static_cast<std::size_t>((mk.axis + 1) % 3);
+        const double tick = 0.04 * std::abs(mk.b[along] - mk.a[along]);
+        for (const auto& end : {mk.a, mk.b}) {
+            auto lo = end, hi = end;
+            lo[across] -= tick;
+            hi[across] += tick;
+            b.points.push_back(um(lo));
+            b.points.push_back(um(hi));
+        }
+        std::array<double, 3> mid{};
+        for (std::size_t k = 0; k < 3; ++k) mid[k] = 0.5 * (mk.a[k] + mk.b[k]);
+        scene.labels.push_back({um(mid), mk.label, ink});
+    }
+    for (auto* b : {&all, &lit}) {
+        if (!b->points.empty()) scene.lines.push_back(std::move(*b));
+    }
+}
+
 }  // namespace NiTCAD::app::solid

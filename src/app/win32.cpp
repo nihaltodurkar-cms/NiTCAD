@@ -5,6 +5,7 @@
 #include <dxgi1_3.h>
 #include <dxgidebug.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <wrl/client.h>
 
 #include <vector>
@@ -114,6 +115,25 @@ int live_graphics_objects() {
         }
     }
     return live;
+}
+
+std::filesystem::path pick_folder(HWND owner, const wchar_t* title, const std::filesystem::path& start) {
+    Microsoft::WRL::ComPtr<IFileOpenDialog> d;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&d)))) return {};
+    FILEOPENDIALOGOPTIONS o{};
+    d->GetOptions(&o);
+    d->SetOptions(o | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+    d->SetTitle(title);
+    Microsoft::WRL::ComPtr<IShellItem> at;
+    if (!start.empty() && SUCCEEDED(SHCreateItemFromParsingName(start.c_str(), nullptr, IID_PPV_ARGS(&at)))) d->SetFolder(at.Get());
+    if (FAILED(d->Show(owner))) return {};
+    Microsoft::WRL::ComPtr<IShellItem> item;
+    if (FAILED(d->GetResult(&item))) return {};
+    PWSTR path = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) return {};
+    std::filesystem::path out(path);
+    CoTaskMemFree(path);
+    return out;
 }
 
 std::filesystem::path open_dialog(HWND owner, const wchar_t* filter, const wchar_t* title) {

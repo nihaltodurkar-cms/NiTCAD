@@ -1,0 +1,149 @@
+# FinFET (SOI, 3D)
+# A silicon-on-insulator n-channel FinFET with a high-k gate stack, every size a named dimension: Id-Vg at 50 mV.
+#
+# A silicon fin on a buried oxide, wrapped under the gate by an interfacial oxide and a high-k layer, with spacers
+# (eps_r 7.5) beside the gate; n+ source and drain from the fin's ends up to the underlap. Three metal gate faces
+# (top, left, right; work function 4.4 eV) are swept together; the substrate under the buried oxide is a metal
+# electrode (4.6 eV) at 0 V. x runs along the fin, y up, z across it. Coarse mesh: refine before trusting currents.
+
+[parameters]
+# group: Main
+Lg = 25nm  # Gate length
+Wfin = 10nm  # Fin width
+Hfin = 30nm  # Fin height
+tox = 0.5nm  # Interfacial oxide thickness
+Nsd = 1e20  # Source/drain donors (cm^-3)
+# group: Stack, body and buried oxide
+thk = 1.5nm  # High-k thickness
+Ls = 30nm  # Source length
+Ld = 30nm  # Drain length
+tbox = 20nm  # Buried oxide thickness
+Na = 1e16  # Fin acceptors (cm^-3)
+gs = 0.1nm  # Side gates' gap below the top
+# group: Source and drain
+ud = 3nm  # Source/drain underlap (from the gate edge)
+lat = 2nm  # Lateral spread of the source/drain
+ext = 10nm  # Source/drain windows past the fin ends
+# group: Mesh
+xf0 = 20nm  # Fine mesh start along the fin
+yfm = 4nm  # Fine mesh depth below the fin top
+# group: Positions (derived)
+x_g1 = $Ls + $Lg  # Gate end
+L = $Ls + $Lg + $Ld  # Fin length
+xf1 = $L - $xf0  # Fine mesh end along the fin
+y_fin = $tbox + $Hfin  # Fin top
+y_fm = $y_fin - $yfm  # Fine mesh start below the fin top
+y_il = $y_fin + $tox  # Interfacial oxide top
+y_top = $y_il + $thk  # Gate stack top
+y_side = $y_top - $gs  # Side gates' top
+z_f0 = $tox + $thk  # Fin left face
+z_f1 = $z_f0 + $Wfin  # Fin right face
+z_il1 = $z_f1 + $tox  # Interfacial oxide right face
+W = $z_f1 + $tox + $thk  # Domain width
+x_s = $Ls - $ud  # Source window end
+x_d = $x_g1 + $ud  # Drain window start
+x_neg = 0 - $ext  # Source window start
+x_far = $L + $ext  # Drain window end
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, $xf0, 5) + linspace($xf0, $xf1, 17) + linspace($xf1, $L, 5)
+y = linspace(0, $tbox, 5) + linspace($tbox, $y_fm, 14) + linspace($y_fm, $y_fin, 5) + linspace($y_fin, $y_top, 5)
+z = linspace(0, $z_f0, 5) + linspace($z_f0, $z_f1, 11) + linspace($z_f1, $W, 5)
+straddle x = $Ls 0.5nm
+straddle x = $x_g1 0.5nm
+straddle y = $tbox 0.5nm
+straddle y = $y_fin 0.2nm
+straddle y = $y_il 0.2nm
+straddle z = $thk 0.2nm
+straddle z = $z_f0 0.2nm
+straddle z = $z_f1 0.2nm
+straddle z = $z_il1 0.2nm
+
+[region buried_oxide]
+material = sio2
+
+[region spacer]
+material = insulator
+eps_r = 7.5
+box = 0 $L  $tbox $y_top  0 $W
+
+[region hfo2]
+material = insulator
+eps_r = 22
+box = $Ls $x_g1  $tbox $y_top  0 $W
+
+[region interfacial]
+material = sio2
+box = $Ls $x_g1  $tbox $y_il  $thk $z_il1
+
+[region silicon]
+material = silicon
+box = 0 $L  $tbox $y_fin  $z_f0 $z_f1
+
+[doping]
+profile = acceptor constant $Na
+profile = donor constant $Nsd axis=y x=$x_neg:$x_s lateral=$lat
+profile = donor constant $Nsd axis=y x=$x_d:$x_far lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = x_min
+
+[contact drain]
+kind = ohmic
+patch = x_max
+
+[contact gate_top]
+kind = electrode
+patch = y_max
+box = $Ls $x_g1  $y_top $y_top  0 $W
+electrode = metal
+work_function = 4.4
+
+[contact gate_left]
+kind = electrode
+patch = z_min
+box = $Ls $x_g1  $tbox $y_side  0 0
+electrode = metal
+work_function = 4.4
+
+[contact gate_right]
+kind = electrode
+patch = z_max
+box = $Ls $x_g1  $tbox $y_side  $W $W
+electrode = metal
+work_function = 4.4
+
+[contact substrate]
+kind = electrode
+patch = y_min
+electrode = metal
+work_function = 4.6
+
+[interface silicon interfacial]
+fixed_charge = 5e10
+
+[models]
+fermi_dirac = on
+field_mobility = on
+electron_mobility = masetti
+
+[solver]
+backend = gmres_ilut
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate_top = 0 : 0.8 : 0.05
+contact gate_left = 0 : 0.8 : 0.05
+contact gate_right = 0 : 0.8 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = finfet_soi_3d.nitsweep
+device = finfet_soi_3d.nitdev
+table = finfet_soi_3d.csv

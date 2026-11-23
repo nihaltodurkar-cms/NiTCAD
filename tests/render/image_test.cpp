@@ -1090,3 +1090,32 @@ TEST_CASE("render image: derived-field benchmark (Unit 25b, BG7)", "[.benchmark]
     REQUIRE(d.has_value());
     run("1e6 tetrahedra", *d, p);
 }
+
+// Unit 26n (DT2): a scene's text labels, drawn centred just above their point, in 2D and 3D; none by default.
+TEST_CASE("render image: scene labels are drawn above their point and nowhere else (Unit 26n, DT2)") {
+    Renderer& r = warp();
+    constexpr int W = 800, H = 600;
+    for (const bool three : {false, true}) {
+        CAPTURE(three);
+        const Mosfet& m = mosfet(three);
+        const Geometry g = geometry_of(m.device);
+        auto s = solid_view(m.device, g);
+        REQUIRE(s.has_value());
+        REQUIRE(s->labels.empty());
+        FieldScene labelled = *s;
+        const Float3 at{0.5f * (s->lo[0] + s->hi[0]), 0.5f * (s->lo[1] + s->hi[1]), 0.5f * (s->lo[2] + s->hi[2])};
+        labelled.labels.push_back({at, "20 nm", {0.0f, 0.0f, 0.0f, 1.0f}});
+        const auto with = r.draw(labelled, W, H);
+        const auto without = r.draw(*s, W, H);
+        REQUIRE(with.has_value());
+        REQUIRE(without.has_value());
+        const ScreenPoint q = screen_position(*s, W, H, at);
+        const double a = mean_luminance(*with, q.x, q.y - 7.0f, 6);
+        const double b = mean_luminance(*without, q.x, q.y - 7.0f, 6);
+        CAPTURE(q.x, q.y, a, b);
+        CHECK(a < b - 10.0);  // dark text over the device
+        CHECK(mean_luminance(*with, 30.0f, 30.0f, 4) == mean_luminance(*without, 30.0f, 30.0f, 4));
+        CHECK(mean_luminance(*with, q.x, q.y + 40.0f, 4) == mean_luminance(*without, q.x, q.y + 40.0f, 4));
+    }
+    CHECK(r.debug_errors() == 0);
+}

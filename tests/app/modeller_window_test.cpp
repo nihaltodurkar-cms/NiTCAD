@@ -1048,9 +1048,10 @@ TEST_CASE("app window modeller: Extrude, Chamfer, Fillet, Round vertex, Taper, I
         CHECK(w->deck().text() == texts.back());  // not yet written
         const auto up = page.screen_of_um({at[0], at[1], at[2] + 0.1});
         send(c, WM_MOUSEMOVE, 0, up[0], up[1]);
-        // Moved, before typing: the depth from the pressed point on the face, 0.1um up.
+        // Moved, before typing: the depth from the pressed point on the face, 0.1um up, held at the domain's top
+        // (0.55um + 0.05um; Unit 26n slice 4, DT8: this check said "depth 0.1" before).
         INFO("chip: " << page.chip());
-        CHECK(has(page.chip(), "depth 0.1 "));
+        CHECK(has(page.chip(), "depth 0.05 "));
         type(c, L"0.05");
         const std::string shown = page.live_line();
         send(c, WM_LBUTTONDOWN, MK_LBUTTON, up[0], up[1]);

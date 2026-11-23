@@ -23,6 +23,7 @@
 
 #include "NiTCAD/app/compare.hpp"
 #include "NiTCAD/app/run_monitor.hpp"
+#include "NiTCAD/app/unlock.hpp"
 #include "NiTCAD/render/compare.hpp"
 #include "NiTCAD/render/quality.hpp"
 #include "NiTCAD/render/scene.hpp"
@@ -557,6 +558,7 @@ void MainWindow::update_command_states() {
     enable(Command::stop, runner_.state() == RunState::running);
     enable(Command::open_deck, !busy);
     enable(Command::new_deck, !busy);
+    enable(Command::new_device, !busy);
     enable(Command::open_result, !busy);
     enable(Command::find_error, !deck_->diagnostics().empty());
     enable(Command::compare_result, !busy && workspace_.has_value());
@@ -630,7 +632,7 @@ void MainWindow::layout() {
     place(tabs_, panes_.tabs);
     place(inspector_, panes_.inspector);
     place(console_panel_, panes_.console);
-    const bool view = tab_ == tab_view || tab_ == tab_curves;
+    const bool view = tab_ == tab_view || tab_ == tab_curves || geometry_preview();
     Rect page = panes_.page;
     if (tab_ != tab_view) page.height += panes_.metrics.height;  // the metrics strip is the device view's
     const Rect whole{panes_.page.x, panes_.page.y, panes_.page.width, panes_.page.height + panes_.metrics.height};
@@ -646,7 +648,7 @@ void MainWindow::layout() {
     // Unit 26k: the Geometry tab's page, and its section in the inspector's place.
     place(geometry_->hwnd(), whole);
     place(geometry_->inspector(), panes_.inspector);
-    ShowWindow(geometry_->hwnd(), tab_ == tab_geometry && !solid_shown_ ? SW_SHOW : SW_HIDE);
+    ShowWindow(geometry_->hwnd(), tab_ == tab_geometry && !solid_shown_ && !geometry_preview() ? SW_SHOW : SW_HIDE);
     ShowWindow(geometry_->inspector(), tab_ == tab_geometry && !solid_shown_ && panes_.inspector.width > 0 ? SW_SHOW : SW_HIDE);
     // Unit 26l: the 3D modeller in its place for a 3D deck.
     place(solid_->hwnd(), whole);
@@ -1366,6 +1368,8 @@ void MainWindow::select_tab(int tab) {
             break;
         }
         geometry_->reload();
+        layout();  // Unit 26n (DT2): the page read again decides between the canvas and the preview
+        if (geometry_preview()) refresh();
         SetFocus(geometry_->canvas());
         // GD9: a deck not checked since it was opened is checked now (an edit's check is on its way otherwise).
         if (geometry_->check() == GeometryPage::Check::pending && !live_.pending() && live_edits_ == edits_) {
@@ -1403,6 +1407,152 @@ void MainWindow::start_recent(std::size_t index) { execute(static_cast<Command>(
 
 void MainWindow::start_example(std::size_t index) {
     if (confirm_discard()) open_example(index);
+}
+
+// Unit 26n slice 1 (DT4): File > New device... The dialog owns the window while open; Create's deck is opened on the
+// Geometry tab once the dialog has returned from its own message (posted).
+void MainWindow::open_new_device() {
+    if (new_device_) {
+        SetForegroundWindow(new_device_->hwnd());
+        return;
+    }
+    if (runner_.busy() || !confirm_discard()) return;
+    fs::path folder = options_.devices_copy_dir;
+    if (folder.empty()) folder = win32::documents_dir() / L"NiTCAD" / L"devices";
+    new_device_ = std::make_unique<NewDeviceDialog>(hwnd_, *this, devices::list_families(devices_dir_), folder, dpi_, font_, bold_);
+}
+
+void MainWindow::new_device_created(const fs::path& deck) {
+    new_device_path_ = deck;
+    PostMessageW(hwnd_, new_device_message, 0, 0);
+}
+
+void MainWindow::new_device_closed() {
+    new_device_path_.clear();
+    PostMessageW(hwnd_, new_device_message, 0, 0);
+}
+
+void MainWindow::finish_new_device() {
+    if (!new_device_) return;
+    new_device_.reset();  // the window enabled again
+    const fs::path deck = std::exchange(new_device_path_, {});
+    if (!deck.empty() && open_deck(deck)) select_tab(tab_geometry);
+}
+
+// A run of the deck in the editor (F5), or a dimension sweep of it (Unit 26n slice 3, DT6): the deck's text taken, an
+// untitled deck saved first (a run writes its outputs beside the deck), the run monitor shown.
+void MainWindow::start_deck_run(const std::pair<std::string, std::vector<std::string>>* sweep) {
+    document_.set_text(deck_->text());
+    if (document_.is_untitled() && !save(true)) return;
+    select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
+    pending_ = Pending::run;
+    console_log_.begin_run();
+    timings_ = {};
+    set_console_collapsed(false);  // Unit 26j: the console opens for a run
+    sweep_results_.reset();
+    sweep_figures_ = {};
+    sweep_view_ = -1;
+    if (sweep) {
+        std::string list;
+        for (const std::string& v : sweep->second) list += (list.empty() ? "" : ", ") + v;
+        log_line(LogLevel::header, std::format("Sweep {} of {} = {} ({} runs)", document_.path().filename().string(),
+                                               sweep->first, list, sweep->second.size()));
+        sweep_text_ = document_.text();
+        runner_.start_sweep(document_.text(), document_.path(), sweep->first, sweep->second);
+    } else {
+        log_line(LogLevel::header, "Run " + document_.path().filename().string());
+        runner_.start_run(document_.text(), document_.path());
+    }
+    update_points();  // the last run's rows cleared
+    update_taskbar(true);
+    show_status(status_state, "Running...");
+    SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
+    run_page_->update(runner_, renderer(), true);  // the last run's rows cleared
+    update_command_states();
+}
+
+void MainWindow::geometry_sweep(const std::string& name) { open_sweep_dialog(name); }
+void MainWindow::solid_sweep(const std::string& name) { open_sweep_dialog(name); }
+
+void MainWindow::open_sweep_dialog(const std::string& name) {
+    if (sweep_dialog_) {
+        SetForegroundWindow(sweep_dialog_->hwnd());
+        return;
+    }
+    if (runner_.busy()) {
+        set_status(status_state, "A run is in progress: sweep when it has finished", LogLevel::warning);
+        return;
+    }
+    const std::string text = deck_->text();
+    const auto rows = dims::read_dimensions(text);
+    if (!rows) return;
+    const auto row = std::ranges::find(*rows, name, &dims::Dimension::name);
+    if (row == rows->end()) return;
+    const fs::path path = document_.is_untitled() ? fs::path("untitled.deck") : document_.path();
+    sweep_dialog_ = std::make_unique<SweepDialog>(hwnd_, *this, text, path, name, row->label, row->expr, dpi_, font_, bold_);
+}
+
+void MainWindow::sweep_run(const std::string& name, const std::vector<std::string>& values) {
+    sweep_request_.emplace(name, values);
+    PostMessageW(hwnd_, sweep_message, 0, 0);
+}
+
+void MainWindow::sweep_closed() {
+    sweep_request_.reset();
+    PostMessageW(hwnd_, sweep_message, 0, 0);
+}
+
+void MainWindow::finish_sweep_dialog() {
+    if (!sweep_dialog_) return;
+    sweep_dialog_.reset();  // the window enabled again
+    const auto request = std::exchange(sweep_request_, std::nullopt);
+    if (request && !runner_.busy()) start_deck_run(&*request);
+}
+
+// The sweep's runs loaded (DT7), figures.csv written beside them, and the Curves tab showing their curves.
+void MainWindow::sweep_finished() {
+    const auto& s = runner_.sweep();
+    if (!s) return;
+    auto r = load_sweep(sweep_text_, document_.path(), s->name, s->values);
+    if (!r) {
+        log_line(LogLevel::error, "The sweep's results: " + r.error());
+        return;
+    }
+    sweep_results_ = std::move(*r);
+    sweep_figures_ = sweep_figures(*sweep_results_);
+    const fs::path csv = figures_csv_path(*sweep_results_);
+    {
+        std::ofstream out(csv, std::ios::binary);
+        out << figures_csv(*sweep_results_, sweep_figures_);
+        if (out) log_line(LogLevel::info, "Wrote " + csv.string());
+        else log_line(LogLevel::error, "Cannot write " + csv.string());
+    }
+    sweep_view_ = 0;
+    select_tab(tab_curves);
+    sync_inspector();
+    refresh();
+}
+
+std::vector<std::string> MainWindow::sweep_views() const {
+    std::vector<std::string> out;
+    if (!sweep_results_) return out;
+    out.emplace_back("sweep: curves");
+    for (const std::string& f : sweep_figures_.names) out.push_back("sweep: " + f + " vs " + sweep_results_->name);
+    return out;
+}
+
+void MainWindow::select_sweep_view(std::size_t k) {
+    if (k >= sweep_views().size()) return;
+    sweep_view_ = static_cast<int>(k);
+    if (tab_ != tab_curves) select_tab(tab_curves);
+    sync_inspector();
+    refresh();
+}
+
+std::expected<render::PlotScene, base::Error> MainWindow::sweep_scene() const {
+    if (!sweep_results_ || sweep_view_ < 0) return std::unexpected(base::Error{base::ErrorCode::invalid_input, "no sweep", std::nullopt});
+    if (sweep_view_ == 0) return sweep_overlay(*sweep_results_, curve_view_.log);
+    return figure_plot(*sweep_results_, sweep_figures_, static_cast<std::size_t>(sweep_view_ - 1));
 }
 
 void MainWindow::run_page_stop() { execute(Command::stop); }
@@ -1520,7 +1670,7 @@ void MainWindow::set_run_b(std::optional<Workspace> b) {
 
 void MainWindow::refresh() {
     hide_readout();
-    if (tab_ != tab_view && tab_ != tab_curves) return;
+    if (tab_ != tab_view && tab_ != tab_curves && !geometry_preview()) return;
     scene_.reset();
     values_.clear();
     ++values_generation_;  // Unit 26i (ND5)
@@ -1554,7 +1704,15 @@ void MainWindow::refresh() {
     ViewSettings shown = s;
     const bool along = s.kind == ViewKind::profile || s.kind == ViewKind::bands;
     if (along || (!is_plot(s.kind) && workspace_->device->mesh().dimension() > 1)) shown.cut = cut_;
-    auto scene = build_scene(*workspace_, shown, run_b());
+    // Unit 26n slice 3 (DT7): a sweep view on the Curves tab draws the sweep's runs, not this run's.
+    std::expected<Scene, base::Error> scene = std::unexpected(base::Error{base::ErrorCode::invalid_input, {}, std::nullopt});
+    if (tab_ == tab_curves && sweep_view_ >= 0 && sweep_results_) {
+        auto p = sweep_scene();
+        if (p) scene = Scene(std::move(*p));
+        else scene = std::unexpected(std::move(p.error()));
+    } else {
+        scene = build_scene(*workspace_, shown, run_b());
+    }
     if (!scene) {
         viewport_->show_message(scene.error().message);
         if (tab_ == tab_view) sync_range(true);
@@ -1611,6 +1769,9 @@ void MainWindow::refresh() {
                 values_title_ = std::string(render::field_info(*f).title);
             }
         }
+    }
+    if (geometry_preview()) {  // Unit 26n (DT2): the dimension lines on the preview
+        if (auto* f = std::get_if<render::FieldScene>(&*scene_)) solid::add_dimension_marks(*f, geometry_->dimension_marks(), geometry_->dimensions_panel().selected());
     }
     viewport_->show(&*renderer_, &*scene_);
     update_metrics();
@@ -1699,6 +1860,14 @@ void MainWindow::sync_inspector() {
             if (!belongs(k, tab_, workspace_->device->mesh().dimension())) continue;
             if (k == s.kind) selected = static_cast<int>(views.size());
             views.emplace_back(to_string(k));
+        }
+        // Unit 26n slice 3 (DT7): the sweep's views after the run's own, on the Curves tab.
+        if (tab_ == tab_curves) {
+            const std::size_t own = views.size();
+            for (std::string& v : sweep_views()) views.push_back(std::move(v));
+            if (sweep_view_ >= 0 && own + static_cast<std::size_t>(sweep_view_) < views.size()) {
+                selected = static_cast<int>(own) + sweep_view_;
+            }
         }
     }
     combo_fill(child(id_view), views, selected);
@@ -1943,6 +2112,8 @@ void MainWindow::on_inspector(int id, int code) {
         for (const ViewKind k : available_views(*workspace_, run_b())) if (belongs(k, tab_, dim)) kinds.push_back(k);
         const int k = combo_index(child(id_view));
         if (k >= 0 && k < static_cast<int>(kinds.size())) s.kind = kinds[static_cast<std::size_t>(k)];
+        // Unit 26n slice 3: an entry after the run's own views is a sweep view (Curves tab).
+        sweep_view_ = tab_ == tab_curves && k >= static_cast<int>(kinds.size()) ? k - static_cast<int>(kinds.size()) : -1;
         view_defaults(s);
         sync_inspector();
     } else if (id == id_field && selection) {
@@ -2404,6 +2575,9 @@ bool MainWindow::open_deck(const fs::path& path) {
     update_title();
     workspace_.reset();
     ++workspace_generation_;  // Unit 26i (ND5): the metrics again
+    sweep_results_.reset();  // Unit 26n slice 3: another deck's sweep is not shown
+    sweep_figures_ = {};
+    sweep_view_ = -1;
     run_b_.reset();
     previous_.reset();
     cut_.reset();
@@ -2504,6 +2678,9 @@ void MainWindow::on_run_timer() {
     {
         const auto& rows = runner_.points();
         std::string text = s == RunState::stopping ? "Stopping..." : "Running";
+        if (const auto& sw = runner_.sweep()) {
+            text = std::format("Sweep {} = {} ({} of {}): ", sw->name, sw->values[sw->current], sw->current + 1, sw->values.size()) + text;
+        }
         if (!rows.empty()) {
             const PointRow& r = rows.back();
             if (r.phase == solve::Phase::equilibrium) text += ": equilibrium";
@@ -2572,6 +2749,14 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
         set_status(status_state, stopped ? std::format("Stopped early after {:.1f} s: {}", seconds, stopped->message)
                                          : std::format("Done in {:.1f} s", seconds),
                    stopped ? LogLevel::warning : LogLevel::success);
+        if (runner_.sweep()) {
+            const auto& sw = *runner_.sweep();
+            set_status(status_state,
+                       std::format("Sweep of {}: {} of {} run{} done in {:.1f} s{}", sw.name, sw.completed, sw.values.size(),
+                                   sw.values.size() == 1 ? "" : "s", seconds, sw.stopped ? " (stopped)" : ""),
+                       sw.completed == sw.values.size() ? LogLevel::success : LogLevel::warning);
+            sweep_finished();
+        }
     }
     update_command_states();
     update_taskbar(pending == Pending::run);
@@ -2661,6 +2846,7 @@ void MainWindow::deck_changed() {
 std::string MainWindow::geometry_deck() { return deck_->text(); }
 
 void MainWindow::geometry_edited(const std::string& text) {
+    const std::string before = deck_->text();
     deck_->set_text(text);
     deck_changed();  // the title, and the live check a pause later (XD1): the build's own messages
     // The New 3D layout button (Unit 26l): a 3D deck now, so the tab shows the 3D modeller.
@@ -2668,6 +2854,7 @@ void MainWindow::geometry_edited(const std::string& text) {
     update_geometry_page();
     if (solid_shown_ && !was) {
         solid_->reload(true);
+        solid_->record_undo(before);  // Unit 26n slice 2 (DT5): Undo in the modeller takes the deck back
         if (tab_ == tab_geometry) SetFocus(solid_->canvas());
     }
 }
@@ -2696,6 +2883,15 @@ std::string MainWindow::solid_deck() { return deck_->text(); }
 void MainWindow::solid_edited(const std::string& text) {
     deck_->set_text(text);
     deck_changed();
+    // Unit 26n slice 2 (DT5): an undo back past Unlock shapes: the deck is one the modeller cannot edit again.
+    if (unlock::kind_of(text) != unlock::Kind::none && solid_shown_) {
+        update_geometry_page();
+        if (!solid_shown_) {
+            geometry_->reload(true, true);
+            layout();
+            if (geometry_preview()) refresh();
+        }
+    }
 }
 
 void MainWindow::solid_status(const std::string& text) { set_status(status_cursor, text); }
@@ -2708,6 +2904,12 @@ void MainWindow::update_geometry_page() {
     if (shown == solid_shown_) return;
     solid_shown_ = shown;
     layout();
+}
+
+bool MainWindow::geometry_preview() const {
+    // Not for a deck that does not parse: the page shows why, and the preview would be the last good deck.
+    return tab_ == tab_geometry && !solid_shown_ && geometry_ && !geometry_->geometry().editable() && !geometry_->can_start() &&
+           !geometry_->message().starts_with("The deck does not parse");
 }
 
 void MainWindow::geometry_selected(const std::string&) {}
@@ -2857,6 +3059,9 @@ void MainWindow::execute(Command c) {
         update_title();
         select_tab(tab_deck);
         return;
+    case Command::new_device:  // Unit 26n slice 1 (DT4)
+        open_new_device();
+        return;
     case Command::open_deck: {
         if (!confirm_discard()) return;
         const fs::path p = win32::open_dialog(hwnd_, L"Decks (*.deck)\0*.deck\0All files\0*.*\0", L"Open a deck");
@@ -2974,21 +3179,7 @@ void MainWindow::execute(Command c) {
                 return;
             }
         }
-        document_.set_text(deck_->text());
-        if (document_.is_untitled() && !save(true)) return;  // a run writes its outputs beside the deck
-        select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
-        pending_ = Pending::run;
-        console_log_.begin_run();
-        timings_ = {};
-        set_console_collapsed(false);  // Unit 26j: the console opens for a run
-        log_line(LogLevel::header, "Run " + document_.path().filename().string());
-        runner_.start_run(document_.text(), document_.path());
-        update_points();  // the last run's rows cleared
-        update_taskbar(true);
-        show_status(status_state, "Running...");
-        SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
-        run_page_->update(runner_, renderer(), true);  // the last run's rows cleared
-        update_command_states();
+        start_deck_run(nullptr);
         return;
     case Command::stop:
         runner_.request_stop();
@@ -3515,8 +3706,10 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         if (options_.examples_dir.empty()) {
             wchar_t exe[MAX_PATH]{};
             GetModuleFileNameW(nullptr, exe, MAX_PATH);
+            devices_dir_ = examples_directory(fs::path(exe).parent_path(), fs::path(NITCAD_EXAMPLES_DIR)) / "devices";
             examples_ = list_examples(examples_directory(fs::path(exe).parent_path(), fs::path(NITCAD_EXAMPLES_DIR)));
         } else {
+            devices_dir_ = options_.examples_dir / "devices";
             examples_ = list_examples(options_.examples_dir);
         }
         refresh();  // the view's placeholder message
@@ -3593,6 +3786,12 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         break;
     case run_message:
         on_run_events();
+        return 0;
+    case new_device_message:  // Unit 26n slice 1
+        finish_new_device();
+        return 0;
+    case sweep_message:  // Unit 26n slice 3
+        finish_sweep_dialog();
         return 0;
     case live_message:
         on_live_check();

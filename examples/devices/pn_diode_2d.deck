@@ -1,0 +1,48 @@
+# PN diode (2D)
+# A silicon pn diode in cross-section with a top contact window: forward I-V and the current crowding under it.
+#
+# An n+ side at the bottom (a diffused erfc profile, 50 % at the junction) under a p-type top; the cathode is the
+# whole bottom face, the anode a window on the top face from the left edge. Change a dimension in the Geometry
+# tab's panel; run it (F5), then look at the current density and the I-V curve (Curves).
+
+[parameters]
+# group: Main
+Ln = 0.8um  # n side depth
+Lp = 1.2um  # p side depth
+W = 1.5um  # Width
+Nd = 1e18  # n side donors (cm^-3)
+Na = 1e16  # p side acceptors (cm^-3)
+# group: Junction and contact
+wj = 50nm  # Junction grading width
+Wc = 0.5um  # Anode window width
+# group: Positions (derived)
+L = $Ln + $Lp  # Depth
+
+[mesh]
+type = tensor
+x = linspace(0, $Wc, 11) + linspace($Wc, $W, 21)
+y = linspace(0, $Ln, 33) + linspace($Ln, $L, 49)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor erfc $Nd axis=y center=$Ln width=$wj
+profile = acceptor constant $Na
+
+[contact cathode]
+kind = ohmic
+patch = y_min
+
+[contact anode]
+kind = ohmic
+patch = y_max
+box = 0 $Wc  $L $L
+
+[sweep]
+contact anode = 0 : 0.7 : 0.05
+
+[output]
+sweep = pn_diode_2d.nitsweep
+device = pn_diode_2d.nitdev
+table = pn_diode_2d.csv

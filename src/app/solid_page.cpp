@@ -13,6 +13,8 @@
 #include <sstream>
 
 #include "NiTCAD/app/deck_vocabulary.hpp"
+#include "NiTCAD/app/unlock.hpp"
+#include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/render/axes3d.hpp"
 #include "win32.hpp"
 
@@ -120,6 +122,7 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
     for (int k = 0; k < 6; ++k) {
         add(c_x0_label + 2 * k, L"STATIC", range_labels[k], SS_LEFT);
         add(c_x0 + 2 * k, L"EDIT", L"", edit, WS_EX_CLIENTEDGE);
+        SetWindowSubclass(control(c_x0 + 2 * k), field_proc, 1, reinterpret_cast<DWORD_PTR>(this));  // Unit 26n slice 4 (DT8)
     }
     add(c_axis_label, L"STATIC", L"Axis", SS_LEFT);
     add(c_axis, WC_COMBOBOXW, L"", combo);
@@ -146,9 +149,6 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
     add(c_convert, L"BUTTON", L"Convert to layered generate3d", WS_TABSTOP | BS_PUSHBUTTON);
     add(c_overlap, L"BUTTON", L"Fills only empty space (overlap = fill)", WS_TABSTOP | BS_AUTOCHECKBOX);
     add(c_resolution, L"BUTTON", L"Use the largest interface_resolution", WS_TABSTOP | BS_PUSHBUTTON);  // MT12
-    add(c_params_label, L"STATIC", L"Parameters (name = value; $name in solids)", SS_LEFT);  // MT8
-    add(c_params, L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, WS_EX_CLIENTEDGE);
-    add(c_params_apply, L"BUTTON", L"Apply parameters", WS_TABSTOP | BS_PUSHBUTTON);
     for (const int c : {c_material, c_draw}) {
         for (const std::string& mat : choices_of("region", "material")) SendMessageW(control(c), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(win32::widen(mat).c_str()));
     }
@@ -157,6 +157,9 @@ SolidPage::SolidPage(HWND parent, Host& host, int id, int inspector_id) : host_(
     for (const char* p : plane_names) SendMessageW(control(c_plane), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(win32::widen(p).c_str()));
     for (const wchar_t* s : {L"Off", L"Cut above x", L"Cut above y", L"Cut above z"}) SendMessageW(control(c_section), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
     SendMessageW(control(c_draw), CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(L"silicon"));
+    dims_host_.page = this;  // Unit 26n (DT1)
+    dims_ = std::make_unique<DimensionsPanel>(inspector_, dims_host_, inspector_id + 900);
+    ShowWindow(dims_->hwnd(), SW_SHOWNA);
     update_tool_buttons();
     update_inspector();
 }
@@ -181,6 +184,7 @@ void SolidPage::set_dpi(int dpi, HFONT font, HFONT bold) {
     bar_->set_font(font, dpi);
     for (HWND h : controls_) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     SendMessageW(control(c_heading), WM_SETFONT, reinterpret_cast<WPARAM>(bold), TRUE);
+    if (dims_) dims_->set_dpi(dpi, font, bold);
     layout();
     layout_inspector();
 }
@@ -236,9 +240,6 @@ void SolidPage::layout_inspector() {
     pair(c_kind_label, c_kind, MulDiv(160, dpi_, 96));
     line(c_convert);
     line(c_resolution);
-    line(c_params_label);
-    line(c_params, MulDiv(80, dpi_, 96));
-    line(c_params_apply);
     y += pad;
     pair(c_draw_label, c_draw, MulDiv(200, dpi_, 96));
     pair(c_plane_label, c_plane, MulDiv(90, dpi_, 96));
@@ -246,6 +247,9 @@ void SolidPage::layout_inspector() {
     pair(c_section_label, c_section, MulDiv(110, dpi_, 96));
     pair(c_cut_label, c_cut);
     line(c_translucent);
+    // Unit 26n (DT1): the dimensions panel below.
+    y += pad;
+    MoveWindow(dims_->hwnd(), 0, y, r.right, std::max(1, dims_->preferred_height(r.right)), TRUE);
 }
 
 // --- the deck ------------------------------------------------------------------------------------------------------
@@ -276,6 +280,7 @@ void SolidPage::reload(bool fit_view) {
     }
     prune_selection();
     locate_problems();
+    reload_dimensions();
     update_inspector();
     invalidate();
 }
@@ -299,6 +304,7 @@ void SolidPage::apply_text(const std::string& text) {
     }
     prune_selection();
     locate_problems();
+    reload_dimensions();
     update_inspector();
     invalidate();
 }
@@ -338,8 +344,17 @@ bool SolidPage::apply_parameters(const std::string& lines) {
 
 bool SolidPage::commit_model(Model next) {
     const std::string text = host_.solid_deck();
+    const auto was = read_model(text);
     // MT8: a coordinate the edit moved that a parameter ties edits the parameter (every tied face following).
-    if (const auto was = read_model(text); was && was->parameters == next.parameters) tie_edits(*was, next);
+    if (was && was->parameters == next.parameters) tie_edits(*was, next);
+    // Unit 26n slice 4 (DT8): no edit takes a solid past the domain's faces (a deck that already has one is not held).
+    if (const std::string why = outside_domain(next); !why.empty() && was && outside_domain(*was).empty()) {
+        refused_ = "Refused: " + why + " (a solid stays inside the domain).";
+        host_.solid_status(refused_);
+        m_ = *was;
+        invalidate();
+        return false;
+    }
     auto out = write_model(text, next);
     if (!out) {
         host_.solid_status(out.error());
@@ -636,6 +651,13 @@ bool SolidPage::transform_click(const Pick& p, bool shift, bool ctrl) {
     return false;
 }
 // --- Unit 26m slice 2: the Faces and Edges modes, Cylinder, meshable by construction (MT6, MT7, MT12) --------------
+
+bool SolidPage::inside_or_keep(const Model& next) {
+    const std::string why = outside_domain(next);
+    if (why.empty() || !outside_domain(m_start_).empty()) return true;
+    host_.solid_status("Held at the domain: " + why + ".");
+    return false;
+}
 
 void SolidPage::begin_drag(Drag d) {
     drag_ = d;
@@ -1048,7 +1070,7 @@ bool SolidPage::on_char(wchar_t c) {
 void SolidPage::finish_height() {
     Model next = m_;
     const int n = v_.plane.normal;
-    const Coord h = height_ != 0 ? height_ : grid();
+    const Coord h = height_inside(height_ != 0 ? height_ : grid());
     const Coord lo = std::min(v_.plane.offset, v_.plane.offset + h), hi = std::max(v_.plane.offset, v_.plane.offset + h);
     int r = -1;
     if (polygon_.empty()) {
@@ -1066,8 +1088,9 @@ void SolidPage::finish_height() {
     preview_ = {};
     end_drag_ui();
     if (GetCapture() == canvas_) ReleaseCapture();
+    refused_.clear();
     if (r >= 0 && commit_model(std::move(next))) sel_ = {{{r, 0}}, -1};
-    else host_.solid_status("That solid is not taken (it must have a size on each axis).");
+    else if (refused_.empty()) host_.solid_status("That solid is not taken (it must have a size on each axis).");
     update_inspector();
     invalidate();
 }
@@ -1142,8 +1165,25 @@ std::optional<P3> SolidPage::plane_point(double x, double y) const {
     P3 raw = quanta_of(*p);
     raw[v_.plane.normal] = v_.plane.offset;
     P3 out = snap(m_, v_.plane, raw, snap_tolerance(m_, v_, *p), std::nullopt, grid()).p;
+    if (m_.editable()) out = clamp_to(m_.domain, out);  // Unit 26n slice 4 (DT8): drawing stops at the domain's faces
     out[v_.plane.normal] = v_.plane.offset;
     return out;
+}
+
+Coord SolidPage::height_inside(Coord h) const {
+    if (!m_.editable()) return h;
+    const int n = v_.plane.normal;
+    const Coord off = v_.plane.offset;
+    h = std::clamp(h, std::min<Coord>(0, m_.domain.lo[n] - off), std::max<Coord>(0, m_.domain.hi[n] - off));
+    if (h == 0) h = off + grid() <= m_.domain.hi[n] ? grid() : -grid();
+    return h;
+}
+
+Coord SolidPage::radius_inside(Pt c, Coord r) const {
+    if (!m_.editable()) return r;
+    const int n = v_.plane.normal;
+    const Pt lo = uv_of(n, m_.domain.lo), hi = uv_of(n, m_.domain.hi);
+    return std::max<Coord>(0, std::min({r, c.x - lo.x, hi.x - c.x, c.y - lo.y, hi.y - c.y}));
 }
 
 double SolidPage::render() {
@@ -1170,6 +1210,7 @@ double SolidPage::render() {
     }
     if (pending_volume_) overlay.volumes.push_back(*pending_volume_);
     scene_ = solid_scene(m_, v_, sel_, preview_, overlay);
+    if (!marks_.empty()) solid::add_dimension_marks(scene_, marks_, dims_->selected());  // Unit 26n (DT2)
     scene_ms_ = 1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!target_) {
         auto t = renderer_->window_target(canvas_, v_.width, v_.height);
@@ -1246,11 +1287,13 @@ void SolidPage::update_inspector() {
     const auto choose = [&](int c, const std::string& t) {
         SendMessageW(control(c), CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(win32::widen(t).c_str()));
     };
-    const auto ranges = [&](const Box3& b) {
+    // Unit 26n slice 4 (DT8): a coordinate written as a reference shows it ($Lg, $x0 + $w).
+    const auto ranges = [&](const Box3& b, const std::vector<std::string>& refs = {}) {
+        const auto shown = [&](std::size_t k, Coord v) { return k < refs.size() && !refs[k].empty() ? refs[k] : ui_length(v); };
         for (int a = 0; a < 3; ++a) {
             show({c_x0_label + 4 * a, c_x0 + 4 * a, c_x1_label + 4 * a, c_x1 + 4 * a}, true);
-            set(c_x0 + 4 * a, ui_length(b.lo[a]));
-            set(c_x1 + 4 * a, ui_length(b.hi[a]));
+            set(c_x0 + 4 * a, shown(static_cast<std::size_t>(2 * a), b.lo[a]));
+            set(c_x1 + 4 * a, shown(static_cast<std::size_t>(2 * a + 1), b.hi[a]));
         }
     };
     show({c_name_label, c_name, c_material_label, c_material, c_raise, c_lower, c_axis_label, c_axis, c_from_label, c_from, c_to_label,
@@ -1258,8 +1301,7 @@ void SolidPage::update_inspector() {
          false);
     for (int k = 0; k < 12; ++k) show({c_x0_label + k}, false);
     const bool usable = m_.mesh != MeshKind::unsupported;
-    show({c_resolution, c_params_label, c_params, c_params_apply}, m_.editable());
-    if (GetFocus() != control(c_params)) set(c_params, parameters_text());
+    show({c_resolution}, m_.editable());
     show({c_draw_label, c_draw, c_plane_label, c_plane, c_offset_label, c_offset, c_section_label, c_section, c_cut_label, c_cut, c_translucent},
          usable);
     SendMessageW(control(c_plane), CB_SETCURSEL, static_cast<WPARAM>(v_.plane.normal), 0);
@@ -1288,14 +1330,14 @@ void SolidPage::update_inspector() {
         choose(c_material, r.material);
         if (s.solid < 0) {
             hint = "Background " + r.name + ": the domain";
-            ranges(m_.domain);
+            ranges(m_.domain, m_.domain_refs);
         } else {
             const Solid& sol = r.solids[static_cast<std::size_t>(s.solid)];
             show({c_raise, c_lower, c_overlap}, true);
             SendMessageW(control(c_overlap), BM_SETCHECK, r.fill ? BST_CHECKED : BST_UNCHECKED, 0);
             if (sol.kind == SolidKind::box) {
                 hint = std::format("Region {}, layer {} of {}: a box", r.name, s.region + 1, m_.regions.size());
-                ranges(sol.box);
+                ranges(sol.box, sol.refs);
             } else {
                 hint = std::format("Region {}, layer {} of {}: a prism of {} vertices", r.name, s.region + 1, m_.regions.size(), sol.polygon.size());
                 show({c_axis_label, c_axis, c_from_label, c_from, c_to_label, c_to, c_vertices_label, c_vertices, c_apply}, true);
@@ -1350,19 +1392,33 @@ bool SolidPage::commit(int c) {
         convert();
         return true;
     }
-    if (c == c_params_apply) {
-        apply_parameters(text(c_params));
-        return true;
-    }
     if (c == c_resolution) {
         use_automatic_resolution();
         return true;
     }
     Model next = m_;
     bool ok = false;
+    // Unit 26n slice 4 (DT8): a field may hold a reference ($name, a sum of them), kept as typed; a number replaces one.
+    std::vector<std::string> typed_refs(6);
+    const auto params = [&]() -> std::vector<deck::Parameter> {
+        const auto d = deck::parse(host_.solid_deck());
+        if (!d) return {};
+        return deck::parameters(*d).value_or(std::vector<deck::Parameter>{});
+    }();
     const auto box_of_fields = [&]() -> std::optional<Box3> {
         std::array<std::optional<Coord>, 6> v;
-        for (int k = 0; k < 6; ++k) v[static_cast<std::size_t>(k)] = ui_parse(text(c_x0 + 2 * k));
+        for (int k = 0; k < 6; ++k) {
+            std::string t = text(c_x0 + 2 * k);
+            while (!t.empty() && (t.back() == ' ' || t.back() == '\r')) t.pop_back();
+            while (!t.empty() && t.front() == ' ') t.erase(t.begin());
+            if (t.find('$') != std::string::npos) {
+                const auto sub = deck::substitute(t, params);
+                if (sub) v[static_cast<std::size_t>(k)] = ui_parse(*sub);
+                typed_refs[static_cast<std::size_t>(k)] = t;
+            } else {
+                v[static_cast<std::size_t>(k)] = ui_parse(t);
+            }
+        }
         if (std::ranges::any_of(v, [](const auto& o) { return !o; })) return std::nullopt;
         return Box3{{*v[0], *v[2], *v[4]}, {*v[1], *v[3], *v[5]}};
     };
@@ -1388,6 +1444,11 @@ bool SolidPage::commit(int c) {
         } else if (range_field) {
             const auto b = box_of_fields();
             ok = b && (s.solid < 0 ? set_domain(next, *b) : set_box(next, s, *b));
+            if (ok) {  // the references as typed (none kept when every field is a number)
+                const bool any = std::ranges::any_of(typed_refs, [](const std::string& r) { return !r.empty(); });
+                auto& refs = s.solid < 0 ? next.domain_refs : next.regions[static_cast<std::size_t>(s.region)].solids[static_cast<std::size_t>(s.solid)].refs;
+                refs = any ? typed_refs : std::vector<std::string>{};
+            }
         } else if ((c == c_apply || c == c_from || c == c_to || c == c_vertices || c == c_axis) && s.solid >= 0) {
             const Solid* old = solid_at(m_, s);
             std::vector<Pt> pts;
@@ -1422,6 +1483,40 @@ bool SolidPage::commit(int c) {
     return true;
 }
 
+// Unit 26n slice 4 (DT8): Name this value on a position or size field.
+bool SolidPage::can_name_field(int c) const {
+    if (c < c_x0 || c > c_z1 || (c - c_x0) % 2 != 0 || !m_.editable() || sel_.contact >= 0 || sel_.solids.size() != 1) return false;
+    const SolidRef s = sel_.solids[0];
+    if (s.solid < 0) return true;  // the background: the domain
+    const Solid* sol = solid_at(m_, s);
+    return sol && sol->kind == SolidKind::box;
+}
+
+bool SolidPage::name_field(int c) {
+    if (!can_name_field(c)) return false;
+    const auto k = static_cast<std::size_t>((c - c_x0) / 2);  // x0 x1 y0 y1 z0 z1
+    const SolidRef s = sel_.solids[0];
+    Model next = m_;
+    const Box3& b = s.solid < 0 ? m_.domain : solid_at(m_, s)->box;
+    const Coord v = k % 2 == 0 ? b.lo[static_cast<int>(k / 2)] : b.hi[static_cast<int>(k / 2)];
+    std::string name;
+    for (int n = 1;; ++n) {
+        name = "L" + std::to_string(n);
+        if (std::ranges::find(m_.parameters, name, &solid::Param::name) == m_.parameters.end()) break;
+    }
+    if (const auto r = solid::set_parameter(next, name, geo::format_length(v)); !r) {
+        host_.solid_status(r.error());
+        return false;
+    }
+    auto& refs = s.solid < 0 ? next.domain_refs : next.regions[static_cast<std::size_t>(s.region)].solids[static_cast<std::size_t>(s.solid)].refs;
+    refs.resize(6);
+    refs[k] = "$" + name;
+    const bool done = commit_model(std::move(next));
+    if (done) host_.solid_status("Named: $" + name + " = " + geo::format_length(v) + " (in the dimensions panel)");
+    update_inspector();
+    return done;
+}
+
 // --- the mouse and keys --------------------------------------------------------------------------------------------
 
 void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_click) {
@@ -1430,6 +1525,8 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
     last_y_ = y;
     if (m_.mesh == MeshKind::unsupported) return;
     const bool editable = m_.editable();
+    // Unit 26n (DT2): a dimension line, unless a handle of the selection is under the pointer (handles win).
+    if (tool_ == Tool::select && pick(m_, v_, x, y, sel_).kind != PickKind::handle && dimension_down(x, y)) return;
     const auto refuse_edit = [&] {
         host_.solid_status("An extrude3d deck is edited once converted: Convert, in the Geometry section.");
     };
@@ -1707,11 +1804,13 @@ void SolidPage::close_polygon() {
 }
 
 void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
+    if (dimension_move(x, y)) return;  // Unit 26n (DT2)
     const double dx = x - last_x_, dy = y - last_y_;
     last_x_ = x;
     last_y_ = y;
     const double um = static_cast<double>(per_um);
     const auto with_drag = [&](Model next) {
+        if (!inside_or_keep(next)) return;  // Unit 26n slice 4 (DT8)
         m_ = std::move(next);
         update_inspector();
         invalidate();
@@ -1743,6 +1842,7 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         Model next = m_start_;
         P3 d{};
         d[axis_] = typed_or(quantize(along_axis(m_start_, v_, x, y, origin_, axis_) - start_s_));
+        if (const Solid* s = solid_at(m_start_, ref_)) d = clamp_offset(m_start_.domain, {*s}, d);  // Unit 26n slice 4 (DT8)
         drag_d_ = d;
         move_solid(next, ref_, d);
         with_drag(std::move(next));
@@ -1777,6 +1877,20 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
                 if (a != axis_ && d[a] != 0) d[a] = keep_clear(m_start_, moving, skip, a, d[a], 4 * res_q_);
             }
         }
+        // Unit 26n slice 4 (DT8): the moved solids (an array's farthest copy) held at the domain's faces.
+        if (drag_ != Drag::contact_move && m_start_.editable()) {
+            std::vector<Solid> moving;
+            if (drag_ == Drag::array || drag_ == Drag::plane) {
+                if (const Solid* s = solid_at(m_start_, ref_)) moving.push_back(*s);
+            } else {
+                for (const SolidRef c : sel_.solids) {
+                    if (const Solid* s = solid_at(m_start_, c)) moving.push_back(*s);
+                }
+            }
+            const Coord k = drag_ == Drag::array ? std::max(1, array_count_ - 1) : 1;  // the copies at d, 2d, ..., (count - 1) d
+            const P3 farthest = clamp_offset(m_start_.domain, moving, {d.x * k, d.y * k, d.z * k});
+            for (int a = 0; a < 3; ++a) d[a] = farthest[a] / k;
+        }
         drag_d_ = d;
         Model next = m_start_;
         if (drag_ == Drag::contact_move) {
@@ -1794,6 +1908,10 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
     case Drag::face: {
         Model next = m_start_;
         drag_s_ = typed_or(quantize(along_axis(m_start_, v_, x, y, origin_, axis_) - start_s_));
+        drag_s_ = clamp_scalar(drag_s_, [&](Coord v) {  // Unit 26n slice 4 (DT8): the face stops at the domain's
+            Model t = m_start_;
+            return !move_face(t, ref_, index_, v) || outside_domain(t).empty();
+        });
         move_face(next, ref_, index_, drag_s_);
         if (naming_ >= 0) static_cast<void>(name_extent(next, ref_, index_ ^ 1, index_, naming_name_));  // MT8: N
         with_drag(std::move(next));
@@ -1807,7 +1925,12 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         const Pt p0 = s->polygon[static_cast<std::size_t>(index_)];
         Model next = m_start_;
         drag_d_ = from_uv(axis_, d, 0);
-        set_vertex(next, ref_, index_, {p0.x + d.x, p0.y + d.y}, !(alone_ || ctrl));
+        Pt to{p0.x + d.x, p0.y + d.y};
+        if (m_start_.editable()) {  // Unit 26n slice 4 (DT8): the vertex stays on the domain
+            const Pt lo = uv_of(axis_, m_start_.domain.lo), hi = uv_of(axis_, m_start_.domain.hi);
+            to = {std::clamp(to.x, lo.x, hi.x), std::clamp(to.y, lo.y, hi.y)};
+        }
+        set_vertex(next, ref_, index_, to, !(alone_ || ctrl));
         with_drag(std::move(next));
         return;
     }
@@ -1837,6 +1960,7 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         const V3 corner = um_of(b_);
         height_ = typed_or(quantize(along_axis(m_, v_, x, y, corner, n) - corner[static_cast<std::size_t>(n)]));
         if (height_ == 0) height_ = grid();
+        height_ = height_inside(height_);  // Unit 26n slice 4 (DT8)
         const Coord lo = std::min(v_.plane.offset, v_.plane.offset + height_), hi = std::max(v_.plane.offset, v_.plane.offset + height_);
         if (polygon_.empty()) {
             Box3 b = normalized(a_, b_);
@@ -1882,6 +2006,11 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
     case Drag::inset_depth: {
         const Coord raw = quantize(along_axis(m_start_, v_, x, y, origin_, normal_.axis) - start_s_) * normal_.sign;
         drag_s_ = gap_up(typed_or(raw));  // MT12 (2): no layer under 4 s
+        drag_s_ = clamp_scalar(drag_s_, [&](Coord v) {  // Unit 26n slice 4 (DT8): the new layer stops at the domain
+            Model t = m_start_;
+            if (drag_ == Drag::extrude) return v <= 0 || extrude_face(t, ref_, index_, v, material_) < 0 || outside_domain(t).empty();
+            return v == 0 || inset_face(t, ref_, index_, margin_, v, material_) < 0 || outside_domain(t).empty();
+        });
         Model next = m_start_;
         if (drag_ == Drag::extrude) {
             if (drag_s_ > 0) extrude_face(next, ref_, index_, drag_s_, material_);
@@ -1912,6 +2041,7 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
         const int n = v_.plane.normal;
         const Pt c = uv_of(n, a_), e = uv_of(n, b_);
         radius_ = std::max<Coord>(0, typed_or(quantize(std::hypot(static_cast<double>(e.x - c.x), static_cast<double>(e.y - c.y)) / um)));
+        radius_ = radius_inside(c, radius_);  // Unit 26n slice 4 (DT8): the cylinder stays inside the domain
         // MQ4, MT12 (2): 16 sides, fewer while a side is under 6 s.
         const int sides = res_q_ > 0 ? geo::polygon_sides(static_cast<double>(radius_), 6.0 * static_cast<double>(res_q_)) : 16;
         preview_.solids.clear();
@@ -2479,7 +2609,7 @@ LRESULT CALLBACK SolidPage::inspector_proc(HWND hwnd, UINT message, WPARAM w, LP
         if (message == WM_COMMAND) {
             const int c = LOWORD(w) - self->inspector_id_;
             const int code = HIWORD(w);
-            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert || c == c_overlap || c == c_resolution || c == c_params_apply)) ||
+            if ((code == BN_CLICKED && (c == c_raise || c == c_lower || c == c_apply || c == c_translucent || c == c_convert || c == c_overlap || c == c_resolution)) ||
                 (code == CBN_SELCHANGE && (c == c_material || c == c_kind || c == c_draw || c == c_axis || c == c_plane || c == c_section))) {
                 self->commit(c);
                 return 0;
@@ -2487,6 +2617,36 @@ LRESULT CALLBACK SolidPage::inspector_proc(HWND hwnd, UINT message, WPARAM w, LP
         }
     }
     return DefWindowProcW(hwnd, message, w, l);
+}
+
+// Unit 26n slice 4 (DT8): a position or size field's context menu: Name this value, and the edit's own commands.
+LRESULT CALLBACK SolidPage::field_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR data) {
+    auto* self = reinterpret_cast<SolidPage*>(data);
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(hwnd, field_proc, 1);
+    if (message == WM_CONTEXTMENU && self) {
+        int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
+        if (x == -1 && y == -1) {  // the menu key: at the field
+            RECT r{};
+            GetWindowRect(hwnd, &r);
+            x = r.left;
+            y = r.bottom;
+        }
+        enum { name = 1, cut, copy, paste };
+        HMENU m = CreatePopupMenu();
+        AppendMenuW(m, MF_STRING | (self->can_name_field(GetDlgCtrlID(hwnd) - self->inspector_id_) ? 0 : MF_GRAYED), name, L"Name this value…");
+        AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(m, MF_STRING, cut, L"Cut");
+        AppendMenuW(m, MF_STRING, copy, L"Copy");
+        AppendMenuW(m, MF_STRING, paste, L"Paste");
+        const int chosen = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hwnd, nullptr);
+        DestroyMenu(m);
+        if (chosen == name) self->name_field(GetDlgCtrlID(hwnd) - self->inspector_id_);
+        if (chosen == cut) SendMessageW(hwnd, WM_CUT, 0, 0);
+        if (chosen == copy) SendMessageW(hwnd, WM_COPY, 0, 0);
+        if (chosen == paste) SendMessageW(hwnd, WM_PASTE, 0, 0);
+        return 0;
+    }
+    return DefSubclassProc(hwnd, message, w, l);
 }
 
 LRESULT CALLBACK SolidPage::canvas_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
@@ -2523,6 +2683,7 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
         after_drag_step(x, y);
         return 0;
     case WM_LBUTTONUP:
+        if (dimension_up()) return 0;  // Unit 26n (DT2)
         if (drag_ != Drag::none && button_) on_up(x, y);
         return 0;
     case WM_RBUTTONDOWN:
@@ -2602,6 +2763,106 @@ LRESULT SolidPage::on_canvas(UINT message, WPARAM w, LPARAM l) {
     default: break;
     }
     return DefWindowProcW(canvas_, message, w, l);
+}
+
+// --- Unit 26n (DT1, DT2): the dimensions panel and the dimension lines -------------------------------------------------
+
+std::string SolidPage::DimsHost::dimensions_deck() { return page->host_.solid_deck(); }
+
+void SolidPage::DimsHost::dimensions_edited(const std::string& text) {
+    page->history_.record(page->host_.solid_deck());  // one undo for the edit
+    page->apply_text(text);
+}
+
+void SolidPage::DimsHost::dimensions_selected(const std::string&) { page->invalidate(); }
+
+void SolidPage::DimsHost::dimensions_sweep(const std::string& name) { page->host_.solid_sweep(name); }
+
+// Unit 26n slice 2 (DT5): an extrude3d deck through the modeller's own conversion (as the Convert button), one undo.
+bool SolidPage::DimsHost::dimensions_unlocks() { return page->m_.mesh == MeshKind::extruded; }
+
+std::string SolidPage::DimsHost::dimensions_unlock() {
+    const std::string text = page->host_.solid_deck();
+    auto u = unlock::unlock(text);
+    if (!u) return "Unlock refused: " + u.error();
+    page->history_.record(text);
+    page->apply_text(u->text);
+    page->host_.solid_status("Converted: " + u->note);
+    return {};
+}
+
+void SolidPage::reload_dimensions() {
+    dims_->reload();
+    marks_ = dims::dimension_marks(text_seen_);
+    layout_inspector();
+}
+
+std::vector<std::array<float, 4>> SolidPage::dimension_lines() const {
+    std::vector<std::array<float, 4>> out;
+    for (const dims::Mark& mk : marks_) {
+        const auto um = [](const std::array<double, 3>& p) { return solid::V3{p[0] * 1e4, p[1] * 1e4, p[2] * 1e4}; };
+        const auto a = solid::screen_of(m_, v_, um(mk.a)), b = solid::screen_of(m_, v_, um(mk.b));
+        out.push_back({static_cast<float>(a[0]), static_cast<float>(a[1]), static_cast<float>(b[0]), static_cast<float>(b[1])});
+    }
+    return out;
+}
+
+namespace {
+
+double segment_distance(const std::array<float, 4>& s, double x, double y) {
+    const double dx = s[2] - s[0], dy = s[3] - s[1], len2 = dx * dx + dy * dy;
+    const double t = len2 > 0.0 ? std::clamp(((x - s[0]) * dx + (y - s[1]) * dy) / len2, 0.0, 1.0) : 0.0;
+    return std::hypot(x - (s[0] + t * dx), y - (s[1] + t * dy));
+}
+
+}  // namespace
+
+bool SolidPage::dimension_down(double x, double y) {
+    const auto lines = dimension_lines();
+    for (std::size_t k = 0; k < lines.size(); ++k) {
+        if (segment_distance(lines[k], x, y) > 6.0 * dpi_ / 96.0) continue;
+        dim_drag_ = static_cast<int>(k);
+        dim_x_ = x;
+        dim_y_ = y;
+        dim_literal_.clear();
+        dims_->select(marks_[k].name);
+        SetCapture(canvas_);
+        invalidate();
+        return true;
+    }
+    return false;
+}
+
+bool SolidPage::dimension_move(double x, double y) {
+    if (dim_drag_ < 0) return false;
+    const dims::Mark& mk = marks_[static_cast<std::size_t>(dim_drag_)];
+    const auto& rows = dims_->dimensions();
+    const auto row = std::ranges::find(rows, mk.name, &dims::Dimension::name);
+    if (row == rows.end()) return true;
+    // The pointer's travel along the line's screen direction, in cm by the line's own length.
+    const auto s = dimension_lines()[static_cast<std::size_t>(dim_drag_)];
+    const double sx = s[2] - s[0], sy = s[3] - s[1], px = std::hypot(sx, sy);
+    const double len = std::abs(mk.b[static_cast<std::size_t>(mk.axis)] - mk.a[static_cast<std::size_t>(mk.axis)]);
+    if (px < 1.0 || len <= 0.0) return true;
+    const double along = ((x - dim_x_) * sx + (y - dim_y_) * sy) / px;
+    dim_literal_ = dims::length_literal(*row, row->value + mk.grows * along * len / px);
+    host_.solid_status(row->name + " = " + dim_literal_);
+    return true;
+}
+
+bool SolidPage::dimension_up() {
+    if (dim_drag_ < 0) return false;
+    const std::string name = marks_[static_cast<std::size_t>(dim_drag_)].name;
+    dim_drag_ = -1;
+    if (GetCapture() == canvas_) ReleaseCapture();
+    const auto& rows = dims_->dimensions();
+    const auto row = std::ranges::find(rows, name, &dims::Dimension::name);
+    if (row != rows.end() && !dim_literal_.empty() && dim_literal_ != row->expr) {
+        dims_->commit(static_cast<std::size_t>(row - rows.begin()), dim_literal_);  // one edit, on release
+    }
+    dim_literal_.clear();
+    invalidate();
+    return true;
 }
 
 }  // namespace NiTCAD::app
