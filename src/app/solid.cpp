@@ -1348,6 +1348,56 @@ Coord keep_clear(const Model& m, const std::vector<Solid>& moving, const std::ve
     return best.value_or(delta);
 }
 
+// --- Unit 26n slice 4 (DT8) ------------------------------------------------------------------------------------------
+
+std::string outside_domain(const Model& m) {
+    static constexpr const char* face[3][2] = {{"x_min", "x_max"}, {"y_min", "y_max"}, {"z_min", "z_max"}};
+    for (const Region& r : m.regions) {
+        for (const Solid& s : r.solids) {
+            const Box3 b = s.bounds();
+            for (int a = 0; a < 3; ++a) {
+                const Coord below = m.domain.lo[a] - b.lo[a], above = b.hi[a] - m.domain.hi[a];
+                if (below > 0 || above > 0) {
+                    const bool high = above >= below;
+                    return "region '" + r.name + "' reaches " + format_length(high ? above : below) + " past the domain's " + face[a][high ? 1 : 0] +
+                           " face";
+                }
+            }
+        }
+    }
+    return {};
+}
+
+P3 clamp_to(const Box3& d, P3 p) noexcept {
+    for (int a = 0; a < 3; ++a) p[a] = std::clamp(p[a], d.lo[a], d.hi[a]);
+    return p;
+}
+
+P3 clamp_offset(const Box3& d, const std::vector<Solid>& moving, P3 delta) noexcept {
+    if (moving.empty()) return delta;
+    for (int a = 0; a < 3; ++a) {
+        Coord lo = std::numeric_limits<Coord>::max(), hi = std::numeric_limits<Coord>::lowest();
+        for (const Solid& s : moving) {
+            const Box3 b = s.bounds();
+            lo = std::min(lo, b.lo[a]);
+            hi = std::max(hi, b.hi[a]);
+        }
+        const Coord down = std::min<Coord>(0, d.lo[a] - lo), up = std::max<Coord>(0, d.hi[a] - hi);
+        delta[a] = std::clamp(delta[a], down, up);
+    }
+    return delta;
+}
+
+Coord clamp_scalar(Coord v, const std::function<bool(Coord)>& inside) {
+    if (v == 0 || inside(v)) return v;
+    Coord good = 0, bad = v;  // inside(good), !inside(bad)
+    while (bad - good > 1 || good - bad > 1) {
+        const Coord mid = good + (bad - good) / 2;
+        (inside(mid) ? good : bad) = mid;
+    }
+    return good;
+}
+
 bool selects_boundary(const Box3& d, const Box3& b) noexcept {
     for (int a = 0; a < 3; ++a) {
         if (b.lo[a] > b.hi[a] || b.lo[a] < d.lo[a] || b.hi[a] > d.hi[a]) return false;

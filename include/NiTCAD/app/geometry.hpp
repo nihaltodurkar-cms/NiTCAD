@@ -171,6 +171,12 @@ bool set_contact(Geometry& g, int contact, Pt a, Pt b);
 bool delete_contact(Geometry& g, int contact);
 bool rename_contact(Geometry& g, int contact, std::string name);
 bool set_contact_kind(Geometry& g, int contact, std::string kind);
+// Unit 26n slice 4 (DT8): why a shape reaches past the domain (the first in layer order: its region, the side it
+// crosses, by how much); empty when every shape lies inside, or when the domain is only the shapes' own bounds (a
+// generated deck without a `domain` line), where nothing holds them.
+[[nodiscard]] std::string outside_domain(const Geometry& g);
+// Whether the domain holds the shapes: a tensor deck's, or a layered deck's `domain` line.
+[[nodiscard]] bool domain_holds(const Geometry& g) noexcept;
 // A layered deck's domain (its `domain` line); each contact moves with its side, clipped (refused if one empties).
 bool set_domain(Geometry& g, Rect domain);
 [[nodiscard]] bool on_one_side(const Rect& domain, Pt a, Pt b) noexcept;

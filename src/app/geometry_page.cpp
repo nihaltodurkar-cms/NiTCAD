@@ -428,6 +428,17 @@ std::string GeometryPage::banner() const {
 bool GeometryPage::commit_model(Geometry next) {
     if (view_only_) return false;  // Unit 26n: dimensions only
     const std::string text = host_.geometry_deck();
+    // Unit 26n slice 4 (DT8): no edit takes a shape past the domain (a deck that already has one is not held).
+    if (const std::string why = outside_domain(next); !why.empty()) {
+        const auto was = read_page(text);
+        if (was && outside_domain(*was).empty()) {
+            refused_ = "Refused: " + why + " (a shape stays inside the domain).";
+            host_.geometry_status(refused_);
+            g_ = *was;
+            invalidate();
+            return false;
+        }
+    }
     auto out = write_geometry(text, next);
     if (!out) {
         host_.geometry_status(out.error());
@@ -1039,6 +1050,7 @@ bool GeometryPage::commit(int c) {
 Pt GeometryPage::snapped(double x, double y, bool shift, std::optional<ShapeRef> skip) const {
     Pt p = snap(g_, view_, view_.model(x, y), skip).p;
     if (shift && drag_ != Drag::none) p = constrain(anchor_, p);
+    if (domain_holds(g_)) p = {std::clamp(p.x, g_.domain.lo.x, g_.domain.hi.x), std::clamp(p.y, g_.domain.lo.y, g_.domain.hi.y)};  // DT8
     return p;
 }
 

@@ -1116,7 +1116,8 @@ add_executable(nitcad_app_test
   tests/app/library_test.cpp
   tests/app/new_device_test.cpp
   tests/app/sweep_results_test.cpp
-  tests/app/unlock_test.cpp)
+  tests/app/unlock_test.cpp
+  tests/app/guardrails_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
 # The view tests compare the app's images with nitcad plot's (WG4's choices).
 add_dependencies(nitcad_app_test nitcad)
@@ -1153,7 +1154,8 @@ add_executable(nitcad_app_window_test tests/app/window_test.cpp tests/app/self_t
   tests/app/dimensions_window_test.cpp
   tests/app/new_device_window_test.cpp
   tests/app/sweep_window_test.cpp
-  tests/app/unlock_window_test.cpp)
+  tests/app/unlock_window_test.cpp
+  tests/app/guardrails_window_test.cpp)
 target_link_libraries(nitcad_app_window_test PRIVATE nitcad_app_window Catch2::Catch2WithMain dxgi dxguid)
 target_compile_definitions(nitcad_app_window_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
   NITCAD_APP_PATH="$<TARGET_FILE:nitcad-app>" NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")

@@ -165,6 +165,7 @@ public:
 
     // Unit 26n (DT1, DT2): the dimensions panel in the inspector, the dimension lines on the canvas.
     [[nodiscard]] DimensionsPanel& dimensions_panel() noexcept { return *dims_; }
+    [[nodiscard]] const std::string& refused() const noexcept { return refused_; }  // Unit 26n slice 4 (DT8)
     [[nodiscard]] const std::vector<dims::Mark>& dimension_marks() const noexcept { return marks_; }
     [[nodiscard]] std::vector<std::array<float, 4>> dimension_lines() const;  // screen segments, x0 y0 x1 y1, one per mark
     [[nodiscard]] bool view_only() const noexcept { return view_only_; }
@@ -275,6 +276,7 @@ private:
     std::string dim_literal_;
     bool view_only_ = false;  // a parametric deck drawn from its substituted text: dimensions only, no shape edits
     [[nodiscard]] std::expected<geo::Geometry, std::string> read_page(const std::string& text);
+    std::string refused_;  // Unit 26n slice 4 (DT8): the last refusal of an edit past the domain
     void reload_dimensions();
     bool dimension_down(double x, double y);
     bool dimension_move(double x, double y);

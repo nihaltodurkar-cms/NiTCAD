@@ -95,6 +95,11 @@ public:
     bool convert();  // an extrude3d deck made layered (SQ5)
     bool select_region(const std::string& name);
     bool commit(int control);
+    // Unit 26n slice 4 (DT8): Name this value on a position or size field (c_x0 ...): a new length parameter (L1, L2, ...)
+    // with the field's value, the field then $L<k>; one undo step. For a picked box or the background's domain.
+    [[nodiscard]] bool can_name_field(int control) const;
+    bool name_field(int control);
+    [[nodiscard]] const std::string& refused() const noexcept { return refused_; }  // the last refusal past the domain
 
     // --- Unit 26m slice 0 (MT1-MT3) ---
     void set_camera_fixed(bool fixed);
@@ -180,6 +185,7 @@ private:
     static LRESULT CALLBACK panel_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
     static LRESULT CALLBACK canvas_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
     static LRESULT CALLBACK inspector_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
+    static LRESULT CALLBACK field_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR self);
     LRESULT on_canvas(UINT message, WPARAM w, LPARAM l);
     void layout();
     void on_down(double x, double y, bool shift, bool ctrl, bool double_click);
@@ -197,6 +203,12 @@ private:
     // A point on the work plane under the pixel, snapped (grid, vertices, edges, faces), on the plane.
     [[nodiscard]] std::optional<solid::P3> plane_point(double x, double y) const;
     [[nodiscard]] solid::Coord quantize(double um) const;  // a drag's length, to the grid step
+    // Unit 26n slice 4 (DT8): a drawn height and a cylinder's radius (about centre `c`, plane coordinates) held inside the domain.
+    [[nodiscard]] solid::Coord height_inside(solid::Coord h) const;
+    [[nodiscard]] solid::Coord radius_inside(geo::Pt c, solid::Coord r) const;
+    // A drag's model taken only while its solids stay inside the domain (else the last one kept, the reason shown).
+    bool inside_or_keep(const solid::Model& next);
+    std::string refused_;  // the last refusal of an edit past the domain (commit_model)
     [[nodiscard]] solid::Coord grid() const;
 
     Host& host_;
