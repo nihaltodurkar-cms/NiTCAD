@@ -93,6 +93,32 @@ work_function = 4.1
 [equilibrium]
 )";
 
+// A small extrude3d deck (as 26l's solid window test): the library FinFET's 0.5 nm layers would have the live
+// check mesh its converted deck, 400 s in Release and over an hour in Debug; its conversion is unlock_test's.
+const std::string extruded = R"([mesh]
+type = extrude3d
+axis = z
+stations = 0, 0.4um, 0.6um
+cell left = 0 0, 0.5um 0, 0.5um 0.6um, 0 0.6um
+cell right = 0.5um 0, 1um 0, 1um 0.6um, 0.5um 0.6um
+patch body = 0 0 0  1um 0.6um 0
+max_size = 0.15um
+
+[region si]
+material = silicon
+extrude = left right 0:0.4um
+
+[region ox]
+material = sio2
+extrude = left right 0.4um:0.6um
+
+[contact body]
+kind = ohmic
+patch = body
+
+[equilibrium]
+)";
+
 }  // namespace
 
 TEST_CASE("unlock window: Unlock shapes takes a 3D tensor deck to the modeller; Undo brings it back (DT5)", "[app][window][unlock]") {
@@ -144,8 +170,7 @@ TEST_CASE("unlock window: a refusal stays on the panel and the deck is unchanged
 }
 
 TEST_CASE("unlock window: an extrude3d deck converts from the modeller's panel (DT5)", "[app][window][unlock]") {
-    const std::string text = read_file(fs::path(NITCAD_EXAMPLES_DIR) / ".." / "decks" / "finfet_3d_reduced.deck");
-    REQUIRE(!text.empty());
+    const std::string text = extruded;
     const fs::path dir = app_test::scratch("unlock_window_extruded");
     const fs::path deck = app_test::write(dir, "fin.deck", text);
     auto w = window();
@@ -157,13 +182,12 @@ TEST_CASE("unlock window: an extrude3d deck converts from the modeller's panel (
     REQUIRE(panel.unlocks());
     click(panel);
     const auto want = unlock::unlock(shown);
-    REQUIRE(bool(want) == panel.unlock_error().empty());
-    if (want) {
-        CHECK(w->deck().text() == want->text);
-        CHECK(w->solid_page().model().mesh == solid::MeshKind::layered);
-        CHECK_FALSE(panel.unlocks());
-        REQUIRE(w->solid_page().undo());
-        CHECK(w->deck().text() == shown);
-        CHECK(w->solid_page().model().mesh == solid::MeshKind::extruded);
-    }
+    REQUIRE(want);
+    CHECK(panel.unlock_error().empty());
+    CHECK(w->deck().text() == want->text);
+    CHECK(w->solid_page().model().mesh == solid::MeshKind::layered);
+    CHECK_FALSE(panel.unlocks());
+    REQUIRE(w->solid_page().undo());
+    CHECK(w->deck().text() == shown);
+    CHECK(w->solid_page().model().mesh == solid::MeshKind::extruded);
 }

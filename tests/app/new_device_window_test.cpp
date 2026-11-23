@@ -47,7 +47,7 @@ std::size_t family_index(NewDeviceDialog& d, const std::string& title) {
     for (std::size_t k = 0; k < d.families().size(); ++k) {
         if (d.families()[k].example.title == title) return k;
     }
-    FAIL("no family " << title);
+    FAIL_CHECK("no family " << title);  // FAIL_CHECK: a FAIL before the return is C4702 in Debug
     return 0;
 }
 

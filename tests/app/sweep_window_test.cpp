@@ -66,7 +66,7 @@ std::size_t row_of(const DimensionsPanel& p, const std::string& name) {
     for (std::size_t k = 0; k < p.rows(); ++k) {
         if (p.dimensions()[k].name == name) return k;
     }
-    FAIL("no row " << name);
+    FAIL_CHECK("no row " << name);  // FAIL_CHECK: a FAIL before the return is C4702 in Debug
     return 0;
 }
 

@@ -440,7 +440,9 @@ TEST_CASE("dimensions in the 2D editor: a panel edit to the redrawn canvas (DC9)
 TEST_CASE("dimensions: a deck that does not parse keeps the editor's message on the Geometry tab, not a stale preview", "[app][window][dimensions]") {
     auto w = window();
     REQUIRE(w->open_deck(write_deck("mos2d_broken", mos2d)));
-    pump();
+    // The open's build first: in Debug it could still be running at the edit below, fail on the broken deck and go to
+    // the Deck tab at its error (as a failed build does), leaving the Geometry tab.
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
     const std::string text = w->deck().text();
     const auto at = text.find("[mesh]");
     REQUIRE(at != std::string::npos);
