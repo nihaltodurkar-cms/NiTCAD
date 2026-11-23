@@ -23,6 +23,7 @@
 
 #include "NiTCAD/app/compare.hpp"
 #include "NiTCAD/app/run_monitor.hpp"
+#include "NiTCAD/app/unlock.hpp"
 #include "NiTCAD/render/compare.hpp"
 #include "NiTCAD/render/quality.hpp"
 #include "NiTCAD/render/scene.hpp"
@@ -2845,6 +2846,7 @@ void MainWindow::deck_changed() {
 std::string MainWindow::geometry_deck() { return deck_->text(); }
 
 void MainWindow::geometry_edited(const std::string& text) {
+    const std::string before = deck_->text();
     deck_->set_text(text);
     deck_changed();  // the title, and the live check a pause later (XD1): the build's own messages
     // The New 3D layout button (Unit 26l): a 3D deck now, so the tab shows the 3D modeller.
@@ -2852,6 +2854,7 @@ void MainWindow::geometry_edited(const std::string& text) {
     update_geometry_page();
     if (solid_shown_ && !was) {
         solid_->reload(true);
+        solid_->record_undo(before);  // Unit 26n slice 2 (DT5): Undo in the modeller takes the deck back
         if (tab_ == tab_geometry) SetFocus(solid_->canvas());
     }
 }
@@ -2880,6 +2883,15 @@ std::string MainWindow::solid_deck() { return deck_->text(); }
 void MainWindow::solid_edited(const std::string& text) {
     deck_->set_text(text);
     deck_changed();
+    // Unit 26n slice 2 (DT5): an undo back past Unlock shapes: the deck is one the modeller cannot edit again.
+    if (unlock::kind_of(text) != unlock::Kind::none && solid_shown_) {
+        update_geometry_page();
+        if (!solid_shown_) {
+            geometry_->reload(true, true);
+            layout();
+            if (geometry_preview()) refresh();
+        }
+    }
 }
 
 void MainWindow::solid_status(const std::string& text) { set_status(status_cursor, text); }

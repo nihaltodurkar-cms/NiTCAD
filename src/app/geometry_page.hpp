@@ -264,6 +264,8 @@ private:
         void dimensions_selected(const std::string& name) override;
         bool dimensions_sweeps() override { return true; }
         void dimensions_sweep(const std::string& name) override;
+        bool dimensions_unlocks() override;            // Unit 26n slice 2 (DT5)
+        std::string dimensions_unlock() override;
     };
     DimsHost dims_host_;
     std::unique_ptr<DimensionsPanel> dims_;

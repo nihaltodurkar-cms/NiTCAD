@@ -13,6 +13,7 @@
 
 #include "NiTCAD/app/deck_vocabulary.hpp"
 #include "NiTCAD/app/solid.hpp"
+#include "NiTCAD/app/unlock.hpp"
 #include "win32.hpp"
 
 // Last: they bring objbase.h's `interface` macro.
@@ -2080,6 +2081,20 @@ void GeometryPage::DimsHost::dimensions_edited(const std::string& text) {
 void GeometryPage::DimsHost::dimensions_selected(const std::string&) { page->invalidate(); }
 
 void GeometryPage::DimsHost::dimensions_sweep(const std::string& name) { page->host_.geometry_sweep(name); }
+
+// Unit 26n slice 2 (DT5): a 3D tensor deck (shown as the preview) becomes a layered one; the Geometry tab then shows
+// the 3D modeller, whose undo takes it back (MainWindow::geometry_edited).
+bool GeometryPage::DimsHost::dimensions_unlocks() { return unlock::kind_of(page->host_.geometry_deck()) == unlock::Kind::tensor; }
+
+std::string GeometryPage::DimsHost::dimensions_unlock() {
+    const std::string text = page->host_.geometry_deck();
+    auto u = unlock::unlock(text);
+    if (!u) return "Unlock refused: " + u.error();
+    page->history_.record(text);
+    page->apply_text(u->text);
+    page->host_.geometry_status("Unlocked: " + u->note);
+    return {};
+}
 
 void GeometryPage::reload_dimensions() {
     dims_->reload();

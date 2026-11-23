@@ -11,7 +11,7 @@ namespace NiTCAD::app {
 namespace {
 
 constexpr const wchar_t* panel_class = L"NiTCADDimensionsPanel";
-constexpr int id_message = 1, id_first = 100;  // a row k's edit is id_first + 5k; label +1, header +2, error +3, sweep +4
+constexpr int id_message = 1, id_unlock = 2, id_unlock_label = 3, id_first = 100;  // a row k's edit is id_first + 5k; label +1, header +2, error +3, sweep +4
 constexpr COLORREF error_ink = RGB(190, 30, 30);
 
 bool derived(const dims::Dimension& d) { return d.expr.find('$') != std::string::npos; }
@@ -33,6 +33,10 @@ DimensionsPanel::DimensionsPanel(HWND parent, Host& host, int id) : host_(host) 
     SetWindowLongPtrW(hwnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     message_label_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | SS_LEFT, 0, 0, 10, 10, hwnd_,
                                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_message)), GetModuleHandleW(nullptr), nullptr);
+    unlock_ = CreateWindowExW(0, L"BUTTON", L"Unlock shapes (edit in the 3D modeller)", WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 10, 10, hwnd_,
+                              reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_unlock)), GetModuleHandleW(nullptr), nullptr);
+    unlock_label_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | SS_LEFT, 0, 0, 10, 10, hwnd_,
+                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_unlock_label)), GetModuleHandleW(nullptr), nullptr);
 }
 
 DimensionsPanel::~DimensionsPanel() {
@@ -45,6 +49,8 @@ DimensionsPanel::~DimensionsPanel() {
 
 void DimensionsPanel::reload() {
     const auto r = dims::read_dimensions(host_.dimensions_deck());
+    unlocks_ = r.has_value() && host_.dimensions_unlocks();
+    if (!unlocks_) unlock_error_.clear();
     if (!r) {
         enabled_ = false;
         message_ = "The deck does not parse; the dimensions wait: " + r.error();
@@ -105,6 +111,7 @@ void DimensionsPanel::show_rows() {
         EnableWindow(c.edit, enabled_);
         SetWindowTextW(c.error, win32::widen(c.error_text).c_str());
     }
+    SetWindowTextW(unlock_label_, win32::widen(unlock_error_).c_str());
     SetWindowTextW(message_label_, win32::widen(message_).c_str());
     layout();
 }
@@ -123,6 +130,10 @@ void DimensionsPanel::layout() {
     };
     place(message_label_, !message_.empty(), pad, width - 2 * pad, 2 * row);
     if (!message_.empty()) y += 2 * row + gap;
+    place(unlock_, unlocks_, pad, width - 2 * pad, row - gap);
+    if (unlocks_) y += row;
+    place(unlock_label_, unlocks_ && !unlock_error_.empty(), pad, width - 2 * pad, 3 * row);
+    if (unlocks_ && !unlock_error_.empty()) y += 3 * row + gap;
     for (std::size_t k = 0; k < controls_.size(); ++k) {
         const Row& c = controls_[k];
         if (c.header) {
@@ -145,6 +156,7 @@ int DimensionsPanel::preferred_height(int) const {
     const int pad = MulDiv(8, dpi_, 96), row = MulDiv(24, dpi_, 96), gap = MulDiv(4, dpi_, 96);
     int y = 2 * pad;
     if (!message_.empty()) y += 2 * row + gap;
+    if (unlocks_) y += row + (unlock_error_.empty() ? 0 : 3 * row + gap);
     for (const Row& c : controls_) y += row * (1 + (c.header ? 1 : 0) + (c.error_text.empty() ? 0 : 1));
     return y;
 }
@@ -154,6 +166,8 @@ void DimensionsPanel::set_dpi(int dpi, HFONT font, HFONT bold) {
     font_ = font;
     bold_ = bold;
     SendMessageW(message_label_, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+    SendMessageW(unlock_, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+    SendMessageW(unlock_label_, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
     for (const Row& c : controls_) {
         for (HWND h : {c.label, c.edit, c.error, c.sweep}) {
             if (h) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
@@ -214,6 +228,15 @@ bool DimensionsPanel::sweep(std::size_t row) {
     return true;
 }
 
+bool DimensionsPanel::unlock() {
+    if (!unlocks_) return false;
+    std::string why = host_.dimensions_unlock();  // done: the host reloads the panel (no longer a deck to unlock)
+    const bool done = why.empty();
+    unlock_error_ = std::move(why);
+    show_rows();
+    return done;
+}
+
 bool DimensionsPanel::wheel(std::size_t row, int notches) {
     if (!enabled_ || row >= rows_.size()) return false;
     const std::string next = dims::step_dimension(rows_[row], notches);
@@ -227,6 +250,10 @@ LRESULT CALLBACK DimensionsPanel::proc(HWND hwnd, UINT message, WPARAM w, LPARAM
         switch (message) {
         case WM_COMMAND:
             if (HIWORD(w) == BN_CLICKED) {
+                if (reinterpret_cast<HWND>(l) == self->unlock_) {
+                    self->unlock();
+                    return 0;
+                }
                 for (std::size_t k = 0; k < self->controls_.size(); ++k) {
                     if (self->controls_[k].sweep && self->controls_[k].sweep == reinterpret_cast<HWND>(l)) self->sweep(k);
                 }
@@ -246,7 +273,7 @@ LRESULT CALLBACK DimensionsPanel::proc(HWND hwnd, UINT message, WPARAM w, LPARAM
             HDC dc = reinterpret_cast<HDC>(w);
             const auto* h = reinterpret_cast<HWND>(l);
             const bool error = std::ranges::any_of(self->controls_, [&](const Row& c) { return c.error == h; }) ||
-                               (h == self->message_label_ && !self->enabled_);
+                               (h == self->message_label_ && !self->enabled_) || h == self->unlock_label_;
             SetTextColor(dc, error ? error_ink : GetSysColor(COLOR_WINDOWTEXT));
             SetBkColor(dc, GetSysColor(COLOR_WINDOW));
             return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));

@@ -77,6 +77,9 @@ public:
     void release();
 
     void reload(bool fit = false);
+    // Unit 26n slice 2 (DT5): the text before the edit that brought the deck to this page (Unlock shapes, New 3D
+    // layout), so its undo takes the deck back.
+    void record_undo(std::string before) { history_.record(std::move(before)); }
     void fit();
     void set_tool(Tool t);
     [[nodiscard]] Tool tool() const noexcept { return tool_; }
@@ -259,6 +262,8 @@ private:
         void dimensions_selected(const std::string& name) override;
         bool dimensions_sweeps() override { return true; }
         void dimensions_sweep(const std::string& name) override;
+        bool dimensions_unlocks() override;            // Unit 26n slice 2 (DT5)
+        std::string dimensions_unlock() override;
     };
     DimsHost dims_host_;
     std::unique_ptr<DimensionsPanel> dims_;

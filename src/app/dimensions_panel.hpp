@@ -24,6 +24,10 @@ public:
         // Unit 26n slice 3 (DT6): whether a row offers Sweep... (not in the New device dialog), and its click.
         [[nodiscard]] virtual bool dimensions_sweeps() { return false; }
         virtual void dimensions_sweep(const std::string& /*name*/) {}
+        // Unit 26n slice 2 (DT5): whether the panel offers Unlock shapes (a 3D deck the modeller cannot edit), and its
+        // click: the deck converted to a layered one, or why not (shown under the button, nothing written).
+        [[nodiscard]] virtual bool dimensions_unlocks() { return false; }
+        [[nodiscard]] virtual std::string dimensions_unlock() { return {}; }
 
     protected:
         ~Host() = default;
@@ -54,6 +58,11 @@ public:
     // A row's Sweep... button: there for a row not derived from others when the host sweeps; null otherwise.
     [[nodiscard]] HWND sweep_button(std::size_t row) const;
     bool sweep(std::size_t row);  // as the button: the host opens the sweep dialog for the row
+    // Unit 26n slice 2 (DT5): the Unlock shapes button (shown when the host unlocks), its click, its refusal.
+    [[nodiscard]] HWND unlock_button() const noexcept { return unlock_; }
+    bool unlock();
+    [[nodiscard]] const std::string& unlock_error() const noexcept { return unlock_error_; }
+    [[nodiscard]] bool unlocks() const noexcept { return unlocks_; }
 
 private:
     struct Row {
@@ -70,6 +79,9 @@ private:
     Host& host_;
     HWND hwnd_ = nullptr;
     HWND message_label_ = nullptr;
+    HWND unlock_ = nullptr, unlock_label_ = nullptr;
+    std::string unlock_error_;
+    bool unlocks_ = false;
     int dpi_ = 96;
     HFONT font_ = nullptr, bold_ = nullptr;
     std::vector<dims::Dimension> rows_;

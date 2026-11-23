@@ -13,6 +13,7 @@
 #include <sstream>
 
 #include "NiTCAD/app/deck_vocabulary.hpp"
+#include "NiTCAD/app/unlock.hpp"
 #include "NiTCAD/render/axes3d.hpp"
 #include "win32.hpp"
 
@@ -2619,6 +2620,19 @@ void SolidPage::DimsHost::dimensions_edited(const std::string& text) {
 void SolidPage::DimsHost::dimensions_selected(const std::string&) { page->invalidate(); }
 
 void SolidPage::DimsHost::dimensions_sweep(const std::string& name) { page->host_.solid_sweep(name); }
+
+// Unit 26n slice 2 (DT5): an extrude3d deck through the modeller's own conversion (as the Convert button), one undo.
+bool SolidPage::DimsHost::dimensions_unlocks() { return page->m_.mesh == MeshKind::extruded; }
+
+std::string SolidPage::DimsHost::dimensions_unlock() {
+    const std::string text = page->host_.solid_deck();
+    auto u = unlock::unlock(text);
+    if (!u) return "Unlock refused: " + u.error();
+    page->history_.record(text);
+    page->apply_text(u->text);
+    page->host_.solid_status("Converted: " + u->note);
+    return {};
+}
 
 void SolidPage::reload_dimensions() {
     dims_->reload();
