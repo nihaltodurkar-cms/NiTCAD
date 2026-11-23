@@ -594,6 +594,29 @@ and cap, the run record (HD10) and HD7's warning. Tests: `tests/physics/heavy_io
 - HC8: **met** — stopped after the first step past t₀ and continued: every later point's time and terminal
   currents bit-identical, same identity.
 
+**Slice 1 record (2026-11-23).** HD8: `RateFields::heavy_ion` (−G at the snapshot time, filled whenever tracks are
+given, not part of net_n/net_p), `TimePoint::heavy_ion_charge` (optional), file keys rates 11 and time point 13
+written only when present (files without tracks byte-identical), `analysis::collected_charge`, render field `Gion`,
+`nitcad plot` usage, the app's field list. HD9: `[heavy_ion <name>]` in deck/build.cpp (documented in build.hpp),
+the transient table's `<contact> collected C` and `deposited C` columns (deck now links NiTCAD::analysis), the app
+vocabulary and section list. Example `examples/seu_diode_2d.deck` (2 × 3 µm n+/p diode at 3 V, 2 µm track,
+0.01 pC/µm, 1 µm depth). Tests: `tests/deck/heavy_ion_test.cpp`; app examples (now five, the transient branch in
+`runs_to_completion`), view settings and vocabulary tests extended.
+- Changed in slice 1 (design, not criteria): HD9's lengths are the deck's lengths (cm, or with um or nm, DK5),
+  not µm-only; `area` in cm² or with `um2`.
+- HC9: **met** — the deck run equals solve_transient bit for bit (times, terminal currents, deposit) with the same
+  identity; the table's collected-charge columns equal `analysis::collected_charge` exactly and its deposit
+  column round-trips; every missing key, `let` with `let_mev`, `depth` in 1D, an unknown key, t₀ < 4σ and a
+  track without [transient] refused with their messages.
+- HC10: **met** — the generation field and the deposit round-trip through the .nittran file; `Gion` plots
+  (`nitcad plot` single frame and filmstrip drawn on the example); the app lists Gion only for a result with it;
+  the example runs in 57 s (Release, 1023 points), no warning, collecting 1.84e-10 of 1.93e-10 C/cm by 100 ps.
+- Limitation found: `Gion`'s default log range reaches the Gaussian's far tail (hundreds of decades), so a plot
+  needs `--range`; the example's comment says so. Not changed: clipping the tail would change the model.
+- Run times added to the suites: the deck test's example case 57 s and the app examples run 62 s (both Release).
+- Targeted runs (Release): io 33/33, analysis 29/29, render 100/100, physics 131/131, app 162/162, deck 140/140
+  (its 5 expected failures), solve heavy ion + transient + restart 31/31. Full suites not run (HC11).
+
 ### Unit 26e — hover readout and one default colormap (proposed 2026-11-18; on `app/hover-readout`)
 
 **Owner request (2026-11-18):** "start Hover readout of values; choose viridis or turbo as the default colour map

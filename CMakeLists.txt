@@ -746,7 +746,7 @@ add_library(nitcad_deck STATIC
   src/deck/dimension_sweep.cpp)
 add_library(NiTCAD::deck ALIAS nitcad_deck)
 target_include_directories(nitcad_deck PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(nitcad_deck PUBLIC NiTCAD::base NiTCAD::io NiTCAD::solve)
+target_link_libraries(nitcad_deck PUBLIC NiTCAD::base NiTCAD::io NiTCAD::solve NiTCAD::analysis)
 
 add_executable(nitcad_deck_test
   tests/deck/syntax_test.cpp
@@ -768,6 +768,7 @@ add_executable(nitcad_deck_test
   tests/deck/cross_run_learning_test.cpp
   tests/deck/deck_compare_test.cpp
   tests/deck/solver_profile_test.cpp
+  tests/deck/heavy_ion_test.cpp
   tests/solve/process_memory.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")

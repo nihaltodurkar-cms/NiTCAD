@@ -92,10 +92,11 @@ constexpr std::array<SectionSpec, 6> device_sections{{{"device", "[device]", dev
                                                       {"thermal_contact", "[thermal_contact]", {}}}};
 constexpr std::array<SectionSpec, 1> mesh_sections{{{"mesh", "[mesh]", mesh_keys}}};
 constexpr std::array<SectionSpec, 1> physics_sections{{{"models", "[models]", model_keys}}};
-constexpr std::array<SectionSpec, 8> simulation_sections{{{"solver", "[solver]", solver_keys},
+constexpr std::array<SectionSpec, 9> simulation_sections{{{"solver", "[solver]", solver_keys},
                                                           {"equilibrium", "[equilibrium]", {}},
                                                           {"sweep", "[sweep]", {}},
                                                           {"transient", "[transient]", transient_keys},
+                                                          {"heavy_ion", "[heavy_ion]", {}},
                                                           {"small_signal", "[small_signal]", {}},
                                                           {"trace", "[trace]", {}},
                                                           {"output", "[output]", {}},

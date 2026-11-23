@@ -121,6 +121,12 @@
 //                     dt_*, output_times and every waveform time; a sine's frequency as below);
 //                     restart = <checkpoint file>  (a transient's own checkpoint: the run continues
 //                       after its last accepted step, bit for bit; Unit 61 RD4)
+//   [heavy_ion <name>] (Unit 65, HD9; physics/heavy_ion.hpp; repeatable; with [transient] only)
+//                     one heavy-ion track: start = <D lengths>, direction = <D numbers>, length,
+//                     let = <pC/um> or let_mev = <MeV cm^2/mg> (exactly one), t0 and sigma (times;
+//                     t0 at least 4 sigma); radius (2D, 3D), depth (2D: the depth the section stands
+//                     for), area (1D: cm^2, or with um2). No defaults. The transient table gains
+//                     '<contact> collected C' per contact and 'deposited C'.
 //   [small_signal]    (Unit 43; solve/small_signal.hpp) contact <name> = <series> and
 //                     thermal <name> = <series>, the operating points as in [sweep];
 //                     frequencies = <series> (required), field_frequencies = <series>; in Hz,

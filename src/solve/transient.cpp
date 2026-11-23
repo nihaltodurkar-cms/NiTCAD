@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -340,8 +341,17 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     run.run = make_run_record(device, options, waveforms, initial);
     // Heavy-ion resolution report (Unit 65, HD7): the mesh deposit against LET L (over the area
     // in 1D, the depth in 2D); a warning when they differ by more than 5%.
+    const std::vector<double> deposits = dd.heavy_ion_deposits();
+    // The tracks' charge generated from 0 to t (HD8); absent without tracks.
+    const auto ion_charge = [&](double t_s) -> std::optional<double> {
+        if (deposits.empty()) return std::nullopt;
+        double q = 0.0;
+        for (std::size_t k = 0; k < deposits.size(); ++k) {
+            q += deposits[k] * physics::heavy_ion_time_fraction(options.heavy_ions[k], 0.0, t_s);
+        }
+        return q;
+    };
     {
-        const std::vector<double> deposits = dd.heavy_ion_deposits();
         for (std::size_t k = 0; k < deposits.size(); ++k) {
             const physics::HeavyIonTrack& tr = options.heavy_ions[k];
             const double per = D == 1 ? tr.area_cm2 : D == 2 ? tr.depth_cm : 1.0;
@@ -391,6 +401,11 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
                                      snap.edge_current_p);
         snap.trap_occupancy = s.traps;
         if (steady.store_rates) snap.rates = detail::rate_fields(dd, s.x);
+        if (!deposits.empty()) {  // Unit 65, HD8: the tracks' rate at this time, as a rate (-G)
+            std::vector<double> g = dd.heavy_ion_generation(snap.time_s);
+            for (double& v : g) v = v == 0.0 ? 0.0 : -v;
+            snap.rates.heavy_ion = std::move(g);
+        }
         return snap;
     };
 
@@ -491,6 +506,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         first.thermal_contact_heat =
             scale(thermal_contact_heat(dd, x), scaling->V_T * current_scale);
     }
+    first.heavy_ion_charge = ion_charge(0.0);
     run.points.push_back(std::move(first));
     run.snapshots.push_back(snapshot(history.back()));
     }
@@ -736,6 +752,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
                 point.conduction_current[c] + point.displacement_current[c];
         }
         point.contact_charge = scale(next.charges, charge_scale);
+        point.heavy_ion_charge = ion_charge(t_new);
         point.interface_trap_charge = scale(interface_trap_charges(dd, x, &step), charge_scale);
         point.convergence = std::move(record);
         run.points.push_back(std::move(point));

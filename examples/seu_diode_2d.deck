@@ -1,0 +1,49 @@
+# 2D single-event strike
+# A heavy ion through a reverse-biased n+ / p diode: the current pulse and the collected charge.
+#
+# A 2 x 3 um silicon section (p-type, 1e16 cm^-3) under a 0.3 um n+ layer (1e18 cm^-3), the cathode on top
+# at 3 V, the anode below. An ion enters at the centre of the top surface and goes straight down 2 um,
+# leaving 0.01 pC/um (about 1 MeV cm^2/mg) in a Gaussian track of radius 0.05 um, as a 2 ps pulse at 10 ps.
+# The section stands for 1 um of depth. The table holds each contact's collected charge and the deposit;
+# plot Gion (the generation; give --range, e.g. 1e20,1e30: the Gaussian's tail spans hundreds of decades) and n
+# at the snapshots.
+
+[mesh]
+type = tensor
+x = linspace(0, 0.8um, 9) + linspace(0.8um, 1.2um, 33) + linspace(1.2um, 2um, 9)
+y = linspace(0, 2.5um, 26) + linspace(2.5um, 3um, 11)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e16
+profile = donor constant 1e18 y=2.7um:3um
+
+[contact anode]
+kind = ohmic
+patch = y_min
+
+[contact cathode]
+kind = ohmic
+patch = y_max
+
+[transient]
+contact cathode = constant(3)
+t_end = 100ps
+output_times = 10ps, 20ps, 50ps
+
+[heavy_ion strike]
+start = 1um 3um
+direction = 0 -1
+length = 2um
+let = 0.01
+radius = 0.05um
+depth = 1um
+t0 = 10ps
+sigma = 2ps
+
+[output]
+transient = seu_diode_2d.nittran
+device = seu_diode_2d.nitdev
+table = seu_diode_2d.csv

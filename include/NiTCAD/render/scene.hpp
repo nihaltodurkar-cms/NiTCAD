@@ -168,7 +168,10 @@ enum class Field : std::uint8_t {
     quantum_potential_p,       // Lambda_p
     effective_conduction_band, // E_c + Lambda_n
     effective_valence_band,    // E_v - Lambda_p
-    last = effective_valence_band,
+    // Unit 65: heavy-ion pair generation (RateFields::heavy_ion) at a transient snapshot, cm^-3 s^-1,
+    // positive; an error when the result holds none.
+    heavy_ion_generation,      // Gion
+    last = heavy_ion_generation,
 };
 
 struct FieldInfo {
