@@ -624,6 +624,19 @@ in 11.3. HC11 (Release and Debug suites) and HC1's NG1 trace set wait for the ow
   four, and slice 1 added a fifth (missed in slice 1's targeted runs, which did not include `app_window`); fixed
   to five. `app.geometry` GE3 failed on `main`'s PR #118 (decks check out with LF), not on Unit 65: fixed on `main`
   by PR #119 (42b4306), merged into this branch. Debug suite pending at the time of the PR. NG1 traces not run.
+  The owner stopped the Debug build before its suite ran.
+- **Rulings (owner, 2026-11-23, "choose recommended for HC7 and HC1"):**
+  - HC7: the reversed-track miss stands as recorded. The criterion is not changed; the test holds the measured order
+    (1e-14). The 1e-15 target lies below the rounding of the reversed start r₀ + L d itself. No code change.
+  - HC1: NG1 is run. The five traced executables (assemble, deck, adapt, validation, solve; Release, hidden cases
+    excluded) are traced on `main` 42b4306 and on this branch and compared; heavy-ion cases are new lines only.
+- **HC1 NG1 result (2026-11-23): met.** Compared per test case and section, order-independent: adapt (109 668
+  lines), assemble (1 099 002) and validation (23 130) identical; deck: every `main` line present, the branch adds
+  87 278 (the heavy-ion deck cases); solve: every `main` value present, the branch adds the heavy-ion cases. 4128
+  lines move from "mos: P3" to "mos: P7" with identical values: a shared cached result is traced in whichever case
+  runs first, and the test order changed. `main`'s fresh build had no MKL runtime, so its four PARDISO cases were
+  skipped; traced again with `NITCAD_MKL_RUNTIME` set, every branch PARDISO line equals `main`'s. All five
+  executables pass on both builds. HC1 is now met in full except the Debug suite, which the owner stopped (HC11).
 
 ### Unit 26e — hover readout and one default colormap (proposed 2026-11-18; on `app/hover-readout`)
 
