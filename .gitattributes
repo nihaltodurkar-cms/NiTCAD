@@ -3,3 +3,6 @@
 *.nitckpt binary
 *.nitdev binary
 *.nitmesh binary
+# Decks are text with LF endings in every checkout, core.autocrlf=true on Windows included: the tests
+# and the device library compare their lines byte for byte. The deck reader takes CRLF too (users' files).
+*.deck text eol=lf
