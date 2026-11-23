@@ -2487,6 +2487,18 @@ owner's word ("after slice 2 is done, start slice 4 (choose recommended for deci
 - **Limitations (recorded).** Contact patches are not clamped while moving (they stay on their face). Name this value
   is for boxes and the domain, not prisms. The menu replaces the edit's own context menu (Cut, Copy, Paste kept; Undo
   and Select all not).
+- **Full suites (owner "run Full Release/Debug suites", 2026-11-23), at `ed29b4d`:** Release 301/301 pass (4038 s; one
+  thread per test, `-j 6`; `verify_full.tvb04` 1413 s alone on one thread, within its earlier 1284-1880 s). Debug: the
+  build first failed on two C4702s (a `FAIL` before a helper's return in the new_device and sweep window tests; now
+  `FAIL_CHECK`). The suite then ran to 251/257 before being stopped on the owner's word: `app.solid` failed on MC9's
+  1 ms tied drag frame (15.1 ms in Debug; now checked in Release only, as KG6 and SE5, the limit unchanged; Release
+  0.668 ms), `app_window.dimensions_window` failed on a race (the open's build still running in Debug at the test's
+  edit failed on the broken deck and went to the Deck tab; the test now waits for it), and `app_window.unlock_window`
+  ran over 85 minutes (the extrude3d case unlocked the library FinFET, whose 0.5 nm layers had the live check mesh the
+  converted deck; it now uses a small extrude3d deck, 3.7 s in Debug, the FinFET's conversion kept in `unlock_test`).
+  With the fixes (b5163ad) the six tests left (those three, `app.run_controller`, `app_window.self_test` and
+  `app_window.analysis_window`) pass in Debug, and the changed tests pass in Release. Limitation: unlocking the library FinFET in
+  the app sets off that long background mesh build (the window stays responsive).
 
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
