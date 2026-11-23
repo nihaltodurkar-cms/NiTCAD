@@ -166,6 +166,13 @@ TEST_CASE("app unlock: line endings, boxes past the domain, refusals", "[app][un
     CHECK(p->text.find("box = 0 $L $y_ox $H 0 $W\n") != std::string::npos);  // cut to the domain (its comment goes)
     CHECK(p->note.find("cut to the domain") != std::string::npos);
 
+    // The widest spacing of a linspace: (last - first) / (count - 1).
+    std::string coarse = tensor_deck;
+    coarse.replace(coarse.find("x = linspace(0, $L, 11)"), 23, "x = linspace(0, $L, 3)");
+    const auto c = app::unlock::unlock(coarse);
+    REQUIRE(c);
+    CHECK(c->text.find("max_size = 0.5um\n") != std::string::npos);
+
     std::string twice = tensor_deck;
     twice.replace(twice.find("electrode = metal"), 0, "box = 0 0.1um  $H $H  0 $W\n");
     const auto two = app::unlock::unlock(twice);
@@ -219,6 +226,11 @@ TEST_CASE("app unlock: the 3D library decks (DC8)", "[app][unlock][.unlock_libra
         REQUIRE(loc);
         const auto original = deck::substituted(*deck::parse(text));
         REQUIRE(original);
+        // Points within 2 s of a box face are left out: the generator meshes an interface by node pairs straddling it,
+        // so a point that close lies in a cell whose nodes may sit on either side.
+        const auto s = app::solid::mesh_length(u->text, "interface_resolution");
+        REQUIRE(s);
+        const double margin = 2.0 * *s;
         const auto& lo = g.mesh.points().front();
         mesh::Point plo = lo, phi = lo;
         for (const auto& q : g.mesh.points()) {
@@ -233,7 +245,7 @@ TEST_CASE("app unlock: the 3D library decks (DC8)", "[app][unlock][.unlock_libra
             ++tries;
             mesh::Point p{};
             for (std::size_t a = 0; a < 3; ++a) p[a] = std::uniform_real_distribution<double>(plo[a], phi[a])(rng);
-            const int want = painted_region(*original, p, 1e-9);
+            const int want = painted_region(*original, p, margin);
             if (want < 0) continue;
             const auto at = loc->locate(p);
             REQUIRE(at.inside);
