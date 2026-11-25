@@ -48,7 +48,7 @@ constexpr const char* plot_usage =
     "          in rows of --columns (4) at --size (640x480 each); other views draw the final mesh\n"
     "  iso     --view iso --field <f> --levels <v>[,<v>...] (3D surfaces, 2D contours)\n"
     "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
-    "          radiative|surface|Gii|Gbtbt|E|J|Jn|Jp|Tn|Tp  --point <k> (default: last)\n"
+    "          radiative|surface|Gii|Gbtbt|E|J|Jn|Jp|Tn|Tp|Gion  --point <k> (default: last)\n"
     "          --scale linear|log|signed-log  --range <lo>,<hi>\n"
     "          --colormap viridis|turbo|cividis|coolwarm|soft  --contours  --edges  --opaque\n"
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"

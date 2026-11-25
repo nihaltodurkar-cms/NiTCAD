@@ -341,18 +341,28 @@ public:
     // model c of the rise tau third (read off the isothermal sinks), with energy balance c of the
     // carriers' thermal energies W_n and W_p third and fourth (Unit 52, ED9); traps c of every
     // trap slot (trap_slots() entries).
-    // time_s is the step's end time [s], read only by the manufactured sources' time profile
-    // (verification only, models.hpp; DECISIONS.md Unit 55 16.3, DT-Q3 A).
+    // time_s is the step's end time [s], read by the manufactured sources' time profile
+    // (verification only, models.hpp; DECISIONS.md Unit 55 16.3, DT-Q3 A) and the heavy-ion
+    // tracks; start_time_s its start [s], read only by the heavy-ion tracks (Unit 65, HD3: the
+    // step average of each pulse over [start_time_s, time_s]).
     struct TimeStep {
         double rate;
         std::span<const double> storage;
         std::span<const double> traps;
         double time_s = 0.0;
+        double start_time_s = 0.0;
     };
     // t0 = Ns / R0 [s].
     [[nodiscard]] double time_scale() const noexcept;
     // Interface trap occupancies, one per (interface edge, level) (InterfaceEdges slots).
     [[nodiscard]] std::size_t trap_slots() const noexcept;
+    // Heavy-ion tracks (Unit 65; models.heavy_ions): per track, the mesh deposit [C / cm^(3-D)],
+    // q times the sum over the semiconductor nodes off the ohmic contacts of the box volume times
+    // the track's pairs (physics::heavy_ion_pairs at the node; HD7). Empty without tracks.
+    [[nodiscard]] std::vector<double> heavy_ion_deposits() const;
+    // The tracks' generation rate [cm^-3 s^-1] at every node at time t (the instantaneous rate,
+    // HD8; 0 on insulator and ohmic contact nodes). Empty without tracks.
+    [[nodiscard]] std::vector<double> heavy_ion_generation(double t_s) const;
     // Preconditions (NITCAD_EXPECTS) as evaluate(), and step's spans of the sizes above.
     void evaluate(std::span<const double> x, const TimeStep& step, std::span<double> residual,
                   linalg::SparseMatrix& jacobian) const;

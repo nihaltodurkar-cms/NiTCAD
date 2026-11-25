@@ -432,14 +432,14 @@ TEST_CASE("app window: the start page, the run monitor, Stop and the results (WG
     // The start page lists exactly the bundled examples (WG8).
     CHECK(w->tab() == MainWindow::tab_start);
     const auto expected = app::list_examples(NITCAD_EXAMPLES_DIR);
-    REQUIRE(expected.size() == 4);
-    REQUIRE(w->start_page().example_count() == 4);
-    std::size_t mosfet = 4;
-    for (std::size_t k = 0; k < 4; ++k) {
+    REQUIRE(expected.size() == 5);  // five since Unit 65's seu_diode_2d.deck
+    REQUIRE(w->start_page().example_count() == 5);
+    std::size_t mosfet = 5;
+    for (std::size_t k = 0; k < 5; ++k) {
         CHECK(w->start_page().example_title(static_cast<int>(k)) == app::win32::widen(expected[k].title));
         if (expected[k].path.filename() == "mosfet_2d.deck") mosfet = k;
     }
-    REQUIRE(mosfet < 4);
+    REQUIRE(mosfet < 5);
     // Opening an example opens a copy (the installed deck stays as shipped).
     REQUIRE(w->open_example(mosfet));
     REQUIRE(pump_until([&] { return w->workspace() != nullptr; }));

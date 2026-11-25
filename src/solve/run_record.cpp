@@ -494,12 +494,34 @@ results::RunRecord make_run_record(const device::Device& device, const Transient
         named.emplace_back("transient.density_ref_cm3", options.density_ref_cm3);
     }
     named.emplace_back("transient.fields_every_step", options.fields_every_step ? 1.0 : 0.0);
+    // Heavy-ion tracks (Unit 65, HD10): named and hashed only when given, so a run without keeps
+    // its digest.
+    for (std::size_t k = 0; k < options.heavy_ions.size(); ++k) {
+        const physics::HeavyIonTrack& t = options.heavy_ions[k];
+        const std::string p = "heavy_ion." + std::to_string(k) + ".";
+        named.emplace_back(p + "let_C_per_cm", t.let_C_per_cm);
+        named.emplace_back(p + "length_cm", t.length_cm);
+        named.emplace_back(p + "radius_cm", t.radius_cm);
+        named.emplace_back(p + "t0_s", t.t0_s);
+        named.emplace_back(p + "sigma_s", t.sigma_s);
+    }
     device_and_settings(d, device, options.steady, named);
     d.reals(options.output_times_s);
     d.integer(waveforms.size());
     for (const Waveform& w : waveforms) {
         d.integer(static_cast<std::uint64_t>(w.kind()));
         d.reals(w.parameters());
+    }
+    if (!options.heavy_ions.empty()) {
+        d.integer(options.heavy_ions.size());
+        for (const physics::HeavyIonTrack& t : options.heavy_ions) {
+            d.reals(t.start_cm);
+            d.reals(t.direction);
+            for (const double v : {t.length_cm, t.let_C_per_cm, t.radius_cm, t.depth_cm, t.area_cm2,
+                                   t.t0_s, t.sigma_s}) {
+                d.real(v);
+            }
+        }
     }
     initial_state(d, initial, true, false, options.steady.models.energy_balance);
     return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};

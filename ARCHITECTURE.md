@@ -1418,6 +1418,47 @@ after two review rounds; legacy `btbt.py`, `btbt_grid.py`, `nonlocal_path.py`, `
   switched off, the transient start reverted to holding every node when any domain lacks a sink or holding none (U5),
   and the R_th node's heat-row bias derivative dropped (U7).
 
+**As built (Unit 65, heavy-ion (single-event) charge deposition; owner request 2026-11-23; DECISIONS.md HD1–HD10,
+HQ1–HQ5, HC1–HC11):**
+- **Model** (`physics/heavy_ion.hpp`, `HeavyIonTrack`). A track is a segment from r₀ along the unit direction d, of
+  length L. At a point with axial coordinate l = (r − r₀)·d and radial distance ρ it generates electron–hole pairs at
+  G = (LET/q) R(ρ) T(t) for 0 ≤ l ≤ L. R is normalised over the cross-section: exp(−ρ²/w²)/(π w²) in 3D,
+  exp(−ρ²/w²)/(√π w D) in 2D (D the depth the section stands for, required; HQ1), 1/A in 1D (A the cross-section,
+  required; the track along ±x). T(t) = exp(−((t − t₀)/s)²)/(s√π). LET is in C/cm, or given in MeV·cm²/mg and
+  converted with silicon's 3.6 eV pair energy and 2.329 g/cm³: 1 MeV·cm²/mg = 0.01036519 pC/µm. Tracks add; pairs
+  are generated in semiconductor regions only. No defaults for w, t₀, s (HQ4).
+- **Assembly.** One state-independent term, `heavy-ion generation` (terms.cpp, the `Manufactured` pattern: no
+  Jacobian entries), +V_i G_i in the electron row and −V_i G_i in the hole row of every semiconductor node off the
+  contacts, G point-evaluated at the node. Listed only when a track is given (`PhysicsModels::heavy_ions`, set by
+  `solve_transient` from `TransientOptions::heavy_ions`).
+- **Time.** Over a step the source is the step average of T, (Φ(t_{n+1}) − Φ(t_n))/h with Φ its exact (erf)
+  integral (HQ2; `System::TimeStep::start_time_s`), so the charge a run deposits is exact whatever the steps. The
+  steady state at t = 0 has no generation (t₀ ≥ 4s, so the missed fraction is ½ erfc(4) = 7.7e-9). Steps land on
+  t₀ − 4s, t₀ and t₀ + 4s (restarting with backward Euler) and no step in that window exceeds s/4.
+- **Refused** (`invalid_input`, before solving): t₀ < 4s; a track that reaches no semiconductor node; electrothermal
+  and energy balance (HQ3, follow-ups); the dimension's missing or extra `depth`/`area`; `[heavy_ion]` without
+  `[transient]`.
+- **Resolution report.** Per track, the analytic deposit LET·L (over D in 2D, A in 1D) against the mesh deposit
+  q Σ V_i G_i/T (`System::heavy_ion_deposits`); the run record warns when they differ by more than 5%.
+- **Results.** Snapshots carry the generation field (`RateFields::heavy_ion`, cm⁻³ s⁻¹, files, `nitcad plot` and
+  app field `Gion`); each `TimePoint` carries the deposited charge so far (`heavy_ion_charge`);
+  `analysis::collected_charge` integrates each contact's current above its t = 0 value (trapezoidal). Files without
+  tracks are byte-identical to before.
+- **Deck** (`deck/build.cpp`). Repeatable `[heavy_ion <name>]` sections: `start`, `direction`, `length`, `let` or
+  `let_mev` (exactly one), `radius`, `t0`, `sigma`, `depth` (2D), `area` (1D), all required. The transient table
+  gains each contact's collected charge and the deposit. Example: `examples/seu_diode_2d.deck` (57 s, Release).
+- **Restart.** The tracks are part of the options and the run identity; a resumed run continues bit for bit.
+- **Gates.** MeV·cm²/mg conversion to 1e-14 (HC2); mesh against analytic deposit: 1D exact, 2D −2.0e-8, 3D −5.7e-8
+  (HC3); a run's deposit exact to 1e-12 for backward Euler and BDF2, fixed and adaptive (HC4); a reverse-biased 1D
+  and 2D diode with recombination off collect 1.0027 and 1.0052 of the deposit, with SRH and the track in the
+  neutral p side 0.842 (HC5); landings and the s/4 cap (HC6); two tracks on one line equal one of the summed LET to
+  2.2e-16 (HC7); restart bit for bit (HC8); deck equal to the C++ call (HC9); field round-trip and the example
+  (HC10).
+- **Limitations.** The reversed track (start at the far end, −d) agrees to 7.6e-15, not the 1e-15 asked (HC7
+  missed: the reversed start's rounding, scaled by ρ²/w²). `Gion`'s default log range reaches the Gaussian's far
+  tail, so plots need `--range`. No published SEU data compared (HQ5, open). The pair energy and the carriers'
+  energy at creation in electrothermal and energy-balance runs are not built.
+
 **As built (Unit 66, Philips unified (Klaassen) mobility, opt-in; DECISIONS.md KD1–KD9, KQ1–KQ9, KC1–KC10):**
 - `physics/klaassen_mobility.hpp`: Klaassen's model (Solid-State Electron. 35, 953 and 961 (1992), as reproduced by
   Sandia Charon v2.2 section 7.4, DEVSIM and COMSOL; the papers were not read): lattice, donor/acceptor with
@@ -3651,6 +3692,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); arrows, clipping, exploded views and filmstrips (Unit 25c, 6.14); the Windows application `nitcad-app` (Unit 26, 6.14); its analysis workspace (Unit 26b, 6.14); the 25b/25c views, region visibility, playback and clip sliders in the window (Unit 26c, 6.14) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified, on `main`** (Unit 25b; `8256cf8`, PR #57); **arrows, clipping, exploded views and filmstrips verified** (Unit 25c); **the GUI verified, on `main`** (Unit 26; `e9b1d71`, PR #59); **the analysis workspace verified, on `main`** (Unit 26b; `51face0`, PR #60); **the GUI catch-up verified** (Unit 26c, PR #61; the WG1 spikes open); **the 3D solid modeller built** (Unit 26l, 6.14; on `app/solid-modeller`, PR #111): layered 3D decks drawn and edited on the Geometry tab, validated live, a drawn 3D MOSFET run | the WG1 spikes (cause unknown; the input cause fixed in Unit 26c); in the modeller, curved solids, oblique planes, snapping onto slanted faces |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
 | Nanoscale device physics | Classical drift-diffusion: carriers peak at the insulator interface (MLDA moves the peak inside, opt-in, Unit 47), mobility from doping (Masetti, or Klaassen opt-in with carrier–carrier scattering, Unit 66) and lateral field (Canali); Lombardi surface mobility opt-in (Unit 46); gate tunnelling through insulators opt-in (Unit 51, 6.4); Hurkx trap-assisted tunnelling opt-in (Unit 67, 6.2) | **Lombardi surface mobility verified, opt-in, on `main`** (Unit 46; `51c2da9`, PR #64); **MLDA quantum confinement verified, opt-in, on `main`** (Unit 47; `329f203`, PR #66); **gate tunnelling verified, opt-in** (Unit 51, on `physics/gate-tunnelling`); **energy balance verified, opt-in** (Unit 52, on `physics/energy-balance`; not run on the FinFET deck); **density-gradient confinement built, opt-in** (Unit 62, on `physics/density-gradient`; QV6 threshold shift a recorded fail); **Hurkx trap-assisted tunnelling built, opt-in** (Unit 67, on `physics/trap-assisted-tunnelling`; full suites pending); the rest **planned** (gap found by the FinFET deck, 2026-10-23; below) | Energy balance with the refused combinations (below); density gradient with adaptation and the refused models (Unit 62); no unit named |
+| Radiation effects | Heavy-ion (single-event) charge deposition in transient runs: Gaussian tracks in 1D, 2D (per depth) and 3D, LET in pC/µm or MeV·cm²/mg, exact deposit per step, collected charge per contact, the `[heavy_ion]` deck section, the `Gion` field (Unit 65, 6.2) | **Built, opt-in** (Unit 65, on `physics/heavy-ion`, not pushed; HC7 reversed-track tolerance missed, recorded; full suites pending, HC11) | Published SEU data (HQ5); pair energy in electrothermal and energy-balance runs (HQ3); total-dose (oxide charge) effects |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**
 - When a sweep point does not converge, the bias step to it is retried from the last converged state, halved until a
