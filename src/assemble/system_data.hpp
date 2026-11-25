@@ -38,6 +38,7 @@
 #include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/physics/impact_ionization.hpp"
 #include "NiTCAD/physics/ionization.hpp"
+#include "NiTCAD/physics/klaassen_mobility.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/surface_mobility.hpp"
@@ -359,6 +360,13 @@ struct SystemData {
     [[nodiscard]] std::pair<EdgeFlux, EdgeFlux> edge_fluxes(
         const EdgeTerm& e, std::span<const double> x, std::span<const NodeDegeneracy> g,
         SurfaceSlope* slope = nullptr) const;
+    // Unit 66 (KD5): edge_fluxes' factors with the carrier-dependent Klaassen mobility, from the
+    // unit-factor fluxes fn, fp: a = a0 mu(x) / mu0 with the ends' mobilities at the state's
+    // densities (the other carrier's partials in d_other1, d_other2). Not on thermionic edges.
+    [[nodiscard]] std::pair<EdgeFlux, EdgeFlux> klaassen_fluxes(const EdgeTerm& e,
+                                                                std::span<const double> x,
+                                                                double dpsi, EdgeFlux fn,
+                                                                EdgeFlux fp) const;
 
     // Electrothermal (Unit 23; electrothermal.cpp). Per node, constant: the material (index into
     // thermal_materials_, or -1 on an insulator), its thermal data, the impurity densities the
@@ -378,6 +386,8 @@ struct SystemData {
         // node of a gate with one (its electrode potential gains the node's own g(theta)), 2 on a
         // node of an electrode of one (it gains polysilicon's, silicon's -(Eg(T) - Eg(T0)) / k T0).
         std::int32_t ppoly;
+        // Unit 66: N_D, N_A for the Klaassen mobility (0 with doping_mobility off) [cm^-3].
+        double donors_mobility = 0.0, acceptors_mobility = 0.0;
     };
     // Per node at a state: theta and tau = theta - 1 (the unknown), n_ie / Ns, the mobilities
     // [cm^2/(V s)], g (the valence band's shift), kappa [W/(cm K)] and the Kirchhoff transform u,
@@ -473,6 +483,14 @@ struct SystemData {
     // Units 34, 35: per thermal material, whether its hole mobility is Masetti's.
     std::vector<char> masetti_holes_;
     bool masetti_electrons_ = false;  // Unit 38: the electron mobility is Masetti's
+    // Unit 66: the electron / hole mobility is Klaassen's at neutral equilibrium densities.
+    bool klaassen_electrons_ = false, klaassen_holes_ = false;
+    // Unit 66 (KD5): `klaassen` for either carrier; the carrier's prepared temperature parts
+    // (empty when it does not select `klaassen`), and N_D, N_A per node (0 with doping_mobility
+    // off). edge_fluxes then evaluates the ends' mobilities at the state's n, p.
+    bool klaassen_carriers_ = false;
+    std::optional<physics::KlaassenAtTemperature> klaassen_n_, klaassen_p_;
+    std::vector<double> klaassen_donors_, klaassen_acceptors_;
     bool sinks_complete_ = false;
     std::vector<char> reaches_sink_;  // per node (reaches_heat_sink)
     // One node's thermal state at tau (NaN entries unless tau is finite and theta positive).
