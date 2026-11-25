@@ -1664,11 +1664,16 @@ TEST_CASE("app views 26o: one energy range over the run; a cut line on the surfa
     const auto with = scene_at(1, cut);
     CHECK(std::ranges::any_of(with.lines, [](const render::LineBatch& l) { return l.name == "band cut"; }));
     CHECK(std::ranges::none_of(with.lines, [](const render::LineBatch& l) { return l.name == "cut line"; }));
-    // nitcad plot draws the same images.
+    // nitcad plot draws the same images; Fit this point at the last point.
+    // (This run moves Ec and Ev only: EFn and EFp stay flat. The last point's Ev floor is 2e-4 eV above the run's.)
+    const auto run_levels = render::band_energy_range(*w.device, w.points, fit.band_levels);
+    REQUIRE(run_levels);
+    const auto last_fit = scene_at(w.points.size() - 1, fit);
+    CHECK(std::pair{last_fit.colorbar->scale.lo(), last_fit.colorbar->scale.hi()} != *run_levels);
     const fs::path out = app_test::scratch("views_26o_run");
     int n = 0;
     for (ViewSettings v : {s, fit, cut}) {
-        v.point = 1;
+        v.point = w.points.size() - 1;
         auto scene = app::build_scene(w, v);
         REQUIRE(scene);
         const render::Image mine = draw(*scene, 480, 360);
