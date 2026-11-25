@@ -76,6 +76,10 @@ struct BandSurfaceScene {
 // Nothing when the plane misses the device.
 void add_plane_outline(FieldScene& scene, const Geometry& geometry, const Plane& plane);
 
+// The node whose control-volume piece of element `element` holds x (cm), as band_energy_at reads it (BSD7: the
+// readout's material).
+[[nodiscard]] NodeId band_owner(const Geometry& geometry, std::size_t element, const Point& x);
+
 // One key per mesh node: -1 on insulator nodes; semiconductor nodes share a key exactly when their regions'
 // semiconductor parameters compare equal. Keys count from 0 in region order.
 [[nodiscard]] std::vector<std::int32_t> band_material_keys(const device::Device& device);

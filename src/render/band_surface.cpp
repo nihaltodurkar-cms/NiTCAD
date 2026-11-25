@@ -199,13 +199,7 @@ Lifted clip_energy(Lifted in, double lo, double hi) {
 
 }  // namespace
 
-std::optional<double> band_energy_at(const device::Device& device, const Geometry& geometry,
-                                     const results::BandDiagram& bands, BandLevel level, std::size_t element,
-                                     const Point& x) {
-    const auto& values = level_values(bands, static_cast<std::size_t>(level));
-    if (values.size() != device.mesh().node_count() || element >= geometry.element_count()) return std::nullopt;
-    const auto keys = band_material_keys(device);
-    NodeId owner = 0;
+NodeId band_owner(const Geometry& geometry, std::size_t element, const Point& x) {
     if (geometry.kind() == GeometryKind::tensor) {
         const std::size_t c = geometry.element_cell(element);
         const auto [lo, hi] = geometry.cell_box(c);
@@ -214,15 +208,23 @@ std::optional<double> band_energy_at(const device::Device& device, const Geometr
             const auto ax = static_cast<std::size_t>(a);
             if (x[ax] > 0.5 * (lo[ax] + hi[ax])) q |= std::size_t{1} << a;
         }
-        owner = geometry.cell_corners(c)[q];
-    } else {
-        const Interpolant at = geometry.interpolant(element, x);
-        std::size_t best = 0;
-        for (std::size_t k = 1; k < at.nodes.size(); ++k) {
-            if (at.weights[k] > at.weights[best]) best = k;
-        }
-        owner = at.nodes[best];
+        return geometry.cell_corners(c)[q];
     }
+    const Interpolant at = geometry.interpolant(element, x);
+    std::size_t best = 0;
+    for (std::size_t k = 1; k < at.nodes.size(); ++k) {
+        if (at.weights[k] > at.weights[best]) best = k;
+    }
+    return at.nodes[best];
+}
+
+std::optional<double> band_energy_at(const device::Device& device, const Geometry& geometry,
+                                     const results::BandDiagram& bands, BandLevel level, std::size_t element,
+                                     const Point& x) {
+    const auto& values = level_values(bands, static_cast<std::size_t>(level));
+    if (values.size() != device.mesh().node_count() || element >= geometry.element_count()) return std::nullopt;
+    const auto keys = band_material_keys(device);
+    const NodeId owner = band_owner(geometry, element, x);
     if (keys[static_cast<std::size_t>(owner)] < 0) return std::nullopt;
     const double e = band_value(geometry, element, x, owner, keys, values);
     if (!std::isfinite(e)) return std::nullopt;
