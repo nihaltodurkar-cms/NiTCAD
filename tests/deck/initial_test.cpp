@@ -17,6 +17,7 @@
 
 using namespace NiTCAD;
 using deck_test::diode_device;
+using deck_test::compensated_device;
 using deck_test::must;
 using deck_test::plan_of;
 using deck_test::scratch;
@@ -72,7 +73,7 @@ Counted run_counted(const std::string& text, const fs::path& dir) {
 
 // The checkpoint of the steady state at anode = 0.4 V, written by a one-point sweep.
 fs::path start_checkpoint(const fs::path& dir) {
-    const auto r = deck::run(must(diode_device + "[sweep]\ncontact anode = 0.4\n[output]\ncheckpoint = start.nitckpt\n", dir));
+    const auto r = deck::run(must(compensated_device + "[sweep]\ncontact anode = 0.4\n[output]\ncheckpoint = start.nitckpt\n", dir));
     if (!r) FAIL(r.error().message);
     return dir / "start.nitckpt";
 }
@@ -87,8 +88,8 @@ TEST_CASE("deck initial: each analysis from a checkpoint of its start equals the
 
     SECTION("sweep") {
         const std::string body = "[sweep]\ncontact anode = 0.4 : 0.6 : 0.1\n";
-        const auto a = run_counted(diode_device + body, dir);
-        const auto b = run_counted(diode_device + body + with, dir);
+        const auto a = run_counted(compensated_device + body, dir);
+        const auto b = run_counted(compensated_device + body + with, dir);
         REQUIRE(a.report.sweep.has_value());
         REQUIRE(b.report.sweep.has_value());
         REQUIRE(a.report.sweep->points.size() == b.report.sweep->points.size());
@@ -99,8 +100,8 @@ TEST_CASE("deck initial: each analysis from a checkpoint of its start equals the
     }
     SECTION("small signal") {
         const std::string body = "[small_signal]\ncontact anode = 0.4, 0.5\nfrequencies = 1MHz, 1GHz\n";
-        const auto a = run_counted(diode_device + body, dir);
-        const auto b = run_counted(diode_device + body + with, dir);
+        const auto a = run_counted(compensated_device + body, dir);
+        const auto b = run_counted(compensated_device + body + with, dir);
         REQUIRE(a.report.small_signal.has_value());
         REQUIRE(b.report.small_signal.has_value());
         const auto& pa = a.report.small_signal->points;
@@ -122,8 +123,8 @@ TEST_CASE("deck initial: each analysis from a checkpoint of its start equals the
     }
     SECTION("trace") {
         const std::string body = "[trace]\ncontact = anode\nstart anode = 0.4\nend = 0.6\n";
-        const auto a = run_counted(diode_device + body, dir);
-        const auto b = run_counted(diode_device + body + with, dir);
+        const auto a = run_counted(compensated_device + body, dir);
+        const auto b = run_counted(compensated_device + body + with, dir);
         REQUIRE(a.report.sweep.has_value());
         REQUIRE(b.report.sweep.has_value());
         REQUIRE(a.report.sweep->points.size() == b.report.sweep->points.size());
@@ -134,8 +135,8 @@ TEST_CASE("deck initial: each analysis from a checkpoint of its start equals the
         // Fixed steps, so the comparison is of the same time points.
         const std::string body = "[transient]\ncontact anode = step(0.4, 0.5, 100ps)\nt_end = 300ps\n"
                                  "dt_initial = 10ps\nadaptive = off\noutput_times = 100ps, 200ps\n";
-        const auto a = run_counted(diode_device + body, dir);
-        const auto b = run_counted(diode_device + body + with, dir);
+        const auto a = run_counted(compensated_device + body, dir);
+        const auto b = run_counted(compensated_device + body + with, dir);
         REQUIRE(a.report.transient.has_value());
         REQUIRE(b.report.transient.has_value());
         const auto& ta = *a.report.transient;

@@ -1210,10 +1210,13 @@ TEST_CASE("app views 26d/26e: viridis is the default colormap in the app and nit
 }
 
 TEST_CASE("app views: a diode's I-V from 0 V on a log axis, either contact sensed", "[app]") {
-    // The sweep starts at 0 V, where the current is 0; the cathode's current is negative everywhere else.
+    // The sweep starts at 0 V, where the current is 0 to rounding (Unit 67: the fixture is a real
+    // junction now, no longer compensated, so the 0 V current is within its resolution rather than
+    // exactly 0); the cathode's current is negative everywhere else.
     const app::Workspace& w = diode().workspace;
     REQUIRE(w.sweep);
-    REQUIRE(w.sweep->points.front().terminal_current[1] == 0.0);
+    const auto& first = w.sweep->points.front();
+    REQUIRE(std::abs(first.terminal_current[1]) <= first.terminal_current_resolution[1]);
     for (const char* sense : {"anode", "cathode"}) {
         CAPTURE(sense);
         ViewSettings s;

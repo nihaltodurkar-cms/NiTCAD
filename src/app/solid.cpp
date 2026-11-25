@@ -2157,7 +2157,7 @@ Box3 profile_extent(const Box3& domain, const device::DopingProfile& p) {
     for (int a = 0; a < 3; ++a) {
         const auto i = static_cast<std::size_t>(a);
         double lo = -std::numeric_limits<double>::infinity(), hi = std::numeric_limits<double>::infinity();
-        if (a != p.axis) {
+        if (a != p.axis || p.shape == device::DepthShape::constant) {  // Unit 67: a constant is bounded on every axis
             lo = p.lo[i] - 2.0 * p.lateral;
             hi = p.hi[i] + 2.0 * p.lateral;
         } else if (p.shape == device::DepthShape::gaussian) {

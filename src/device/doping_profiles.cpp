@@ -28,6 +28,11 @@ std::optional<base::Error> check_profile(const DopingProfile& p, int dimension, 
         if (std::isnan(p.lo[i]) || std::isnan(p.hi[i]) || p.lo[i] > p.hi[i]) {
             return invalid("doping profile: a window with lo > hi or a NaN bound", k);
         }
+        // Unit 67 TAC8: a constant's window bounds it on its depth axis too; a Gaussian or erfc
+        // has its depth from the shape, and a window there was once dropped without a word.
+        if (b == p.axis && p.shape != DepthShape::constant && !(std::isinf(p.lo[i]) && std::isinf(p.hi[i]))) {
+            return invalid("doping profile: a Gaussian or erfc has no window on its depth axis (the shape sets it)", k);
+        }
     }
     return std::nullopt;
 }
@@ -57,7 +62,7 @@ double evaluate(const DopingProfile& p, const mesh::Point& x) {
     }
     double lateral = 1.0;
     for (std::size_t b = 0; b < 3; ++b) {
-        if (b == axis || (std::isinf(p.lo[b]) && std::isinf(p.hi[b]))) continue;
+        if ((b == axis && p.shape != DepthShape::constant) || (std::isinf(p.lo[b]) && std::isinf(p.hi[b]))) continue;
         lateral *= window(x[b], p.lo[b], p.hi[b], p.lateral);
     }
     return p.peak_cm3 * depth * lateral;

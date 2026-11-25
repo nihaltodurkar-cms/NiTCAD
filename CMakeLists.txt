@@ -400,7 +400,8 @@ add_library(nitcad_physics STATIC
   src/physics/gate_tunnelling.cpp
   src/physics/energy_balance.cpp
   src/physics/heavy_ion.cpp
-  src/physics/klaassen_mobility.cpp)
+  src/physics/klaassen_mobility.cpp
+  src/physics/trap_tunnelling.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -426,7 +427,8 @@ add_executable(nitcad_physics_test
   tests/physics/gate_tunnelling_test.cpp
   tests/physics/energy_balance_test.cpp
   tests/physics/heavy_ion_test.cpp
-  tests/physics/klaassen_test.cpp)
+  tests/physics/klaassen_test.cpp
+  tests/physics/trap_tunnelling_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -495,6 +497,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/gate_tunnelling_test.cpp
   tests/assemble/manufactured_test.cpp
   tests/assemble/extensibility_test.cpp
+  tests/assemble/trap_tunnelling_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
@@ -769,6 +772,7 @@ add_executable(nitcad_deck_test
   tests/deck/initial_test.cpp
   tests/deck/transient_restart_test.cpp
   tests/deck/surface_mobility_test.cpp
+  tests/deck/trap_tunnelling_test.cpp
   tests/deck/schottky_test.cpp
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp

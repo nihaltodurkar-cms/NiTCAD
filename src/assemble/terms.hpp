@@ -170,6 +170,7 @@ struct SystemData::Terms {
     class Ionization;
     class Gate;
     class Srh;
+    class TrapTunnellingSrh;
     class Auger;
     class Radiative;
     class Storage;

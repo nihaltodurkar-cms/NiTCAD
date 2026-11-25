@@ -147,6 +147,13 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         if (o.models.btbt_nonlocal != assemble::NonlocalTunnelling::off) {
             s.emplace_back("models.btbt_nonlocal", static_cast<double>(o.models.btbt_nonlocal));
         }
+        // Unit 67: likewise, with its masses.
+        if (o.models.trap_assisted_tunnelling != assemble::TrapTunnelling::off) {
+            s.emplace_back("models.trap_assisted_tunnelling",
+                           static_cast<double>(o.models.trap_assisted_tunnelling));
+            s.emplace_back("models.tat_mass_n", o.models.tat_mass_n);
+            s.emplace_back("models.tat_mass_p", o.models.tat_mass_p);
+        }
         // Unit 23: likewise.
         if (o.models.electrothermal) s.emplace_back("models.electrothermal", 1.0);
         // Unit 34: likewise.
