@@ -94,6 +94,13 @@ struct SceneAxis {
     double per_unit = 1.0;
 };
 
+// Unit 26o (BSD6): an axis-aligned plane (normal along `axis`, at at_um) in a device's bounding box, um.
+struct PlaneInset {
+    std::array<double, 3> lo_um{}, hi_um{};
+    int axis = 2;
+    double at_um = 0.0;
+};
+
 // How a 3D FieldScene is shaded (Unit 26f, KD1): classic, one light and ambient on white, as since Unit 25a;
 // enhanced, key, fill and rim lights, a sky/ground ambient and a soft highlight, the feature edges
 // that set_look adds, over a vertical gradient. The render layer defaults to classic; 2D ignores it.
@@ -138,6 +145,8 @@ struct FieldScene {
     bool show_axis_box = true;
     // Unit 26o (BSD3): what each scene axis measures, for the axis box's ticks and titles; empty, x, y and z in um.
     std::optional<std::array<SceneAxis, 3>> axes;
+    // Unit 26o (BSD6): a 3D band surface's plane in its device, drawn in a corner inset (plane_inset_figure).
+    std::optional<PlaneInset> plane_inset;
 };
 
 // --- fields -------------------------------------------------------------------------------------

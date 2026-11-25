@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <map>
 #include <string>
 #include <variant>
 
@@ -411,7 +413,63 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
     view.clip.reset();
     detail::frame(s, view);
     s.ground_shadow = false;
+    // BSD6: an axis-aligned plane's place in the device, for the corner inset.
+    if (o.plane) {
+        const Point& n = o.plane->normal;
+        for (std::size_t a = 0; a < 3; ++a) {
+            if (n[a] == 0.0 || n[(a + 1) % 3] != 0.0 || n[(a + 2) % 3] != 0.0) continue;
+            PlaneInset inset;
+            inset.axis = static_cast<int>(a);
+            inset.at_um = o.plane->offset / n[a] * 1e4;
+            inset.lo_um = {1e300, 1e300, 1e300};
+            inset.hi_um = {-1e300, -1e300, -1e300};
+            for (const auto& q : device.mesh().points()) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    inset.lo_um[k] = std::min(inset.lo_um[k], q[k] * 1e4);
+                    inset.hi_um[k] = std::max(inset.hi_um[k], q[k] * 1e4);
+                }
+            }
+            s.plane_inset = inset;
+        }
+    }
     return out;
+}
+
+void add_plane_outline(FieldScene& scene, const Geometry& geometry, const Plane& plane) {
+    // The section's edges keyed by their ends rounded to 1e-9 of the device's size: an edge two polygons share is
+    // inside the section.
+    const auto polygons = geometry.slice(plane);
+    if (polygons.empty()) return;
+    double size = 0.0;
+    for (const Polygon& p : polygons) {
+        for (const SurfaceVertex& sv : p.vertices) size = std::max({size, std::abs(sv.position[0]), std::abs(sv.position[1]), std::abs(sv.position[2])});
+    }
+    const double q = std::max(size, 1e-30) * 1e-9;
+    using Key = std::array<std::int64_t, 3>;
+    const auto key = [&](const Point& x) {
+        return Key{std::llround(x[0] / q), std::llround(x[1] / q), std::llround(x[2] / q)};
+    };
+    std::map<std::pair<Key, Key>, std::pair<std::size_t, std::pair<Point, Point>>> edges;
+    for (const Polygon& p : polygons) {
+        for (std::size_t i = 0; i < p.vertices.size(); ++i) {
+            const Point& a = p.vertices[i].position;
+            const Point& b = p.vertices[(i + 1) % p.vertices.size()].position;
+            Key ka = key(a), kb = key(b);
+            if (ka == kb) continue;
+            if (kb < ka) std::swap(ka, kb);
+            auto [it, fresh] = edges.try_emplace({ka, kb}, 0, std::pair{a, b});
+            ++it->second.first;
+        }
+    }
+    LineBatch line{"band plane", {0.80f, 0.38f, 0.05f, 1.0f}, 2.5f, true, {}};
+    for (const auto& [k, e] : edges) {
+        if (e.first != 1) continue;
+        for (const Point& x : {e.second.first, e.second.second}) {
+            line.points.push_back(Float3{static_cast<float>(x[0] * 1e4), static_cast<float>(x[1] * 1e4),
+                                         static_cast<float>(x[2] * 1e4)});
+        }
+    }
+    if (!line.points.empty()) scene.lines.push_back(std::move(line));
 }
 
 }  // namespace NiTCAD::render

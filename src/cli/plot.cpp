@@ -54,6 +54,7 @@ constexpr const char* plot_usage =
     "          --scale linear|log|signed-log  --range <lo>,<hi>\n"
     "          --colormap viridis|turbo|cividis|coolwarm|soft  --contours  --edges  --opaque\n"
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"
+    "          --plane x|y|z=<um> (the band surface's plane; outlined on a solid, field or slice view)\n"
     "          --perspective  --look classic|enhanced (enhanced: lights, feature edges, gradient)\n"
     "          --axes on|off (the enhanced look's axis box with um ticks; default on)\n"
     "  curves  --contact <name> (swept)  --sense <name>  --frequency <k>  --log\n"
@@ -723,6 +724,13 @@ int plot(int argc, char** argv) {
         if (!c) return fail(c.error().message);
         cut = std::move(*c);
     }
+    // The band surface's plane (Unit 26o, BSD6): that view's, or outlined on a 3D solid, field or slice view.
+    if (o.plane) {
+        if (o.view != "band-surface" && o.view != "solid" && o.view != "field" && o.view != "slice") {
+            return fail("--plane applies to the band-surface view and to a 3D device's solid, field and slice views");
+        }
+        if (m.dimension() != 3) return fail("--plane applies to a 3D device");
+    }
     // Hidden regions (Unit 26c, YD4): by name, on the device views of a 2D or 3D device.
     if (!o.hide.empty()) {
         const bool device_view = o.view == "solid" || o.view == "mesh" || o.view == "field" || o.view == "slice" ||
@@ -1231,6 +1239,8 @@ int plot(int argc, char** argv) {
     }
 
     if (cut && field_scene) add_cut_line(*field_scene, *cut);
+    // Unit 26o (BSD6): the band surface's plane outlined on a 3D solid, field or slice view.
+    if (o.plane && field_scene && o.view != "band-surface") add_plane_outline(*field_scene, *geometry, *o.plane);
     // Unit 26f (KD6): the look last, so its feature edges see every overlay; 2D ignores it.
     const Look look = o.look == "classic" ? Look::classic : Look::enhanced;
     if (field_scene) set_look(*field_scene, look);

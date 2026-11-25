@@ -1537,3 +1537,65 @@ TEST_CASE("app views 26o: the band surface drawn as nitcad plot draws it (BSD5, 
     CHECK(bad.status != 0);
     CHECK(bad.output.find("needs --plane in 3D") != std::string::npos);
 }
+
+TEST_CASE("app views 26o: the band surface's plane drawn on the solid, field and slice views (BSD6)", "[app]") {
+    const app::Workspace& w3 = mosfet3d().workspace;
+    const auto has_outline = [](const app::Scene& s) {
+        const auto& f = std::get<render::FieldScene>(s);
+        return std::ranges::any_of(f.lines, [](const render::LineBatch& l) { return l.name == "band plane"; });
+    };
+    for (const ViewKind k : {ViewKind::solid, ViewKind::field, ViewKind::slice}) {
+        CAPTURE(app::to_string(k));
+        ViewSettings s;
+        s.kind = k;
+        s.slices = {{2, 0.4}};
+        const auto plain = app::build_scene(w3, s);
+        REQUIRE(plain);
+        CHECK_FALSE(has_outline(*plain));
+        CHECK_FALSE(has(app::plot_arguments(s), "--plane"));
+        s.band_plane = ViewSettings::Slice{0, 1.0};
+        const auto drawn = app::build_scene(w3, s);
+        REQUIRE(drawn);
+        CHECK(has_outline(*drawn));
+        const auto args = app::plot_arguments(s);
+        CHECK(std::ranges::search(args, std::vector<std::string>{"--plane", "x=1"}).begin() != args.end());
+    }
+    // The other views keep the setting without drawing or naming it.
+    ViewSettings mesh;
+    mesh.kind = ViewKind::mesh;
+    mesh.band_plane = ViewSettings::Slice{0, 1.0};
+    const auto m = app::build_scene(w3, mesh);
+    REQUIRE(m);
+    CHECK_FALSE(has_outline(*m));
+    CHECK_FALSE(has(app::plot_arguments(mesh), "--plane"));
+    // A 2D device has no plane.
+    ViewSettings flat;
+    flat.kind = ViewKind::solid;
+    flat.band_plane = ViewSettings::Slice{0, 1.0};
+    const auto refused = app::build_scene(mosfet().workspace, flat);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().message == "--plane applies to a 3D device");
+    // nitcad plot draws the same image, and refuses --plane where the app does not draw it.
+    const fs::path out = app_test::scratch("views_26o_outline");
+    ViewSettings solid;
+    solid.kind = ViewKind::solid;
+    solid.band_plane = ViewSettings::Slice{2, 0.4};
+    auto scene = app::build_scene(w3, solid);
+    REQUIRE(scene);
+    const render::Image mine = draw(*scene, 480, 360);
+    std::string args = "plot " + app_test::quoted(mosfet3d().deck);
+    for (const std::string& a : app::plot_arguments(solid)) args += " \"" + a + "\"";
+    args += " --size 480x360 --adapter warp --out " + app_test::quoted(out / "solid.png");
+    const auto cli = app_test::nitcad(args);
+    CAPTURE(args, cli.output);
+    REQUIRE(cli.status == 0);
+    auto theirs = render::load_png(out / "solid.png");
+    REQUIRE(theirs);
+    const auto d = render::compare(mine, *theirs, 0);
+    REQUIRE(d);
+    CHECK(d->max_channel == 0);
+    const auto bad = app_test::nitcad("plot " + app_test::quoted(mosfet3d().deck) + " --view mesh --plane x=1 --out " +
+                                      app_test::quoted(out / "bad.png"));
+    CHECK(bad.status != 0);
+    CHECK(bad.output.find("--plane applies to") != std::string::npos);
+}

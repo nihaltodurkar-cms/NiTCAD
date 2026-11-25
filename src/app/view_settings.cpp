@@ -87,6 +87,12 @@ std::optional<VectorField> vector_field(const std::string& name) {
     return std::nullopt;
 }
 
+// The views that take the band surface's plane (Unit 26o, BSD6): the band surface, and a 3D device's solid, field
+// and slice views, which draw its outline.
+bool takes_band_plane(ViewKind v) noexcept {
+    return v == ViewKind::band_surface || v == ViewKind::solid || v == ViewKind::field || v == ViewKind::slice;
+}
+
 std::string current_unit(int dimension) { return dimension == 1 ? "A/cm\xC2\xB2" : dimension == 2 ? "A/cm" : "A"; }
 
 std::size_t contact_index(const device::Device& d, const std::string& name, std::size_t fallback) {
@@ -175,6 +181,17 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
             box.hi[k] = o.clip->hi_um[k] * 1e-4;
         }
         view.clip = box;
+    }
+    // The band surface's plane (Unit 26o, BSD6): its outline on a 3D device's solid, field and slice views; the
+    // other views keep the setting and leave it out (as plot_arguments does).
+    std::optional<Plane> band_plane;
+    if (o.band_plane && takes_band_plane(o.kind)) {
+        if (m.dimension() != 3) return std::unexpected(invalid("--plane applies to a 3D device"));
+        if (o.band_plane->axis < 0 || o.band_plane->axis > 2) return std::unexpected(invalid("--plane is x=<um>, y=<um> or z=<um>"));
+        Plane p;
+        p.normal[static_cast<std::size_t>(o.band_plane->axis)] = 1.0;
+        p.offset = o.band_plane->at_um * 1e-4;
+        band_plane = p;
     }
     // A cut line (Unit 26b, XD5): plotted along by the profile and bands views, drawn on 2D and 3D device views.
     std::optional<CutLine> cut;
@@ -413,6 +430,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         if (auto drawn = overlays(f); !drawn) return std::unexpected(std::move(drawn.error()));
         if (f) {
             if (cut) add_cut_line(*f, *cut);
+            if (band_plane && o.kind != ViewKind::band_surface) add_plane_outline(*f, geometry, *band_plane);
             apply_camera(*f, o);
             set_look(*f, o.enhanced ? Look::enhanced : Look::classic);  // Unit 26f (KD5): after every overlay
             f->show_axis_box = o.axis_box;  // Unit 26h (JD1, JQ3)
@@ -1028,10 +1046,10 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
         if (s.exaggeration != 1.0) a.insert(a.end(), {"--exaggeration", std::format("{}", s.exaggeration)});
         if (s.band_opacity != 1.0f) a.insert(a.end(), {"--opacity", std::format("{}", s.band_opacity)});
         if (s.by_level) a.emplace_back("--by-level");
-        if (s.band_plane) {
-            a.insert(a.end(), {"--plane", std::string(1, static_cast<char>('x' + s.band_plane->axis)) + "=" +
-                                              std::format("{}", s.band_plane->at_um)});
-        }
+    }
+    if (s.band_plane && takes_band_plane(s.kind)) {
+        a.insert(a.end(), {"--plane", std::string(1, static_cast<char>('x' + s.band_plane->axis)) + "=" +
+                                          std::format("{}", s.band_plane->at_um)});
     }
     // Unit 26c (YD4): the hidden regions on the device views (takes_hidden).
     if (takes_hidden(s.kind)) {

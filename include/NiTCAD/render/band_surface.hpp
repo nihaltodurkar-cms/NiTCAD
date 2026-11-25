@@ -71,6 +71,11 @@ struct BandSurfaceScene {
                                                    const results::BandDiagram& bands, BandLevel level,
                                                    std::size_t element, const Point& x);
 
+// The plane's outline on a device view (BSD6): the outer edges of the device's section by the plane (each edge of
+// Geometry::slice's polygons that no other polygon shares), as one on-top line batch "band plane" in dark orange.
+// Nothing when the plane misses the device.
+void add_plane_outline(FieldScene& scene, const Geometry& geometry, const Plane& plane);
+
 // One key per mesh node: -1 on insulator nodes; semiconductor nodes share a key exactly when their regions'
 // semiconductor parameters compare equal. Keys count from 0 in region order.
 [[nodiscard]] std::vector<std::int32_t> band_material_keys(const device::Device& device);

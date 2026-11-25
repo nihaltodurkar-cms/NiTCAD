@@ -19,6 +19,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/render/axes3d.hpp"
 #include "NiTCAD/render/band_surface.hpp"
 #include "NiTCAD/render/cut_line.hpp"
 #include "NiTCAD/render/geometry.hpp"
@@ -638,3 +639,89 @@ TEST_CASE("band surface: building the scene is quick (Unit 26o, BSC9; Release on
     CHECK(three <= 400.0);
 }
 #endif
+
+TEST_CASE("band surface: the plane's outline on a device view (Unit 26o, BSD6)") {
+    const Dev m = mos_like(true);
+    const Geometry g = geometry_of(m.device);
+    FieldScene s;
+    add_plane_outline(s, g, Plane{{0.0, 0.0, 1.0}, 0.3 * um});
+    REQUIRE(s.lines.size() == 1);
+    const LineBatch& l = s.lines[0];
+    CHECK(l.name == "band plane");
+    CHECK(l.on_top);
+    REQUIRE(l.points.size() % 2 == 0);
+    REQUIRE_FALSE(l.points.empty());
+    double length = 0.0;
+    for (std::size_t i = 0; i < l.points.size(); i += 2) {
+        CHECK(std::abs(l.points[i][2] - 0.3f) < 1e-5f);
+        CHECK(std::abs(l.points[i + 1][2] - 0.3f) < 1e-5f);
+        length += std::hypot(l.points[i + 1][0] - l.points[i][0], l.points[i + 1][1] - l.points[i][1]);
+    }
+    CHECK(std::abs(length - 6.0) < 1e-4);  // the section's perimeter, 2 um x 1 um, the oxide included
+    // A plane off the device draws nothing.
+    FieldScene none;
+    add_plane_outline(none, g, Plane{{0.0, 0.0, 1.0}, 5.0 * um});
+    CHECK(none.lines.empty());
+}
+
+TEST_CASE("band surface: the plane inset (Unit 26o, BSD6)") {
+    const Dev m = mos_like(true);
+    const Geometry g = geometry_of(m.device);
+    BandSurfaceOptions o;
+    o.plane = Plane{{0.0, 0.0, 1.0}, 0.3 * um};
+    auto s = band_surface_view(m.device, g, bands_of(m.device, linear_ec), o);
+    REQUIRE(s.has_value());
+    REQUIRE(s->scene.plane_inset.has_value());
+    const PlaneInset& p = *s->scene.plane_inset;
+    CHECK(p.axis == 2);
+    CHECK(std::abs(p.at_um - 0.3) < 1e-12);
+    CHECK(std::abs(p.hi_um[0] - 2.0) < 1e-9);
+    CHECK(std::abs(p.hi_um[1] - 1.0) < 1e-9);
+    CHECK(std::abs(p.hi_um[2] - 0.6) < 1e-9);
+    CHECK(p.lo_um == std::array<double, 3>{0.0, 0.0, 0.0});
+    set_look(s->scene, Look::enhanced);
+    constexpr int W = 960, H = 720;
+    const InsetFigure f = plane_inset_figure(s->scene, W, H);
+    REQUIRE(f.edges.size() == 12);
+    // Top right of the view, left of the colour bar, clear of the view cube (bottom left).
+    CHECK(f.frame[2] <= W - 130.0f);
+    CHECK(f.frame[0] > W / 2.0f);
+    CHECK(f.frame[3] < H / 2.0f);
+    const auto inside = [&](const std::array<float, 2>& q) {
+        return q[0] >= f.frame[0] - 1e-3f && q[0] <= f.frame[2] + 1e-3f && q[1] >= f.frame[1] - 1e-3f && q[1] <= f.frame[3] + 1e-3f;
+    };
+    for (const auto& e : f.edges) {
+        CHECK(inside(e[0]));
+        CHECK(inside(e[1]));
+    }
+    double area = 0.0;
+    for (std::size_t k = 0; k < 4; ++k) {
+        CHECK(inside(f.plane[k]));
+        const auto& a = f.plane[k];
+        const auto& b = f.plane[(k + 1) % 4];
+        area += 0.5 * (double(a[0]) * b[1] - double(b[0]) * a[1]);
+    }
+    CHECK(std::abs(area) > 100.0);
+    // It turns with the camera.
+    FieldScene turned = s->scene;
+    turned.camera.azimuth_deg += 40.0f;
+    CHECK(plane_inset_figure(turned, W, H).plane != f.plane);
+    // 2D: none.
+    auto flat = band_surface_view(mos_like().device, geometry_of(mos_like().device), bands_of(mos_like().device, linear_ec));
+    REQUIRE(flat.has_value());
+    CHECK_FALSE(flat->scene.plane_inset.has_value());
+    CHECK(plane_inset_figure(flat->scene, W, H).edges.empty());
+}
+
+TEST_CASE("band surface: the inset's reference image (Unit 26o, BSC8)") {
+    Renderer& r = render_test::warp();
+    const render_test::Mosfet& m3 = render_test::mosfet(true);
+    const Geometry g = geometry_of(m3.device);
+    BandSurfaceOptions o;
+    o.plane = Plane{{1.0, 0.0, 0.0}, 1.0 * um};  // across the device under the gate
+    o.view.azimuth_deg = 25.0f;
+    auto s = band_surface_view(m3.device, g, m3.point.bands, o);
+    REQUIRE(s.has_value());
+    set_look(s->scene, Look::enhanced);
+    render_test::check_image(*r.draw(s->scene, 960, 720), "bandsurface_inset");
+}

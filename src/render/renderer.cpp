@@ -1414,6 +1414,26 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
                 ink.text(name, small_text.Get(), o.x + dx * 1.3f, o.y + dy * 1.3f, 1, 1, c);
             }
         }
+        // Unit 26o (BSD6): the band surface's plane in its device, in the top right corner.
+        if (const InsetFigure inset = plane_inset_figure(s, w, h); !inset.edges.empty()) {
+            const auto& r = inset.frame;
+            d2d->FillRoundedRectangle({{r[0], r[1], r[2], r[3]}, 6.0f, 6.0f}, ink.color({1.0f, 1.0f, 1.0f, 0.82f}));
+            d2d->DrawRoundedRectangle({{r[0], r[1], r[2], r[3]}, 6.0f, 6.0f}, ink.color({0.62f, 0.65f, 0.7f, 1.0f}), 1.0f);
+            ComPtr<ID2D1PathGeometry> path;
+            ComPtr<ID2D1GeometrySink> sink;
+            if (SUCCEEDED(d2d_factory->CreatePathGeometry(&path)) && SUCCEEDED(path->Open(&sink))) {
+                sink->BeginFigure({inset.plane[0][0], inset.plane[0][1]}, D2D1_FIGURE_BEGIN_FILLED);
+                for (std::size_t k = 1; k < 4; ++k) sink->AddLine({inset.plane[k][0], inset.plane[k][1]});
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                if (SUCCEEDED(sink->Close())) {
+                    d2d->FillGeometry(path.Get(), ink.color({0.95f, 0.55f, 0.15f, 0.40f}));
+                    d2d->DrawGeometry(path.Get(), ink.color({0.80f, 0.38f, 0.05f, 1.0f}), 1.5f);
+                }
+            }
+            for (const auto& e : inset.edges) {
+                d2d->DrawLine({e[0][0], e[0][1]}, {e[1][0], e[1][1]}, ink.color({0.30f, 0.33f, 0.38f, 1.0f}), 1.0f);
+            }
+        }
         // Unit 26n (DT2): the scene's labels, centred just above their points, over everything.
         for (const SceneLabel& l : s.labels) {
             const D2D1_POINT_2F q = project(v, l.at, view);
@@ -2056,6 +2076,60 @@ std::optional<CameraPreset> view_cube_hit(const FieldScene& s, int width, int he
         if (inside_polygon(f.polygon, x, y)) return f.preset;
     }
     return std::nullopt;
+}
+
+InsetFigure plane_inset_figure(const FieldScene& s, int width, int height) {
+    InsetFigure out;
+    if (s.dimension != 3 || !s.plane_inset) return out;
+    const PlaneInset& p = *s.plane_inset;
+    const D2D1_RECT_F view = field_view_rect(s, width, height);
+    const View v = make_view(s, (view.right - view.left) / (view.bottom - view.top));
+    constexpr float side = 140.0f, margin = 10.0f, pad = 12.0f;
+    out.frame = {view.right - margin - side, view.top + margin, view.right - margin, view.top + margin + side};
+    // The device's corners and the plane's, about the box's centre, on the camera's right and up.
+    std::array<double, 3> c{};
+    for (std::size_t k = 0; k < 3; ++k) c[k] = 0.5 * (p.lo_um[k] + p.hi_um[k]);
+    const auto onto = [&](const std::array<double, 3>& q) {
+        const std::array<double, 3> d{q[0] - c[0], q[1] - c[1], q[2] - c[2]};
+        return std::array<double, 2>{dotd(d, v.right), dotd(d, v.up)};
+    };
+    std::array<std::array<double, 2>, 8> corner{};
+    for (int i = 0; i < 8; ++i) {
+        corner[static_cast<std::size_t>(i)] =
+            onto({(i & 1) ? p.hi_um[0] : p.lo_um[0], (i & 2) ? p.hi_um[1] : p.lo_um[1], (i & 4) ? p.hi_um[2] : p.lo_um[2]});
+    }
+    const auto a = static_cast<std::size_t>(std::clamp(p.axis, 0, 2));
+    const std::size_t b0 = (a + 1) % 3, b1 = (a + 2) % 3;
+    std::array<std::array<double, 2>, 4> quad{};
+    for (int i = 0; i < 4; ++i) {
+        std::array<double, 3> q{};
+        q[a] = std::clamp(p.at_um, p.lo_um[a], p.hi_um[a]);
+        q[b0] = (i == 1 || i == 2) ? p.hi_um[b0] : p.lo_um[b0];
+        q[b1] = (i >= 2) ? p.hi_um[b1] : p.lo_um[b1];
+        quad[static_cast<std::size_t>(i)] = onto(q);
+    }
+    double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300;
+    for (const auto& q : corner) {
+        x0 = std::min(x0, q[0]);
+        x1 = std::max(x1, q[0]);
+        y0 = std::min(y0, q[1]);
+        y1 = std::max(y1, q[1]);
+    }
+    const double span = std::max({x1 - x0, y1 - y0, 1e-12});
+    const double k = (side - 2.0f * pad) / span;
+    const float mx = 0.5f * (out.frame[0] + out.frame[2]), my = 0.5f * (out.frame[1] + out.frame[3]);
+    const auto px = [&](const std::array<double, 2>& q) {
+        return std::array<float, 2>{mx + static_cast<float>(k * (q[0] - 0.5 * (x0 + x1))),
+                                    my - static_cast<float>(k * (q[1] - 0.5 * (y0 + y1)))};
+    };
+    for (int i = 0; i < 8; ++i) {
+        for (int bit : {1, 2, 4}) {
+            if (i & bit) continue;
+            out.edges.push_back({px(corner[static_cast<std::size_t>(i)]), px(corner[static_cast<std::size_t>(i | bit)])});
+        }
+    }
+    for (std::size_t i = 0; i < 4; ++i) out.plane[i] = px(quad[i]);
+    return out;
 }
 
 }  // namespace NiTCAD::render
