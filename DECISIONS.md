@@ -2761,6 +2761,30 @@ recorded. The energy axis on 26h's axis box is a new kind of axis (eV, not um); 
 axes, the energy ticks go on a separate vertical scale at the left of the view instead (recorded). The FinFET
 check needs the local solved file; if it is gone, it is re-solved (18 min) only on the owner's word.
 
+**Slice 0 record (2026-11-26; owner: "Start").** Commits a83d4f0 (value-mapped scene axes, `SceneAxis` /
+`FieldScene::axes`, scene helpers shared through `src/render/scene_detail.hpp`), 566b1dd (`band_material_keys`,
+`band_value`), 8c6b528 (`band_surface_view`, `band_energy_at`, 2D), 0c839a2 (3D planes, range clipping, reference
+images; the image tests' renderer, `check_image` and solved MOSFETs moved unchanged to
+`tests/render/image_check.hpp`), 451cc49 (a range flat to rounding widened). Tests run: `render.axes3d`,
+`render.scene`, `render.image`, `render.cut_line`, `render.band_surface` (15 cases, 61 906 assertions) and
+`render_layering`, all passing in Release; no full suite, no Debug (owner rules). BSD1–BSD4 met; BSC2 (1e-9 eV
+against `cut_band_plot` on 2D and 3D, 4 lines each), BSC3 (wall at the region boundary, each side's own value; no
+wall between same-material regions; oxide a gap), BSC6 (each refusal; NaN and ±inf pieces dropped and counted; no
+non-finite vertex), BSC8 (`bandsurface_mosfet2d`, `bandsurface_mosfet3d`, `bandsurface_hetero`) and BSC9 (median
+build 7.3 ms 2D, 9.6 ms 3D plane, limits 150 / 400 ms; Release only) checked. BSC11: 8 of 10 mutants caught at
+first; M10 (a flat range not widened) exposed a real defect — renormalised weights differ from 1 by an ulp, so one
+Ec everywhere gave a 1e-16 eV span and a 1e16 µm/eV height scale — fixed (a span under 1e-9 eV counts as one
+value) and its test now kills it; M3 (the fallback returning 0) survives: no test mesh reaches the fallback.
+Calls made while coding: scene axes x = u, y = E, z = v; `band_energy_at` takes the element (Geometry has no point
+location); no plane nudge (a plane on a node plane between materials already gives the right side's pieces, pinned
+by a test, so the Risks paragraph's nudge was not needed); BSC4 read as material identity by equal semiconductor
+parameters, the solver's own test, with `render_layering` keeping physics headers out. The 3D MOSFET reference is
+byte-identical to the 2D one (that test device is z-invariant). Limitation: `render.image`'s NG5 window-memory check
+(image_test.cpp, ratio 1.0137 against 1.01) fails intermittently on this machine at the base commit too (1 of 8;
+3 of 8 at slice 0's head) — the known flake, not this slice; gates re-ran it. Deferred: hidden regions are checked
+but not hidden; `band_energy_at` rebuilds the material keys per call; the enhanced look's feature edges draw stray
+lines on steep junction slopes (`set_look`, shared code).
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
