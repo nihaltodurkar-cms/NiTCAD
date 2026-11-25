@@ -8,6 +8,7 @@
 #include <bit>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -226,5 +227,15 @@ TEST_CASE("heavy ion deck: the example deck runs (HC10)", "[deck]") {
     std::printf("HC10: example deck %.1f s, %zu points; collected %.4e of %.4e deposited (C/cm); %zu warnings\n",
                 seconds, r.points.size(), q.back(), *r.points.back().heavy_ion_charge, r.run.warnings.size());
     CHECK(r.run.warnings.empty());
-    CHECK(seconds < 120.0);
+    // HC10's 2 minutes is this workstation's Release gate; the CI runner (the environment variable CI set, as GitHub
+    // Actions sets it) and Debug builds record the time (owner, 2026-11-25, as SE5): CI Debug took 201.8 s on 614f518.
+    char* ci = nullptr;
+    std::size_t length = 0;
+    const bool on_ci = _dupenv_s(&ci, &length, "CI") == 0 && ci != nullptr && *ci != '\0';
+    std::free(ci);
+#ifdef NDEBUG
+    if (!on_ci) CHECK(seconds < 120.0);
+#else
+    (void)on_ci;
+#endif
 }
