@@ -458,3 +458,26 @@ TEST_CASE("app probe 26o: the band surface of a 3D plane under a pixel (BSD7)", 
     CHECK_THAT(*hit->energy_eV[0], WithinAbs(0.1 + 0.2 * hit->position_um[0], 1e-9));
     CHECK(app::band_hover_text(*hit, 3).find("  z 0.4 \xC2\xB5m") != std::string::npos);
 }
+
+TEST_CASE("app probe 26o: seen from above, the nearest surface answers (BSD7)", "[app]") {
+    const app::Workspace w = banded("probe_band_above", app_test::mosfet2d);
+    app::ViewSettings s;
+    s.kind = app::ViewKind::band_surface;
+    s.elevation = 89.0f;  // Ec over Ev under one pixel
+    auto built = app::build_scene(w, s);
+    REQUIRE(built);
+    const auto& scene = std::get<render::FieldScene>(*built);
+    constexpr int W = 640, H = 480;
+    const double k = (*scene.axes)[1].per_unit;
+    const double ec = 0.1 + 0.2 * 1.2;
+    const render::ScreenPoint at = render::screen_position(scene, W, H, {1.2f, static_cast<float>(k * ec), 0.5f});
+    const auto hit = app::band_pick(w, s, scene, W, H, at.x, at.y);
+    REQUIRE(hit);
+    CHECK(hit->level == 0);
+    s.band_levels = {false, true, false, false};
+    auto ev = app::build_scene(w, s);
+    REQUIRE(ev);
+    const auto below = app::band_pick(w, s, std::get<render::FieldScene>(*ev), W, H, at.x, at.y);
+    REQUIRE(below);
+    CHECK(below->level == 1);
+}
