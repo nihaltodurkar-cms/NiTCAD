@@ -2,6 +2,7 @@
 #include "plot.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -22,6 +23,7 @@
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
+#include "NiTCAD/render/band_surface.hpp"
 #include "NiTCAD/render/compare.hpp"
 #include "NiTCAD/render/edges.hpp"
 #include "NiTCAD/render/image.hpp"
@@ -40,8 +42,8 @@ constexpr const char* plot_usage =
     "usage: nitcad plot <deck | result file> [options] --out <image.png>\n"
     "  input   a deck (its device, mesh and the result files its run wrote), or a .nitsweep,\n"
     "          .nittran or .nitac file with --device <file.nitdev> [--mesh <file.nitmesh>]\n"
-    "  view    --view solid|mesh|field|slice|iso|exploded|filmstrip|iv|cv|current|bands|profile|\n"
-    "          quality|quality-histogram|difference|adapt|passes (default: field with --field, else\n"
+    "  view    --view solid|mesh|field|slice|iso|exploded|filmstrip|iv|cv|current|bands|\n"
+    "          band-surface|profile|quality|quality-histogram|difference|adapt|passes (default: field with --field, else\n"
     "          solid)\n"
     "  adapt   --view adapt: an adaptive run's estimate over its allowance against the DOFs per pass\n"
     "          (a deck with [adapt], or its .nitadapt report); --view passes: each pass's mesh, tiled\n"
@@ -65,6 +67,9 @@ constexpr const char* plot_usage =
     "          both runs' curves\n"
     "  quality --view quality (each element's minimum angle, 2D, or dihedral angle, 3D; --slice in 3D)\n"
     "          or --view quality-histogram\n"
+    "  bands   --view band-surface: Ec, Ev, EFn, EFp as energy heights (a 3D device on --plane x|y|z=<um>)\n"
+    "          [--band-levels Ec,Ev,EFn,EFp (Ec,Ev)] [--exaggeration <0.1..10>] [--opacity <0.2..1>]\n"
+    "          [--by-level] (each level in its own colour) [--range <lo>,<hi> (eV)]\n"
     "  explode --view exploded [--field <f>] [--axis x|y|z (y)] [--gap <um> (12% of the extent)]\n"
     "  film    --view filmstrip --field <f> (a transient run) [--every <k>] [--columns <c> (4)]\n"
     "          (--size is each frame's, 640x480 by default)\n"
@@ -140,6 +145,12 @@ struct Options {
     bool contours = false, edges = false, opaque = false, perspective = false, log = false;
     std::string look = "enhanced";  // Unit 26f (KD6)
     std::string axes = "on";        // Unit 26h (JD1, JQ3): the enhanced look's axis box
+    // Unit 26o (BSD5): the band surface.
+    std::array<bool, 4> band_levels{true, true, false, false};
+    double exaggeration = 1.0;
+    float opacity = 1.0f;
+    bool by_level = false;
+    std::optional<Plane> plane;
     int width = 1280, height = 960;
     bool size_given = false;
 };
@@ -482,6 +493,40 @@ int plot(int argc, char** argv) {
                 if (comma == std::string_view::npos) break;
                 rest = rest.substr(comma + 1);
             }
+        } else if (a == "--band-levels") {
+            // Unit 26o (BSD5): Ec, Ev, EFn, EFp, comma-separated, or none.
+            const auto v = value();
+            if (!v) return usage("--band-levels needs Ec, Ev, EFn or EFp, comma-separated");
+            o.band_levels = {false, false, false, false};
+            if (*v != "none") {
+                constexpr std::array<std::string_view, 4> names{"Ec", "Ev", "EFn", "EFp"};
+                for (std::string_view rest = *v;;) {
+                    const auto comma = rest.find(',');
+                    const auto k = std::ranges::find(names, rest.substr(0, comma));
+                    if (k == names.end()) return usage("--band-levels needs Ec, Ev, EFn or EFp, comma-separated");
+                    o.band_levels[static_cast<std::size_t>(k - names.begin())] = true;
+                    if (comma == std::string_view::npos) break;
+                    rest = rest.substr(comma + 1);
+                }
+            }
+        } else if (a == "--exaggeration" || a == "--opacity") {
+            const auto v = value();
+            const auto n = v ? number(*v) : std::nullopt;
+            if (!n) return usage(std::string(a) + " needs a number");
+            if (a == "--exaggeration") o.exaggeration = *n;
+            else o.opacity = static_cast<float>(*n);
+        } else if (a == "--by-level") {
+            o.by_level = true;
+        } else if (a == "--plane") {
+            const auto v = value();
+            const auto at = v && v->size() >= 3 && (*v)[1] == '=' && std::string_view("xyz").find((*v)[0]) != std::string_view::npos
+                                ? number(v->substr(2))
+                                : std::nullopt;
+            if (!at) return usage("--plane needs x=<um>, y=<um> or z=<um>");
+            Plane p;
+            p.normal[static_cast<std::size_t>((*v)[0] - 'x')] = 1.0;
+            p.offset = *at * 1e-4;
+            o.plane = p;
         } else if (a == "--slice") {
             const auto v = value();
             if (!v || v->size() < 3 || (*v)[1] != '=' || std::string_view("xyz").find((*v)[0]) == std::string_view::npos) {
@@ -1034,6 +1079,30 @@ int plot(int argc, char** argv) {
             if (!s) return fail(s.error().message);
             field_scene = std::move(*s);
         }
+    } else if (o.view == "band-surface") {
+        // Unit 26o (BSD5): the levels as energy heights over a 2D device or a 3D device's plane.
+        if (m.dimension() < 2) return fail("the band surface needs a 2D or 3D device");
+        if (o.plane && m.dimension() != 3) return fail("--plane applies to a 3D device");
+        if (!o.plane && m.dimension() == 3) return fail("--view band-surface needs --plane in 3D");
+        if (!(o.exaggeration >= 0.1 && o.exaggeration <= 10.0)) return fail("--exaggeration is from 0.1 to 10");
+        if (!(o.opacity >= 0.2f && o.opacity <= 1.0f)) return fail("--opacity is from 0.2 to 1");
+        if (std::ranges::none_of(o.band_levels, [](bool b) { return b; })) {
+            return fail("--band-levels needs a level: Ec, Ev, EFn or EFp");
+        }
+        auto p = pick();
+        if (!p) return fail(p.error());
+        BandSurfaceOptions b;
+        b.levels = o.band_levels;
+        b.plane = o.plane;
+        b.exaggeration = o.exaggeration;
+        b.opacity = o.opacity;
+        b.range_eV = o.range;
+        b.by_level = o.by_level;
+        b.map = *colormap;
+        b.view = view;
+        auto s = band_surface_view(*device, *geometry, (*p)->bands, b);
+        if (!s) return fail(s.error().message);
+        field_scene = std::move(s->scene);
     } else {
         return usage("unknown view " + o.view);
     }

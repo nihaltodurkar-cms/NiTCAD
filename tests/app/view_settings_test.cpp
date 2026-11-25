@@ -3,9 +3,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <string>
 #include <utility>
@@ -13,6 +15,7 @@
 
 #include "NiTCAD/app/run_controller.hpp"
 #include "NiTCAD/app/view_settings.hpp"
+#include "NiTCAD/render/band_surface.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "fixtures.hpp"
 
@@ -87,7 +90,8 @@ bool has(const std::vector<std::string>& v, const std::string& x) { return std::
 TEST_CASE("app views: names, and the views and fields a workspace offers", "[app]") {
     for (const ViewKind v : {ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::slice, ViewKind::iso,
                              ViewKind::bands, ViewKind::profile, ViewKind::iv, ViewKind::cv, ViewKind::current,
-                             ViewKind::quality, ViewKind::quality_histogram, ViewKind::difference, ViewKind::exploded}) {
+                             ViewKind::quality, ViewKind::quality_histogram, ViewKind::difference, ViewKind::exploded,
+                             ViewKind::band_surface}) {
         CHECK(app::find_view(app::to_string(v)) == v);
     }
     CHECK_FALSE(app::find_view("filmstrip"));  // nitcad plot's alone (Unit 26c: playback instead)
@@ -98,7 +102,7 @@ TEST_CASE("app views: names, and the views and fields a workspace offers", "[app
     CHECK(app::available_views(diode().workspace) == V{ViewKind::profile, ViewKind::bands, ViewKind::iv});
     CHECK(app::available_views(mosfet().workspace) ==
           V{ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::iso, ViewKind::profile, ViewKind::bands,
-            ViewKind::iv, ViewKind::quality,
+            ViewKind::band_surface, ViewKind::iv, ViewKind::quality,
             ViewKind::quality_histogram});  // profile and bands along a cut line, mesh quality (Unit 26b)
     const auto fields = app::available_fields(mosfet().workspace);
     for (const char* f : {"potential", "n", "p", "Ec", "doping", "R", "srh", "E", "J"}) CHECK(has(fields, f));
@@ -1393,4 +1397,143 @@ TEST_CASE("app views 26h: smooth moves follow Windows' animation setting (JD5, J
     CHECK_FALSE(app::smooth_moves(true, false, false));  // "Show animations" off: instant
     CHECK_FALSE(app::smooth_moves(false, true, false));  // tests and the self-test: instant
     CHECK(app::smooth_moves(false, false, true));        // a test forcing them
+}
+
+TEST_CASE("app views 26o: the band surface, as nitcad plot takes it (BSD5)", "[app]") {
+    CHECK(app::to_string(ViewKind::band_surface) == "band-surface");
+    CHECK_FALSE(app::is_plot(ViewKind::band_surface));
+    const ViewSettings fresh;
+    CHECK(fresh.band_levels == std::array<bool, 4>{true, true, false, false});
+    CHECK(fresh.exaggeration == 1.0);
+    CHECK(fresh.band_opacity == 1.0f);
+    CHECK_FALSE(fresh.by_level);
+    CHECK_FALSE(fresh.band_plane);
+
+    // 2D: the scene is render's band surface for the point's bands, with the app's look.
+    const app::Workspace& w2 = mosfet().workspace;
+    ViewSettings s;
+    s.kind = ViewKind::band_surface;
+    s.point = 1;
+    s.band_levels = {true, false, true, false};
+    s.exaggeration = 2.0;
+    s.band_opacity = 0.6f;
+    s.by_level = true;
+    s.range = std::pair{-1.5, 1.0};
+    const auto built = app::build_scene(w2, s);
+    REQUIRE(built);
+    const auto& scene = std::get<render::FieldScene>(*built);
+    render::BandSurfaceOptions o;
+    o.levels = {true, false, true, false};
+    o.exaggeration = 2.0;
+    o.opacity = 0.6f;
+    o.by_level = true;
+    o.range_eV = std::pair{-1.5, 1.0};
+    auto direct = render::band_surface_view(*w2.device, *w2.geometry, w2.points[1].bands, o);
+    REQUIRE(direct);
+    for (const render::TriangleBatch& d : direct->scene.triangles) {
+        CAPTURE(d.name);
+        const auto t = std::ranges::find(scene.triangles, d.name, &render::TriangleBatch::name);
+        REQUIRE(t != scene.triangles.end());
+        REQUIRE(t->vertices.size() == d.vertices.size());
+        bool same = true;
+        for (std::size_t i = 0; i < d.vertices.size(); ++i) same = same && t->vertices[i].position == d.vertices[i].position;
+        CHECK(same);
+    }
+    REQUIRE(scene.axes);
+    CHECK((*scene.axes)[1].per_unit == direct->um_per_eV);
+    const auto args = app::plot_arguments(s);
+    for (const std::vector<std::string>& pair :
+         {std::vector<std::string>{"--view", "band-surface"}, {"--band-levels", "Ec,EFn"}, {"--exaggeration", "2"},
+          {"--opacity", "0.6"}, {"--range", "-1.5,1"}}) {
+        CAPTURE(pair[0]);
+        CHECK(std::ranges::search(args, pair).begin() != args.end());
+    }
+    CHECK(has(args, "--by-level"));
+    CHECK_FALSE(has(args, "--field"));
+    CHECK_FALSE(has(args, "--plane"));
+    // The defaults are not named.
+    ViewSettings plain;
+    plain.kind = ViewKind::band_surface;
+    for (const char* a : {"--band-levels", "--exaggeration", "--opacity", "--by-level"}) CHECK_FALSE(has(app::plot_arguments(plain), a));
+
+    // 3D: a plane is needed; it is the band surface's, named --plane.
+    const app::Workspace& w3 = mosfet3d().workspace;
+    const auto views3 = app::available_views(w3);
+    CHECK(std::ranges::find(views3, ViewKind::band_surface) != views3.end());
+    ViewSettings t;
+    t.kind = ViewKind::band_surface;
+    const auto none = app::build_scene(w3, t);
+    REQUIRE_FALSE(none);
+    CHECK(none.error().message == "--view band-surface needs --plane in 3D");
+    t.band_plane = ViewSettings::Slice{2, 0.4};
+    const auto three = app::build_scene(w3, t);
+    REQUIRE(three);
+    CHECK((*std::get<render::FieldScene>(*three).axes)[0].title == "x (\xC2\xB5m)");
+    const auto targs = app::plot_arguments(t);
+    CHECK(std::ranges::search(targs, std::vector<std::string>{"--plane", "z=0.4"}).begin() != targs.end());
+    // A plane in 2D, and bad values, are refused with nitcad plot's messages.
+    s.band_plane = ViewSettings::Slice{2, 0.4};
+    CHECK(app::build_scene(w2, s).error().message == "--plane applies to a 3D device");
+    s.band_plane.reset();
+    s.exaggeration = 20.0;
+    CHECK(app::build_scene(w2, s).error().message == "--exaggeration is from 0.1 to 10");
+    s.exaggeration = 1.0;
+    s.band_opacity = 0.1f;
+    CHECK(app::build_scene(w2, s).error().message == "--opacity is from 0.2 to 1");
+    s.band_opacity = 1.0f;
+    s.band_levels = {false, false, false, false};
+    CHECK(app::build_scene(w2, s).error().message == "--band-levels needs a level: Ec, Ev, EFn or EFp");
+    // Before a run there is no band surface.
+    const fs::path dir = app_test::scratch("views_26o_unrun");
+    auto unrun = app::workspace_from_deck(app_test::write(dir, "d.deck", app_test::mosfet2d));
+    REQUIRE(unrun);
+    const auto unrun_views = app::available_views(*unrun);
+    CHECK(std::ranges::find(unrun_views, ViewKind::band_surface) == unrun_views.end());
+}
+
+TEST_CASE("app views 26o: the band surface drawn as nitcad plot draws it (BSD5, WG4's choices)", "[app]") {
+    const fs::path out = app_test::scratch("views_26o_images");
+    std::vector<std::pair<const Ran*, ViewSettings>> cases;
+    {
+        ViewSettings s;
+        s.kind = ViewKind::band_surface;
+        cases.emplace_back(&mosfet(), s);
+        s.band_levels = {true, true, true, true};
+        s.by_level = true;
+        s.exaggeration = 0.5;
+        s.band_opacity = 0.7f;
+        s.azimuth = 30.0f;
+        cases.emplace_back(&mosfet(), s);
+    }
+    {
+        ViewSettings s;
+        s.kind = ViewKind::band_surface;
+        s.band_plane = ViewSettings::Slice{0, 1.0};
+        s.range = std::pair{-1.0, 0.8};
+        cases.emplace_back(&mosfet3d(), s);
+    }
+    int k = 0;
+    for (const auto& [ran, s] : cases) {
+        CAPTURE(k);
+        auto scene = app::build_scene(ran->workspace, s);
+        REQUIRE(scene);
+        const render::Image mine = draw(*scene, 480, 360);
+        const fs::path png = out / std::format("bs{}.png", k++);
+        std::string args = "plot " + app_test::quoted(ran->deck);
+        for (const std::string& a : app::plot_arguments(s)) args += " \"" + a + "\"";
+        args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+        const auto cli = app_test::nitcad(args);
+        CAPTURE(args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto theirs = render::load_png(png);
+        REQUIRE(theirs);
+        const auto d = render::compare(mine, *theirs, 0);
+        REQUIRE(d);
+        CHECK(d->max_channel == 0);
+    }
+    // nitcad plot refuses what the app refuses.
+    const auto bad = app_test::nitcad("plot " + app_test::quoted(mosfet3d().deck) + " --view band-surface --out " +
+                                      app_test::quoted(out / "bad.png"));
+    CHECK(bad.status != 0);
+    CHECK(bad.output.find("needs --plane in 3D") != std::string::npos);
 }

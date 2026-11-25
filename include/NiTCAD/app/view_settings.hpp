@@ -37,6 +37,8 @@ enum class ViewKind : unsigned char {
     difference,         // run B - run A of a field (2D map, 3D surface or slices, 1D profile)
     // Unit 26c (YD2).
     exploded,  // the regions moved apart along an axis (3D), the field on them or not
+    // Unit 26o (BSD5).
+    band_surface,  // the band edges and quasi-Fermi levels as energy heights over a 2D device or a 3D plane
 };
 
 [[nodiscard]] std::string_view to_string(ViewKind v) noexcept;  // as `nitcad plot --view` names it
@@ -119,6 +121,16 @@ struct ViewSettings {
     // half size (render::Camera). `nitcad plot` has neither: plot_arguments leaves them out.
     float zoom = 1.0f;
     float pan_x = 0.0f, pan_y = 0.0f;
+    // The band surface (Unit 26o, BSD5), as `nitcad plot --view band-surface --band-levels --exaggeration --opacity
+    // --by-level --plane` takes it: the levels shown (Ec, Ev, EFn, EFp), the heights' scale [0.1, 10], the opacity
+    // [0.2, 1], colour by level rather than energy, and a 3D device's plane (needed there; refused in 2D). The
+    // energy range is `range` (eV) and the colormap `colormap`. The plane's outline is drawn on a 3D device's
+    // solid, field and slice views too (BSD6).
+    std::array<bool, 4> band_levels{true, true, false, false};
+    double exaggeration = 1.0;
+    float band_opacity = 1.0f;
+    bool by_level = false;
+    std::optional<Slice> band_plane;
 };
 
 // Whether the settings' view is a difference drawn cool-warm (XD6, ZD8): one with no other colormap chosen than
