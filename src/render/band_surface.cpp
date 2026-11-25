@@ -350,9 +350,12 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
     if (o.range_eV) {
         lo = o.range_eV->first;
         hi = o.range_eV->second;
-    } else if (!(hi > lo)) {
-        lo -= 0.5;
-        hi += 0.5;
+    } else if (!(hi - lo > 1e-9)) {
+        // One value (to rounding: renormalised weights may differ from 1 by an ulp): widened, so the heights stay
+        // on the scale of the base.
+        const double mid = 0.5 * (lo + hi);
+        lo = mid - 0.5;
+        hi = mid + 0.5;
     }
     out.range_eV = {lo, hi};
     const double extent_um = std::max(uhi - ulo, vhi - vlo) * um_per_cm;

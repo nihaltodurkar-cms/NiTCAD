@@ -383,13 +383,16 @@ TEST_CASE("band surface: refusals and dropped pieces (Unit 26o, BSC6)") {
             if (b.shading == Shading::field) CHECK(std::isfinite(v.value));
         }
     }
-    // Flat bands (Review Focus 5): a finite height scale over a widened range.
+    // Flat bands (Review Focus 5): Ec alone, one value everywhere; a finite height scale over a widened range.
+    BandSurfaceOptions ec_only = o;
+    ec_only.levels = {true, false, false, false};
     const auto level =
-        band_surface_view(m.device, g, bands_of(m.device, [](double, double, std::int32_t) { return 0.3; }), o);
+        band_surface_view(m.device, g, bands_of(m.device, [](double, double, std::int32_t) { return 0.3; }), ec_only);
     REQUIRE(level.has_value());
     CHECK(std::isfinite(level->um_per_eV));
     CHECK(level->um_per_eV > 0.0);
-    CHECK(level->range_eV.first < level->range_eV.second);
+    CHECK(level->range_eV.second - level->range_eV.first >= 1.0 - 1e-9);  // widened by 0.5 eV each side
+    CHECK(level->um_per_eV < 10.0);
 }
 
 TEST_CASE("band surface: colour by energy or by level (Unit 26o, BSD4)") {
