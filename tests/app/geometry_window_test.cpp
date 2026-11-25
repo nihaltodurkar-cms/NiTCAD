@@ -351,7 +351,9 @@ TEST_CASE("app window geometry: a drag redraws within 16 ms a frame with 200 sha
     std::ranges::sort(ms);
     const double median = ms[ms.size() / 2];
     WARN("GE5: a drag frame, median " << median << " ms (slowest " << ms.back() << " ms), " << vertices << " vertices, software Direct2D");
-    CHECK(median <= 16.0);
+    // Recorded on the CI runner (owner, 2026-11-25, as SE5): its Debug build drew 17.6 ms on WARP; this workstation is
+    // the gate.
+    if (!app_test::on_ci()) CHECK(median <= 16.0);
 }
 
 // --- slice 3: live validation, Run, the mesh preview, a drawn MOSFET (GD9, GE7, GE8) ------------------------------
