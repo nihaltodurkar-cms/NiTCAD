@@ -4239,6 +4239,10 @@ Jacobian entry itself was right (diagnosed, not a criterion change). Results, Re
 - Run: physics, assemble, app binaries whole; solve `[klaassen]`, `[resume]`; the deck's mobility cases. Full
   suites not run (owner's word); no Debug.
 
+**Slice 2 docs (2026-11-25).** ARCHITECTURE.md: the Unit 66 as-built block at the end of 6.2 and the 11.3 nanoscale
+row's mobility mention. Remaining: KC1 (NG1 traces vs `main`) and KC10 (full Release and Debug suites), on the
+owner's word.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
