@@ -85,6 +85,23 @@ set(_nitcad_fast_debug "$<AND:$<CONFIG:Debug>,$<BOOL:$<TARGET_PROPERTY:NITCAD_FA
 add_compile_options($<${_nitcad_slow_debug}:/Od> $<${_nitcad_slow_debug}:/Ob0> $<${_nitcad_slow_debug}:/RTC1>
                     $<${_nitcad_fast_debug}:/O2> $<${_nitcad_fast_debug}:/Ob2>)
 add_compile_options(${NITCAD_LANG_FLAGS} /W4 /WX /external:W0)
+
+# AddressSanitizer (the release-asan preset): first-party code is instrumented; vcpkg
+# libraries are not, which ASan on MSVC supports with the dynamic CRT. /Zi and /DEBUG give
+# reports file:line; ASan rejects incremental linking. The runtime DLL
+# (clang_rt.asan_dynamic-x86_64.dll) comes from the MSVC bin directory on a developer
+# shell's PATH.
+option(NITCAD_ASAN "Build with AddressSanitizer (/fsanitize=address)" OFF)
+if(NITCAD_ASAN)
+  add_compile_options(/fsanitize=address /Zi)
+  add_link_options(/DEBUG /INCREMENTAL:NO)
+  # The STL container annotations must match across every object; the vcpkg libraries
+  # (Catch2.lib) are built without them, so they are off (LNK2038 otherwise). Only the
+  # container-overflow check is lost; heap/stack/global out-of-bounds and use-after-free stay.
+  add_compile_definitions(_DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION
+                          _DISABLE_OPTIONAL_ANNOTATION)
+  message(STATUS "AddressSanitizer: ON")
+endif()
 add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
 # --- Dependencies (from vcpkg.json) ------------------------------------------------
