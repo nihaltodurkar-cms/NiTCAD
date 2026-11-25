@@ -4252,6 +4252,9 @@ whichever case runs first) now lands there, not in P3, and the records together 
 MKL trace with the same fixture attribution. Run identities (deck traces 65/65 identical) and Jacobian patterns
 unchanged.
 
+**KC10 (2026-11-25, owner's word).** Release: build `/W4 /WX` clean, full suite 302/302 (3787 s, ctest -j 4).
+Debug not run: the owner stopped it before it started ("dont start the debug process"); Debug is left to CI.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
