@@ -17,7 +17,7 @@ constexpr std::array<KeySpec, 4> mesh_keys{{{"min_angle", "20.7", "generate2d, e
                                             {"max_nodes", "2000000", "generated meshes: node limit"},
                                             {"sweep", "off", "extrude3d: on sweeps a 2D cross-section mesh along the axis"}}};
 
-constexpr std::array<KeySpec, 25> model_keys{{
+constexpr std::array<KeySpec, 28> model_keys{{
     {"doping_mobility", "on", "doping-dependent mobility"},
     {"hole_mobility", "automatic", "automatic | caughey_thomas | masetti | klaassen | klaassen_equilibrium"},
     {"electron_mobility", "caughey_thomas", "caughey_thomas | masetti | klaassen | klaassen_equilibrium"},
@@ -41,6 +41,9 @@ constexpr std::array<KeySpec, 25> model_keys{{
     {"impact_current_resolution", "0", "impact ionization: current resolution"},
     {"btbt_local", "off", "local band-to-band tunnelling"},
     {"btbt_nonlocal", "off", "off | kane | direct_wkb"},
+    {"trap_assisted_tunnelling", "off", "off | hurkx (trap-assisted tunnelling, with srh)"},
+    {"tat_mass_n", "0.25", "hurkx: electron tunnelling mass, m0"},
+    {"tat_mass_p", "0.25", "hurkx: hole tunnelling mass, m0"},
     {"electrothermal", "off", "lattice heat equation"},
     {"energy_balance", "off", "carrier temperatures (energy balance)"},
 }};

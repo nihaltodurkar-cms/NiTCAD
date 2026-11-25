@@ -11,7 +11,8 @@
 //
 //     Gamma = 2a int_0^1 v exp(a v^2 - K v^3) dv,   dGamma/dF = (K/F) 2a int_0^1 v^4 exp(...) dv,
 //
-// whose integrand is analytic, by 16-panel 8-point Gauss-Legendre on [0, v_max], v_max = 1 or the
+// whose integrand is analytic, by 8-point Gauss-Legendre on at least 16 panels of [0, v_max] (enough
+// that the exponent changes by at most 4 across one), v_max = 1 or the
 // point past the maximum where the exponent has fallen 50 below it (the rest is below e^-50 of
 // the peak). Gamma -> a Gamma(5/3) K^(-2/3) as F -> 0 (so dGamma/dF is unbounded there) and
 // -> 2 sqrt(3 pi) (F/F_G) exp((F/F_G)^2), F_G = sqrt(24 m m0 (kT)^3) / (q hbar), where the peak
@@ -19,6 +20,9 @@
 #pragma once
 
 namespace NiTCAD::physics {
+
+// The tunnelling mass of the ATLAS manual's default (MASS.TUNNEL, Table 3-7), in m0.
+inline constexpr double hurkx_default_mass = 0.25;
 
 struct TrapTunnellingFactor {
     double gamma;  // Gamma, dimensionless

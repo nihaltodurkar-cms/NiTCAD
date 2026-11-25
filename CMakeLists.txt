@@ -489,6 +489,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/gate_tunnelling_test.cpp
   tests/assemble/manufactured_test.cpp
   tests/assemble/extensibility_test.cpp
+  tests/assemble/trap_tunnelling_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
@@ -760,6 +761,7 @@ add_executable(nitcad_deck_test
   tests/deck/initial_test.cpp
   tests/deck/transient_restart_test.cpp
   tests/deck/surface_mobility_test.cpp
+  tests/deck/trap_tunnelling_test.cpp
   tests/deck/schottky_test.cpp
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp

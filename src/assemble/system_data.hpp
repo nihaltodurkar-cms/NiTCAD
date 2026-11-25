@@ -272,6 +272,14 @@ struct SystemData {
         double t[3];
         double field;  // [V/cm] per unit (psi_b - psi_a)
     };
+    // Trap-assisted tunnelling (Unit 67, TAD3): per semiconductor node off the ohmic contacts with
+    // carrier edges, its edges (in field_edges_) and the pseudo-inverse of sum t t^T, as
+    // TunnelNode; trap_index_ maps a node to its entry (npos: plain SRH, Gamma = 0).
+    struct TrapNode {
+        std::size_t node;
+        std::size_t first, last;
+        double inverse[9];
+    };
 
     // Nonlocal tunnelling (Unit 20): per frozen path, the nodes whose psi its rows read (columns),
     // the nodes its electrons go to (deposit), the start's hole-row positions per column and the
@@ -533,6 +541,9 @@ struct SystemData {
     std::vector<ImpactEdge> impact_edges_;
     std::vector<TunnelNode> tunnel_nodes_;
     std::vector<FieldEdge> field_edges_;
+    std::vector<TrapNode> trap_nodes_;     // Unit 67; empty with the model off
+    std::vector<std::size_t> trap_index_;  // per node; empty with the model off
+    double tat_mass_n_ = 0.0, tat_mass_p_ = 0.0;
     // Nonlocal tunnelling: the model, the device's cells, per node the longest path that may start
     // there (0: none) [cm], the material's gap at T [eV] and tunnelling masses [kg] (direct_wkb),
     // and the Kane pair (kane). The frozen paths are SystemState's.

@@ -26,6 +26,7 @@ constexpr std::array<std::string_view, 3> electrodes{"n_poly", "p_poly", "metal"
 constexpr std::array<std::string_view, 2> transports{"drift_diffusion", "thermionic"};
 constexpr std::array<std::string_view, 2> thermal_kinds{"isothermal", "resistance"};
 constexpr std::array<std::string_view, 3> btbt_nonlocal{"off", "kane", "direct_wkb"};
+constexpr std::array<std::string_view, 2> trap_tunnelling{"off", "hurkx"};
 constexpr std::array<std::string_view, 5> hole_mobility{"automatic", "caughey_thomas", "masetti",
                                                        "klaassen", "klaassen_equilibrium"};
 constexpr std::array<std::string_view, 4> electron_mobility{"caughey_thomas", "masetti",
@@ -139,7 +140,7 @@ constexpr std::array<KeyInfo, 4> thermal_contact_keys{{
     {"resistance", 0, false, "<K cm^2/W>", "resistance: the thermal resistance", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 25> model_keys{{
+constexpr std::array<KeyInfo, 28> model_keys{{
     {"doping_mobility", 0, false, "on", "doping-dependent mobility", on_off, {}, {}},
     {"hole_mobility", 0, false, "automatic", "automatic | caughey_thomas | masetti | klaassen | klaassen_equilibrium", hole_mobility, {}, {}},
     {"electron_mobility", 0, false, "caughey_thomas", "caughey_thomas | masetti | klaassen | klaassen_equilibrium", electron_mobility, {}, {}},
@@ -165,6 +166,10 @@ constexpr std::array<KeyInfo, 25> model_keys{{
     {"impact_current_resolution", 0, false, "0", "impact ionization: current resolution", {}, {}, {}},
     {"btbt_local", 0, false, "off", "local band-to-band tunnelling", on_off, {}, {}},
     {"btbt_nonlocal", 0, false, "off", "off | kane | direct_wkb", btbt_nonlocal, {}, {}},
+    {"trap_assisted_tunnelling", 0, false, "off", "off | hurkx (trap-assisted tunnelling, with srh)",
+     trap_tunnelling, {}, {}},
+    {"tat_mass_n", 0, false, "0.25", "hurkx: electron tunnelling mass, m0", {}, {}, {}},
+    {"tat_mass_p", 0, false, "0.25", "hurkx: hole tunnelling mass, m0", {}, {}, {}},
     {"electrothermal", 0, false, "off", "lattice heat equation", on_off, {}, {}},
     {"energy_balance", 0, false, "off", "carrier temperatures (energy balance)", on_off, {}, {}},
 }};

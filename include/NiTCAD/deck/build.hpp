@@ -80,6 +80,8 @@
 //                     resistance
 //   [models]          each assemble::PhysicsModels switch by its name = on | off;
 //                     btbt_nonlocal = off | kane | direct_wkb; impact_current_resolution = <x>;
+//                     trap_assisted_tunnelling = off | hurkx  (Unit 67; opt-in, with srh);
+//                       tat_mass_n, tat_mass_p = <m / m0>  (defaults 0.25)
 //                     hole_mobility = automatic | caughey_thomas | masetti  (Units 34, 35;
 //                       automatic, the default: Masetti in silicon regions);
 //                     electron_mobility = caughey_thomas | masetti  (Unit 38; opt-in)

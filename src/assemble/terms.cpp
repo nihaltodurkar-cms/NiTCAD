@@ -298,6 +298,96 @@ public:
     }
 };
 
+// SRH with Hurkx trap-assisted tunnelling (Unit 67, TAD4): in place of Srh with the model on.
+// Each lifetime over 1 + Gamma_c(F), F = |E| of the node's field by least squares from its edges
+// (as LocalTunnelling), a_n = ln(Nc / n_ie), a_p = ln(Nv / n_ie):
+//     R = (n p - E) / [tau_p'(n + n_ie) + tau_n'(p + n_ie)],   tau_c' = tau_c / (1 + Gamma_c),
+//     dR/dGamma_n = R tau_n (p + n_ie) / ((1 + Gamma_n)^2 den), likewise for holes,
+// and dR/dpsi through dGamma/dF E_r / F and the edges' psi. Nodes off the table (contacts, no
+// carrier edges) and zero-field nodes are plain SRH.
+class SystemData::Terms::TrapTunnellingSrh final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"SRH recombination (trap-assisted tunnelling)", TermDomain::global, densities,
+                all3, false};
+    }
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
+        const std::size_t m = s.m_;
+        const std::span<const double> x = ev.x;
+        const int D = s.dimension_;
+        const double T = s.temperature_K_;
+        for (std::size_t i = 0; i < s.node_count(); ++i) {
+            if (!semiconductor(s, i)) continue;
+            const double n = x[m * i + 1], p = x[m * i + 2];
+            const double k = s.volume_[i] * s.rate_scale_;
+            const std::size_t t = s.trap_index_[i];
+            const TrapNode* node = t < s.trap_nodes_.size() ? &s.trap_nodes_[t] : nullptr;
+            double E[3] = {}, F = 0.0;
+            if (node != nullptr) {
+                for (std::size_t q = node->first; q < node->last; ++q) {
+                    const FieldEdge& fe = s.field_edges_[q];
+                    const EdgeTerm& e = s.edges_[fe.edge];
+                    const double Ek = -fe.field * (x[m * e.b] - x[m * e.a]);
+                    for (int r = 0; r < D; ++r) {
+                        double w = 0.0;  // (P t_k)_r
+                        for (int c = 0; c < D; ++c) w += node->inverse[r * D + c] * fe.t[c];
+                        E[r] += w * Ek;
+                    }
+                }
+                double F2 = 0.0;
+                for (int r = 0; r < D; ++r) F2 += E[r] * E[r];
+                F = std::sqrt(F2);
+            }
+            physics::TrapTunnellingFactor gn{0.0, 0.0}, gp{0.0, 0.0};
+            if (F > 0.0) {
+                if (s.log_dos_n_[i] > 0.0) {
+                    gn = physics::hurkx_enhancement(s.log_dos_n_[i], s.tat_mass_n_, T, F);
+                }
+                if (s.log_dos_p_[i] > 0.0) {
+                    gp = physics::hurkx_enhancement(s.log_dos_p_[i], s.tat_mass_p_, T, F);
+                }
+            }
+            const double tn = s.tau_n_[i] / (1.0 + gn.gamma);
+            const double tp = s.tau_p_[i] / (1.0 + gp.gamma);
+            const physics::RecombinationRate r =
+                physics::srh_recombination(n, p, product(s, ev, i), s.n_ie_[i], tn, tp);
+            ev.f[m * i + 1] -= k * r.rate;
+            ev.f[m * i + 2] += k * r.rate;
+            if (!ev.jacobian()) continue;
+            at(s, ev, i, 1, 1) -= k * r.d_dn;
+            at(s, ev, i, 1, 2) -= k * r.d_dp;
+            at(s, ev, i, 2, 1) += k * r.d_dn;
+            at(s, ev, i, 2, 2) += k * r.d_dp;
+            if (node == nullptr || F == 0.0 || (gn.d_dF == 0.0 && gp.d_dF == 0.0)) continue;
+            const double ni = s.n_ie_[i];
+            const double den = tp * (n + ni) + tn * (p + ni);
+            const double dR_dF =
+                r.rate / den *
+                (tn * (p + ni) / (1.0 + gn.gamma) * gn.d_dF +
+                 tp * (n + ni) / (1.0 + gp.gamma) * gp.d_dF);
+            const std::span<double> values = ev.values;
+            for (std::size_t q = node->first; q < node->last; ++q) {
+                const FieldEdge& fe = s.field_edges_[q];
+                const EdgeTerm& e = s.edges_[fe.edge];
+                double dEk = 0.0;  // dR / dE_k
+                for (int r2 = 0; r2 < D; ++r2) {
+                    double w = 0.0;
+                    for (int c = 0; c < D; ++c) w += node->inverse[r2 * D + c] * fe.t[c];
+                    dEk += w * dR_dF * E[r2] / F;
+                }
+                const double d_b = -dEk * fe.field;  // dR / dpsi_b; dR / dpsi_a = -d_b
+                const bool i_is_a = e.a == i;
+                const std::size_t* pos = i_is_a ? e.ab : e.ba;  // row i, the other end's psi column
+                const double own = i_is_a ? -d_b : d_b, other = i_is_a ? d_b : -d_b;
+                values[s.block_[m * m * i + m]] -= k * own;      // (n, psi) of i
+                values[s.block_[m * m * i + 2 * m]] += k * own;  // (p, psi) of i
+                values[pos[1]] -= k * other;                     // (n, psi) of the other end
+                values[pos[3]] += k * other;                     // (p, psi) of the other end
+            }
+        }
+    }
+};
+
 // Auger recombination (physical densities, add_physical).
 class SystemData::Terms::Auger final : public Term {
 public:
@@ -1121,8 +1211,16 @@ std::span<const CompositionEntry> SystemData::Terms::isothermal_table() {
          [](const SystemData&, const SystemState&, M m) { return m.incomplete_ionization; },
          &make_term<Ionization>},
         {+E::gate, gated, &make_term<Gate>},
-        {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.srh; },
+        {+E::continuity,
+         [](const SystemData&, const SystemState&, M m) {
+             return m.srh && m.trap_assisted_tunnelling == TrapTunnelling::off;
+         },
          &make_term<Srh>},
+        {+E::continuity,
+         [](const SystemData&, const SystemState&, M m) {
+             return m.srh && m.trap_assisted_tunnelling != TrapTunnelling::off;
+         },
+         &make_term<TrapTunnellingSrh>},
         {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.auger; },
          &make_term<Auger>},
         {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.radiative; },

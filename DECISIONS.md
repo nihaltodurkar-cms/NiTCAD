@@ -4388,6 +4388,59 @@ field), and they guard limits a stub satisfies trivially.
 - The plan's "15 panels" mutant was replaced. With adaptive panels it changes Γ by about 1e-14, so it is
   equivalent under TAC3's 1e-12 and cannot be caught.
 
+**Slice 1 (2026-11-25).** Assembly (`TrapTunnellingSrh`, a global term over all three columns; plain `Srh` when
+the model is off), the deck keys, the run record and the vocabularies.
+- Results:
+  - TAC6 (rate): with each lifetime over 1 + Γ, the term equals SRH to 1e-14 (a zero-current state, unequal
+    masses 0.2 and 0.6).
+  - TAC7 (Jacobian): the finite-difference gate, worst 3.2e-7; with local band-to-band and impact ionization too.
+  - TAC9, TAC10: the deck values, errors, refusals and run record; `models.trap_assisted_tunnelling` and the
+    masses are written only when on.
+  - Review focus 1 and 2: `tat zero field keeps SRH`, `tat contact nodes plain srh`.
+  - TAC1: **met.** NG1 traces of the five traced binaries (assemble, deck, adapt, validation, solve; Release),
+    branch against `main` 0f49230, compared order-independently by case. All five pass. 634 common cases:
+    632 identical; the two quasi-static C-V cases of `mos_test.cpp` differ only by attribution (the shared
+    static fixture lands in whichever runs first), and their pooled records are identical, as in KC1. 9 cases
+    are new (the TAT cases).
+  - TAC8: **met as amended (below).** The deck tests' diode, reverse 0 → −5 V in 0.25 V steps: every point
+    converges, Newton iterations ≤ plain SRH's + 1, |I| with TAT above |I| without at every point, the ratio
+    rising at every point: 2.98, 3.50, 4.01, 4.55, 5.11 at −1 … −5 V. Forward: +2.95 % at 0.3 V, +0.42 %,
+    +0.060 %, +0.009 %, +0.001 % at 0.7 V. The transient restart continues bit for bit.
+- **TAC8 amended by the owner (2026-11-25), on two pre-existing faults the first TAC8 run exposed.**
+  1. *The terminal current does not resolve this leakage.* The contact-edge current is a difference of large
+     drift and diffusion terms; its own resolution (`terminal_current_resolution`) is about 4e-7 A/cm² on a
+     10 nm mesh and 4.5e-5 on a 1 nm mesh, against a generation current of about 5e-9. Read that way the
+     reverse current stepped with the mesh and differed 150× between meshes, and its slope was the same
+     9.99e-13 S/cm² everywhere. The weighted current (Unit 32) resolves it: 1e-21 resolution, the two meshes
+     agreeing to 0.5 %, equal to q∫R. **Ruling:** TAC8 reads the weighted current, and the ratio is checked
+     at every point. The small-signal check (no weighted admittance exists) is |Y − G| within Y's own reported
+     resolution instead of 1e-4 relative. Recorded as weak: at −2 V the resolution is 1.5e-7 S/cm² against
+     G = 8.0e-9, so it constrains little.
+  2. *The deck tests' "1D diode" was a compensated resistor.* A profile's window on its depth axis was dropped,
+     and the depth axis defaults to x, so in 1D `x=-1:1um` was silently ignored: Na = Nd = 1e17 at every node
+     (and the same in `hand_diode`, so deck and hand agreed). **Ruling:** fixed in this unit.
+     - `device::evaluate`: a constant profile is bounded by its window on every axis, its depth axis
+       included (a constant has no depth shape). `check_profile` refuses a bounded window on the depth axis of
+       a Gaussian or erfc (the shape sets it). `deck::profile_text` writes a constant's depth-axis window; the
+       app's `profile_extent` reads it. No shipped deck and no app-built profile windows a depth axis
+       (2D/3D decks use `axis=y` for x windows), so nothing shipped changes.
+     - The deck and app test diodes are now real junctions. Four mechanics tests written against the
+       compensated device keep it, bit-identical, as `compensated_device` / `hand_diode(true)`, because their
+       tolerances assume its large currents: RG3 (initial checkpoint), the sweep restart, the `[trace]` deck
+       (tol_update 1e-12) and RG6 (small-signal restart). The app's 0 V I-V check compares with the point's
+       terminal-current resolution instead of exact 0.
+     - Doping tests: the 1D step, the refusal, a Gaussian's window unchanged.
+- Affected cases run by name (every deck, app and window case in a file using the diode fixtures or an
+  x window, hidden cases excluded): all pass. The hidden benchmark "reduced FinFET as layered generate3d
+  meshes and is certified" fails P6, and fails the same on `main`'s binary: pre-existing, outside this unit.
+  The app completion count is 27 (28 `[models]` keys less srh).
+- Hand mutants, 4/4 caught:
+  - Γ_n applied to τ_p (the rate test);
+  - the other end's ψ columns scaled to 0 (the Jacobian gate; the plan's "dropped" form does not compile
+    under `/WX`);
+  - the electrothermal refusal removed (the refusals test);
+  - the run-record key written when off (the deck run-record test).
+
 **Review focus (not otherwise exercised; each pinned by a test in the slice that owns the code).**
 1. A node where F is exactly 0, e.g. a symmetric centre: plain SRH must still be added there. The E_r/F division
    must not run, and LocalTunnelling's `continue` pattern must not be copied. Test `tat zero field keeps SRH`

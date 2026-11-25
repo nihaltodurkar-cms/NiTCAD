@@ -9,10 +9,15 @@
 
 #include "NiTCAD/physics/quantum_confinement.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/physics/trap_tunnelling.hpp"
 
 namespace NiTCAD::assemble {
 
 enum class NonlocalTunnelling : std::uint8_t { off, kane, direct_wkb };
+
+// Trap-assisted tunnelling (Unit 67; DECISIONS.md TAD1-TAD9): off, or Hurkx's field enhancement
+// of the SRH lifetimes, tau / (1 + Gamma(|E|)) (physics/trap_tunnelling.hpp). Opt-in.
+enum class TrapTunnelling : std::uint8_t { off = 0, hurkx = 1 };
 
 // Manufactured-solution sources (verification only; PhysicsModels::manufactured; DECISIONS.md
 // Unit 55 14.3, TVQ3), one value per mesh node, independent of the state (no Jacobian entries) and
@@ -174,6 +179,14 @@ struct PhysicsModels {
     // with a direct gap and cited tunnelling masses (never silicon). Needs the device's tensor
     // cells; excludes btbt_local (each would count the same tunnelling).
     NonlocalTunnelling btbt_nonlocal = NonlocalTunnelling::off;
+    // Hurkx trap-assisted tunnelling (Unit 67; drift-diffusion only, isothermal): each SRH
+    // lifetime over 1 + Gamma(F), F the magnitude of the node's reconstructed field as for
+    // btbt_local, the tunnelling range from the band edge to the intrinsic level. Needs srh;
+    // refused with electrothermal, energy balance and density gradient. Off by default.
+    TrapTunnelling trap_assisted_tunnelling = TrapTunnelling::off;
+    // Its tunnelling masses [m0] (ATLAS MASS.TUNNEL, 0.25). Read only with the model on.
+    double tat_mass_n = physics::hurkx_default_mass;
+    double tat_mass_p = physics::hurkx_default_mass;
     // Electrothermal coupling (Unit 23; DECISIONS.md T1-T14; system.hpp): the lattice
     // temperature is a fourth unknown per node, with the heat equation, the thermopower in the
     // carrier fluxes and the temperature dependence of the band, mobility and contact models; heat
