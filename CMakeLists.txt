@@ -1126,6 +1126,11 @@ target_compile_definitions(nitcad_app_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FIL
   NITCAD_DECKS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/decks"
   NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 nitcad_add_file_tests(app nitcad_app_test)
+# Debug CI ran past its 150-minute limit on bb96de8: app.solid had run 96 minutes unfinished (2817 s on
+# b8d4c0a). Release only, as solve.quantum_confinement; Debug reports it disabled.
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+  set_tests_properties(app.solid PROPERTIES DISABLED TRUE)
+endif()
 # The window (26-2): the main window, the view and the deck pane on Win32, in a library the window
 # tests share with the executable.
 add_library(nitcad_app_window STATIC
@@ -1162,6 +1167,11 @@ target_compile_definitions(nitcad_app_window_test PRIVATE NITCAD_CLI_PATH="$<TAR
 # The self-test (WG4) runs nitcad-app and nitcad plot.
 add_dependencies(nitcad_app_window_test nitcad-app nitcad)
 nitcad_add_file_tests(app_window nitcad_app_window_test)
+# app_window.modeller_window had run 68 minutes unfinished in the same Debug run (2649 s on b8d4c0a):
+# Release only, as app.solid above.
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+  set_tests_properties(app_window.modeller_window PROPERTIES DISABLED TRUE)
+endif()
 # The 3D MOSFET example's run and self-tests (WG8, WG4) take minutes in Debug: Release only, as the other
 # slow gates (hidden tags [.examples3d] and [.selftest3d]).
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
