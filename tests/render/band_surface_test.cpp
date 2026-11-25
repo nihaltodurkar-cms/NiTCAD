@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -22,7 +23,10 @@
 #include "NiTCAD/render/cut_line.hpp"
 #include "NiTCAD/render/geometry.hpp"
 #include "NiTCAD/render/scene.hpp"
+#include "NiTCAD/render/edges.hpp"
+#include "NiTCAD/render/image.hpp"
 #include "NiTCAD/results/solution.hpp"
+#include "image_check.hpp"
 
 using namespace NiTCAD;
 using namespace NiTCAD::render;
@@ -443,3 +447,191 @@ TEST_CASE("band surface: exaggeration scales heights only (Unit 26o, BSD3)") {
         }
     }
 }
+
+namespace {
+
+// For each cut line (y in um, along x at z in um), each sample in a silicon-only element: band_energy_at equals the
+// band diagram's value there to 1e-9 eV, for all four levels.
+void check_against_cuts(const device::Device& d, const Geometry& g, const results::BandDiagram& b, double z) {
+    const auto keys = band_material_keys(d);
+    std::size_t checked = 0;
+    for (const double y : {0.2, 0.4, 0.6, 0.8}) {
+        const auto cut = cut_line(g, {0.0, y * um, z * um}, {2 * um, y * um, z * um});
+        REQUIRE(cut.has_value());
+        const auto plot = cut_band_plot(d.mesh(), *cut, b);
+        REQUIRE(plot.has_value());
+        REQUIRE(plot->series[0].y.size() == cut->samples.size());
+        for (std::size_t i = 0; i < cut->samples.size(); ++i) {
+            const CutSample& s = cut->samples[i];
+            mesh::Point x{};
+            for (std::size_t k = 0; k < 4; ++k) {
+                if (s.at.weights[k] == 0.0) continue;
+                const auto& p = d.mesh().points()[static_cast<std::size_t>(s.at.nodes[k])];
+                for (int a = 0; a < 3; ++a) x[a] += s.at.weights[k] * p[a];
+            }
+            bool one = true;
+            for (const NodeId v : g.element(s.element)) one = one && keys[static_cast<std::size_t>(v)] == keys[static_cast<std::size_t>(g.element(s.element)[0])] && keys[static_cast<std::size_t>(v)] >= 0;
+            if (!one) continue;
+            for (std::size_t lv = 0; lv < 4; ++lv) {
+                const auto e = band_energy_at(d, g, b, static_cast<BandLevel>(lv), s.element, x);
+                REQUIRE(e.has_value());
+                CHECK(std::abs(*e - plot->series[lv].y[i]) < 1e-9);
+                ++checked;
+            }
+        }
+    }
+    CHECK(checked > 0);
+}
+
+}  // namespace
+
+TEST_CASE("band surface: a 3D plane agrees with the cut line (Unit 26o, BSC2)") {
+    const Dev m = mos_like(true);
+    const Geometry g = geometry_of(m.device);
+    const auto wavy =
+        bands_of(m.device, [](double x, double y, std::int32_t) { return 0.5 + 0.3 * std::sin(x) + 0.1 * y; });
+    check_against_cuts(m.device, g, wavy, 0.3);
+    // The plane z = 0.3 um: base axes x and y; a linear Ec is drawn at its own value.
+    BandSurfaceOptions o;
+    o.plane = Plane{{0.0, 0.0, 1.0}, 0.3 * um};
+    const auto s = band_surface_view(m.device, g, bands_of(m.device, linear_ec), o);
+    REQUIRE(s.has_value());
+    CHECK((*s->scene.axes)[0].title == "x (\xC2\xB5m)");
+    CHECK((*s->scene.axes)[2].title == "y (\xC2\xB5m)");
+    const double span = s->range_eV.second - s->range_eV.first;
+    const TriangleBatch* ec = batch(s->scene, "Ec");
+    REQUIRE(ec != nullptr);
+    REQUIRE_FALSE(ec->vertices.empty());
+    for (const SceneVertex& v : ec->vertices) {
+        if (v.position[2] > 0.9f + 1e-4f) continue;
+        CHECK(std::abs(v.position[1] / s->um_per_eV - linear_ec(v.position[0], v.position[2], 0)) < 1e-6 * span + 1e-6);
+    }
+    // A plane normal to x: base axes y and z.
+    o.plane = Plane{{1.0, 0.0, 0.0}, 1.1 * um};
+    const auto across = band_surface_view(m.device, g, bands_of(m.device, linear_ec), o);
+    REQUIRE(across.has_value());
+    CHECK((*across->scene.axes)[0].title == "y (\xC2\xB5m)");
+    CHECK((*across->scene.axes)[2].title == "z (\xC2\xB5m)");
+    // Off the device, and only in the oxide.
+    o.plane = Plane{{0.0, 0.0, 1.0}, 5.0 * um};
+    const auto off = band_surface_view(m.device, g, bands_of(m.device, linear_ec), o);
+    REQUIRE_FALSE(off.has_value());
+    CHECK(off.error().message.find("misses the device") != std::string::npos);
+    o.plane = Plane{{0.0, 1.0, 0.0}, 0.98 * um};
+    const auto oxide = band_surface_view(m.device, g, bands_of(m.device, linear_ec), o);
+    REQUIRE_FALSE(oxide.has_value());
+    CHECK(oxide.error().message.find("no band values on the plane") != std::string::npos);
+}
+
+TEST_CASE("band surface: a plane on a mesh plane between materials is nudged (Unit 26o, Review Focus 4)") {
+    const Dev h = hetero(true);
+    const Geometry g = geometry_of(h.device);
+    const auto b = bands_of(h.device, [](double x, double, std::int32_t k) { return 0.4 + 0.05 * x + (k == 1 ? 0.2 : 0.0); });
+    BandSurfaceOptions o;
+    o.levels = {true, false, false, false};
+    o.plane = Plane{{1.0, 0.0, 0.0}, 1.0 * um};  // the right material's first node plane
+    const auto s = band_surface_view(h.device, g, b, o);
+    REQUIRE(s.has_value());
+    const TriangleBatch* ec = batch(s->scene, "Ec");
+    REQUIRE(ec != nullptr);
+    REQUIRE_FALSE(ec->vertices.empty());
+    // Nudged a hair toward lower x: still the right nodes' control volumes, which read x = 1 um's 0.65 eV.
+    for (const SceneVertex& v : ec->vertices) CHECK(std::abs(v.position[1] / s->um_per_eV - 0.65) < 1e-5);
+}
+
+TEST_CASE("band surface: the energy range clips pieces (Unit 26o, BSD3)") {
+    const Dev m = mos_like();
+    const Geometry g = geometry_of(m.device);
+    const auto b = bands_of(m.device, linear_ec);
+    BandSurfaceOptions o;
+    o.levels = {true, false, false, false};
+    const auto whole = band_surface_view(m.device, g, b, o);
+    o.range_eV = std::pair{0.6, 0.8};
+    const auto clipped = band_surface_view(m.device, g, b, o);
+    REQUIRE(whole.has_value());
+    REQUIRE(clipped.has_value());
+    CHECK(clipped->range_eV == std::pair{0.6, 0.8});
+    CHECK(clipped->dropped == whole->dropped);
+    const TriangleBatch* ec = batch(clipped->scene, "Ec");
+    REQUIRE(ec != nullptr);
+    REQUIRE_FALSE(ec->vertices.empty());
+    for (const SceneVertex& v : ec->vertices) {
+        const double e = v.position[1] / clipped->um_per_eV;
+        CHECK(e >= 0.6 - 1e-5);
+        CHECK(e <= 0.8 + 1e-5);
+    }
+    // Less of the base is covered than unclipped (projected on the base plane).
+    const auto base_area = [](const TriangleBatch& t) {
+        double a = 0.0;
+        for (std::size_t i = 0; i + 2 < t.vertices.size(); i += 3) {
+            const auto& p = t.vertices;
+            const double ux = p[i + 1].position[0] - p[i].position[0], uz = p[i + 1].position[2] - p[i].position[2];
+            const double vx = p[i + 2].position[0] - p[i].position[0], vz = p[i + 2].position[2] - p[i].position[2];
+            a += 0.5 * std::abs(ux * vz - uz * vx);
+        }
+        return a;
+    };
+    CHECK(base_area(*ec) < base_area(*batch(whole->scene, "Ec")));
+}
+
+TEST_CASE("band surface: reference images (Unit 26o, BSC8)") {
+    constexpr int W = 960, H = 720;
+    Renderer& r = render_test::warp();
+    const render_test::Mosfet& m2 = render_test::mosfet(false);
+    const render_test::Mosfet& m3 = render_test::mosfet(true);
+    {
+        const Geometry g = geometry_of(m2.device);
+        auto s = band_surface_view(m2.device, g, m2.point.bands);
+        REQUIRE(s.has_value());
+        set_look(s->scene, Look::enhanced);
+        render_test::check_image(*r.draw(s->scene, W, H), "bandsurface_mosfet2d");
+    }
+    {
+        const Geometry g = geometry_of(m3.device);
+        BandSurfaceOptions o;
+        o.plane = Plane{{0.0, 0.0, 1.0}, 0.4 * um};  // the gate's centre, source-drain by depth
+        auto s = band_surface_view(m3.device, g, m3.point.bands, o);
+        REQUIRE(s.has_value());
+        set_look(s->scene, Look::enhanced);
+        render_test::check_image(*r.draw(s->scene, W, H), "bandsurface_mosfet3d");
+    }
+    {
+        const Dev h = hetero();
+        BandSurfaceOptions o;
+        o.by_level = true;
+        auto s = band_surface_view(h.device, geometry_of(h.device),
+                                   bands_of(h.device, [](double x, double, std::int32_t k) {
+                                       return 0.4 + 0.05 * x + (k == 1 ? 0.2 : 0.0);
+                                   }),
+                                   o);
+        REQUIRE(s.has_value());
+        set_look(s->scene, Look::enhanced);
+        render_test::check_image(*r.draw(s->scene, W, H), "bandsurface_hetero");
+    }
+}
+
+#ifdef NDEBUG
+TEST_CASE("band surface: building the scene is quick (Unit 26o, BSC9; Release only)") {
+    const auto median_ms = [](const std::function<void()>& build) {
+        std::vector<double> t;
+        for (int k = 0; k < 20; ++k) {
+            const auto a = std::chrono::steady_clock::now();
+            build();
+            t.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count());
+        }
+        std::ranges::sort(t);
+        return 0.5 * (t[9] + t[10]);
+    };
+    const render_test::Mosfet& m2 = render_test::mosfet(false);
+    const render_test::Mosfet& m3 = render_test::mosfet(true);
+    const Geometry g2 = geometry_of(m2.device);
+    const Geometry g3 = geometry_of(m3.device);
+    BandSurfaceOptions o3;
+    o3.plane = Plane{{0.0, 0.0, 1.0}, 0.4 * um};
+    const double two = median_ms([&] { REQUIRE(band_surface_view(m2.device, g2, m2.point.bands).has_value()); });
+    const double three = median_ms([&] { REQUIRE(band_surface_view(m3.device, g3, m3.point.bands, o3).has_value()); });
+    WARN("band surface build median: 2D " << two << " ms, 3D plane " << three << " ms");
+    CHECK(two <= 150.0);
+    CHECK(three <= 400.0);
+}
+#endif
