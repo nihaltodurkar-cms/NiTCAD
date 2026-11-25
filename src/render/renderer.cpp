@@ -1896,10 +1896,15 @@ AxisBox axis_box(const FieldScene& s, int width, int height) {
         }
         axis.outward = {ox, oy};
         std::vector<std::array<float, 4>> kept;  // this axis's kept labels: centres, half widths, half heights
-        for (const Tick& t : linear_ticks(lo[a], hi[a], 5)) {
+        // Unit 26o (BSD3): a mapped axis ticks its own values, scene = origin + per_unit * value.
+        const double origin = s.axes ? (*s.axes)[a].origin : 0.0;
+        const double per_unit = s.axes ? (*s.axes)[a].per_unit : 1.0;
+        const auto ticks = s.axes ? linear_ticks((lo[a] - origin) / per_unit, (hi[a] - origin) / per_unit, 5)
+                                  : linear_ticks(lo[a], hi[a], 5);
+        for (const Tick& t : ticks) {
             AxisLabel l;
             l.position = pick.edge[0];
-            l.position[a] = static_cast<float>(t.value);
+            l.position[a] = static_cast<float>(s.axes ? origin + per_unit * t.value : t.value);
             const D2D1_POINT_2F p = project(v, l.position, view);
             l.x = p.x;
             l.y = p.y;
@@ -1921,7 +1926,7 @@ AxisBox axis_box(const FieldScene& s, int width, int height) {
             axis.ticks.push_back(std::move(l));
         }
         static constexpr const char* titles[3] = {"x (\xC2\xB5m)", "y (\xC2\xB5m)", "z (\xC2\xB5m)"};
-        axis.title = titles[a];
+        axis.title = s.axes ? (*s.axes)[a].title : titles[a];
         float reach = 0.0f;
         for (const auto& k : kept) {
             reach = std::max(reach, (k[0] - 0.5f * (e0.x + e1.x)) * ox + (k[1] - 0.5f * (e0.y + e1.y)) * oy +

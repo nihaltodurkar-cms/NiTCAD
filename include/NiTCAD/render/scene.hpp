@@ -86,6 +86,14 @@ struct Colorbar {
     std::string title;  // the field and its unit, e.g. "n (cm⁻³)"
 };
 
+// Unit 26o (BSD3): a scene axis that measures something other than um: scene coordinate = origin + per_unit *
+// value, ticked in value's units under `title` (e.g. a band surface's height, "E (eV)").
+struct SceneAxis {
+    std::string title;
+    double origin = 0.0;
+    double per_unit = 1.0;
+};
+
 // How a 3D FieldScene is shaded (Unit 26f, KD1): classic, one light and ambient on white, as since Unit 25a;
 // enhanced, key, fill and rim lights, a sky/ground ambient and a soft highlight, the feature edges
 // that set_look adds, over a vertical gradient. The render layer defaults to classic; 2D ignores it.
@@ -128,6 +136,8 @@ struct FieldScene {
     bool ground_shadow = true;
     // Unit 26h (JD1, JQ3): the enhanced look's axis box with um ticks (axes3d.hpp); classic never draws it.
     bool show_axis_box = true;
+    // Unit 26o (BSD3): what each scene axis measures, for the axis box's ticks and titles; empty, x, y and z in um.
+    std::optional<std::array<SceneAxis, 3>> axes;
 };
 
 // --- fields -------------------------------------------------------------------------------------
