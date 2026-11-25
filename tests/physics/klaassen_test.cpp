@@ -156,6 +156,19 @@ TEST_CASE("klaassen: minority above majority (KC4)", "[physics][klaassen]") {
         CHECK(e_min > e_maj);
         CHECK(h_min > h_maj);
     }
+    // For the record (no criterion): minority mobilities beside Masetti's at moderate doping.
+    for (const double N : {1e16, 1e17, 1e18}) {
+        const double tiny = ni300 * ni300 / N;
+        const double e_min = physics::klaassen_mobility(K, Carrier::electron, 0, N, tiny, N, 300.0)
+                                 .mobility;
+        const double h_min = physics::klaassen_mobility(K, Carrier::hole, N, 0, N, tiny, 300.0)
+                                 .mobility;
+        std::printf("KC4 record N=%.0e  minority electrons %.1f (Masetti %.1f), minority holes "
+                    "%.1f (Masetti %.1f)\n",
+                    N, e_min,
+                    physics::masetti_mobility(physics::masetti_phosphorus_silicon, N, 300.0),
+                    h_min, physics::masetti_mobility(physics::masetti_boron_silicon, N, 300.0));
+    }
 }
 
 TEST_CASE("klaassen: the partials (KC5)", "[physics][klaassen]") {

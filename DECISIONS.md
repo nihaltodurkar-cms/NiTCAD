@@ -4196,6 +4196,23 @@ put to the owner as KQ8:
 |---|---|---|---|
 | KQ8 | KC5's floor for partials below the difference noise | (a) keep the 1e-9 μ effect floor (recommended: the 1e-12 floor was under the FD's own rounding, a test defect rather than a model one); (b) a tighter check by complex-step or higher-precision differences, KC5 open until then | **open — the owner's word (TVM2)** |
 
+**Slice 0 record, `klaassen_equilibrium` (2026-11-25).** `ElectronMobility::klaassen_equilibrium` = 3,
+`HoleMobility::klaassen_equilibrium` = 4 (KD7); the silicon refusal (KD3); the isothermal node precompute
+(`klaassen_at` once per carrier per run) and the electrothermal node table (μ and the total ∂μ/∂T with n_i's
+slope; `klaassen_at` per node per evaluation, a cost to revisit if electrothermal runs slow); the deck values,
+vocabulary and hints; deck error messages now list all values (KC8). Tests, all Release:
+- KC6 met. FD Jacobian, isothermal: 1D heavily doped diode (1e19 / 1e18) worst column 4.5e-9, 2D with field
+  mobility 3.0e-9; electrothermal: 1D and 2D-with-field-mobility cases added to the Unit 23 gate, ≤ 1e-6, pass.
+  The residual differs from Masetti's at the same state (the model is in use). The Unit 9 diode 0–0.8 V: every
+  bias converges, Newton steps per bias equal Masetti's (1, 4, then 5); J is 2.2 % (0.05 V) to 6.2 % (0.5 V)
+  below Masetti's. Recorded cause: at 1e17 the Klaassen minority mobilities are below the majority ones
+  (electrons 665.6 vs Masetti 721.3, holes 310.7 vs 319.1 cm²/(V s); electron–hole scattering), crossing above
+  near 1e18 (313.4 vs 277.0, 184.0 vs 160.3).
+- KC8 partly met: the region refusal for either carrier; the deck messages. KC9 partly met: the run record carries
+  electrons 3, holes 4 (deck test).
+- Binaries run whole: physics, assemble, deck (before the new deck case; the case itself after), app — all pass.
+  The full Release and Debug suites have not run (owner's word; no Debug builds by the standing rule).
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

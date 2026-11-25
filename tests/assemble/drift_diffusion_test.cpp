@@ -466,6 +466,64 @@ TEST_CASE("drift-diffusion: FD-Jacobian gate on a heavily doped diode, all model
     REQUIRE(e <= 5e-5);
 }
 
+// Unit 66 (KC6): Klaassen's mobility at each node's neutral equilibrium densities.
+TEST_CASE("drift-diffusion: FD-Jacobian gate with the klaassen_equilibrium mobility") {
+    const assemble::PhysicsModels k{
+        .hole_mobility = assemble::HoleMobility::klaassen_equilibrium,
+        .electron_mobility = assemble::ElectronMobility::klaassen_equilibrium};
+    assemble::PhysicsModels kf = k;
+    kf.field_mobility = true;
+    const auto xs = graded_axis(10);
+    const auto y = uniform_axis(1e-4, 3);
+    const auto heavy = diode(*mesh::make_tensor_grid(graded_axis(30)), 1e19, 1e18);
+    const auto [s1, x1] = probe_state(heavy, 42, k);
+    const auto [s2, x2] = probe_state(diode(*mesh::make_tensor_grid(xs, y)), 43, kf);
+    const double e1 = fd_jacobian_error(s1, x1);
+    const double e2 = fd_jacobian_error(s2, x2);
+    UNSCOPED_INFO("worst column errors: 1D heavy " << e1 << ", 2D field mobility " << e2);
+    REQUIRE(e1 <= 5e-5);
+    REQUIRE(e2 <= 5e-5);
+    // The model is in use: the residual differs from the Masetti one's at the same state.
+    const auto [sm, xm] = probe_state(heavy, 42,
+                                      {.hole_mobility = assemble::HoleMobility::masetti,
+                                       .electron_mobility = assemble::ElectronMobility::masetti});
+    std::vector<double> fk(s1.unknowns()), fm(sm.unknowns());
+    s1.residual(x1, fk);
+    sm.residual(x1, fm);
+    double diff = 0.0;
+    for (std::size_t r = 0; r < fk.size(); ++r) diff = std::max(diff, std::abs(fk[r] - fm[r]));
+    REQUIRE(diff > 0.0);
+}
+
+TEST_CASE("drift-diffusion: klaassen_equilibrium refuses a non-silicon mobility set (KC8)") {
+    physics::SemiconductorParameters p = physics::silicon_parameters;
+    p.hole_mobility.mu_max *= 0.9;
+    const auto other = *physics::Semiconductor::create(p);
+    auto grid = *mesh::make_tensor_grid(graded_axis(10));
+    const std::size_t n = grid.node_count();
+    auto anode = grid.find_boundary("x_min")->nodes;
+    auto cathode = grid.find_boundary("x_max")->nodes;
+    const auto d = *device::Device::create(
+        {.mesh = std::move(grid),
+         .temperature_K = 300.0,
+         .regions = {{"other", other}},
+         .node_region = std::vector<device::RegionId>(n, 0),
+         .donors = std::vector<double>(n, 1e17),
+         .acceptors = std::vector<double>(n, 0.0),
+         .contacts = {{"anode", device::ContactKind::ohmic, std::move(anode)},
+                      {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
+    const auto scaling = *assemble::make_scaling(d);
+    for (const assemble::PhysicsModels& m :
+         {assemble::PhysicsModels{.hole_mobility = assemble::HoleMobility::klaassen_equilibrium},
+          assemble::PhysicsModels{
+              .electron_mobility = assemble::ElectronMobility::klaassen_equilibrium}}) {
+        const auto made = System::create(d, scaling, m);
+        REQUIRE_FALSE(made.has_value());
+        CHECK(made.error().message.find("klaassen_equilibrium mobility: region '") !=
+              std::string::npos);
+    }
+}
+
 // Unit 13: Canali field-dependent mobility of each edge.
 
 TEST_CASE("drift-diffusion: FD-Jacobian gate with field mobility in 1D, 2D and 3D") {

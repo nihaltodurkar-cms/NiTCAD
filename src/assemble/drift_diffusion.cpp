@@ -19,6 +19,7 @@
 #include "NiTCAD/physics/band_to_band.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
+#include "NiTCAD/physics/klaassen_mobility.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
@@ -227,6 +228,25 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             return refuse("energy balance with band-to-band tunnelling is not supported");
         }
     }
+    // Unit 66 (KD3): Klaassen's parameters are silicon's; every semiconductor region must carry
+    // silicon's electron and hole mobility sets when either carrier selects klaassen_equilibrium.
+    if (models.electron_mobility == ElectronMobility::klaassen_equilibrium ||
+        models.hole_mobility == HoleMobility::klaassen_equilibrium) {
+        for (const device::Region& r : device.regions()) {
+            const auto* s = std::get_if<physics::Semiconductor>(&r.material);
+            if (s && !(s->parameters().electron_mobility ==
+                           physics::silicon_parameters.electron_mobility &&
+                       s->parameters().hole_mobility ==
+                           physics::silicon_parameters.hole_mobility)) {
+                return std::unexpected(base::Error{
+                    base::ErrorCode::invalid_input,
+                    "klaassen_equilibrium mobility: region '" + r.name +
+                        "' does not have silicon's mobility (Klaassen's parameters are "
+                        "silicon's)",
+                    {}});
+            }
+        }
+    }
     // Unit 34: Masetti's coefficients are boron-doped silicon's, so every semiconductor region must
     // carry silicon's hole mobility (its Caughey-Thomas set stands for "silicon" here).
     if (models.hole_mobility == HoleMobility::masetti) {
@@ -242,7 +262,8 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             }
         }
     } else if (models.hole_mobility != HoleMobility::caughey_thomas &&
-               models.hole_mobility != HoleMobility::automatic) {
+               models.hole_mobility != HoleMobility::automatic &&
+               models.hole_mobility != HoleMobility::klaassen_equilibrium) {
         return refuse("unknown hole mobility model");
     }
     // Unit 38: likewise for Masetti's phosphorus-doped silicon electrons.
@@ -259,7 +280,8 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
                     {}});
             }
         }
-    } else if (models.electron_mobility != ElectronMobility::caughey_thomas) {
+    } else if (models.electron_mobility != ElectronMobility::caughey_thomas &&
+               models.electron_mobility != ElectronMobility::klaassen_equilibrium) {
         return refuse("unknown electron mobility model");
     }
     // Unit 46 (DECISIONS.md LD6, LD8): Lombardi's coefficients are silicon's; impact ionization
@@ -379,6 +401,14 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
     s.auger_n_.resize(n);
     s.auger_p_.resize(n);
     std::vector<double> mu_n(n), mu_p(n), N_bulk(n, 0.0);
+    // Unit 66: Klaassen at the run's temperature, prepared once per carrier that selects it.
+    std::optional<physics::KlaassenAtTemperature> klaassen_n, klaassen_p;
+    if (models.electron_mobility == ElectronMobility::klaassen_equilibrium) {
+        klaassen_n = physics::klaassen_at(physics::klaassen_silicon, physics::Carrier::electron, T);
+    }
+    if (models.hole_mobility == HoleMobility::klaassen_equilibrium) {
+        klaassen_p = physics::klaassen_at(physics::klaassen_silicon, physics::Carrier::hole, T);
+    }
     for (std::size_t i = 0; i < n; ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
         if (s.insulator_[i] != 0) {  // placeholders; no carrier equation reads them
@@ -391,13 +421,31 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
         const double N = device.total_impurity(node);
         const double N_mobility = models.doping_mobility ? N : 0.0;
         N_bulk[i] = N_mobility;
-        mu_n[i] = models.electron_mobility == ElectronMobility::masetti
-                      ? physics::masetti_mobility(physics::masetti_phosphorus_silicon, N_mobility, T)
-                      : physics::caughey_thomas_mobility(m, physics::Carrier::electron, N_mobility,
-                                                         T);
-        mu_p[i] = masetti_holes(models.hole_mobility, m.parameters())
-                      ? physics::masetti_mobility(physics::masetti_boron_silicon, N_mobility, T)
-                      : physics::caughey_thomas_mobility(m, physics::Carrier::hole, N_mobility, T);
+        // Unit 66 (KD2): Klaassen at the node's neutral equilibrium densities, n_i the material's.
+        const auto klaassen = [&](const physics::KlaassenAtTemperature& at) {
+            const double N_D = models.doping_mobility ? device.donors()[i] : 0.0;
+            const double N_A = models.doping_mobility ? device.acceptors()[i] : 0.0;
+            return physics::klaassen_equilibrium_mobility(at, N_D, N_A,
+                                                          physics::intrinsic_density(m, T), 0.0)
+                .mobility;
+        };
+        if (models.electron_mobility == ElectronMobility::klaassen_equilibrium) {
+            mu_n[i] = klaassen(*klaassen_n);
+        } else {
+            mu_n[i] = models.electron_mobility == ElectronMobility::masetti
+                          ? physics::masetti_mobility(physics::masetti_phosphorus_silicon,
+                                                      N_mobility, T)
+                          : physics::caughey_thomas_mobility(m, physics::Carrier::electron,
+                                                             N_mobility, T);
+        }
+        if (models.hole_mobility == HoleMobility::klaassen_equilibrium) {
+            mu_p[i] = klaassen(*klaassen_p);
+        } else {
+            mu_p[i] = masetti_holes(models.hole_mobility, m.parameters())
+                          ? physics::masetti_mobility(physics::masetti_boron_silicon, N_mobility, T)
+                          : physics::caughey_thomas_mobility(m, physics::Carrier::hole, N_mobility,
+                                                             T);
+        }
         s.tau_n_[i] = physics::scharfetter_lifetime(m, physics::Carrier::electron, N);
         s.tau_p_[i] = physics::scharfetter_lifetime(m, physics::Carrier::hole, N);
         s.auger_n_[i] = m.parameters().auger.Cn;

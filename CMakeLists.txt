@@ -694,6 +694,7 @@ add_executable(nitcad_solve_test
   tests/solve/weighted_current_test.cpp
   tests/solve/hole_mobility_test.cpp
   tests/solve/default_physics_test.cpp
+  tests/solve/klaassen_test.cpp
   tests/solve/provenance_test.cpp
   tests/solve/rates_test.cpp
   tests/solve/process_memory.cpp

@@ -378,6 +378,8 @@ struct SystemData {
         // node of a gate with one (its electrode potential gains the node's own g(theta)), 2 on a
         // node of an electrode of one (it gains polysilicon's, silicon's -(Eg(T) - Eg(T0)) / k T0).
         std::int32_t ppoly;
+        // Unit 66: N_D, N_A for the Klaassen mobility (0 with doping_mobility off) [cm^-3].
+        double donors_mobility = 0.0, acceptors_mobility = 0.0;
     };
     // Per node at a state: theta and tau = theta - 1 (the unknown), n_ie / Ns, the mobilities
     // [cm^2/(V s)], g (the valence band's shift), kappa [W/(cm K)] and the Kirchhoff transform u,
@@ -473,6 +475,8 @@ struct SystemData {
     // Units 34, 35: per thermal material, whether its hole mobility is Masetti's.
     std::vector<char> masetti_holes_;
     bool masetti_electrons_ = false;  // Unit 38: the electron mobility is Masetti's
+    // Unit 66: the electron / hole mobility is Klaassen's at neutral equilibrium densities.
+    bool klaassen_electrons_ = false, klaassen_holes_ = false;
     bool sinks_complete_ = false;
     std::vector<char> reaches_sink_;  // per node (reaches_heat_sink)
     // One node's thermal state at tau (NaN entries unless tau is finite and theta positive).

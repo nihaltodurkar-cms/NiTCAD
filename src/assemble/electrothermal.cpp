@@ -19,6 +19,7 @@
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/physics/klaassen_mobility.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/statistics.hpp"
@@ -107,6 +108,8 @@ std::optional<base::Error> SystemData::make_thermal(SystemState& st, const devic
     T0_ = scaling.temperature_K;
     thermal_bgn_ = models.bgn;
     masetti_electrons_ = models.electron_mobility == ElectronMobility::masetti;  // Unit 38
+    klaassen_electrons_ = models.electron_mobility == ElectronMobility::klaassen_equilibrium;
+    klaassen_holes_ = models.hole_mobility == HoleMobility::klaassen_equilibrium;  // Unit 66
     const auto node_region = device.node_region();
     kappa_ref_ = region_thermal[node_region[device.reference_node()]].conductivity_W_cmK;
     heat_scale_ = kappa_ref_ * T0_ / (scaling.V_T * scaling.J0 * scaling.L_D);
@@ -117,7 +120,7 @@ std::optional<base::Error> SystemData::make_thermal(SystemState& st, const devic
         const device::RegionId r = node_region[i];
         ThermalNode& t = thermal_nodes_[i];
         t = ThermalNode{region_material[r], region_thermal[r], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        -1, 0.0, 0.0, 0};
+                        -1, 0.0, 0.0, 0, 0.0, 0.0};
         // rho c V L_D^2 / (t0 kappa_ref): the heat row's storage per unit rate and change of tau.
         t.capacity = t.thermal.heat_capacity_J_cm3K * volume_[i] * scaling.L_D * scaling.L_D /
                      (rate_scale_ * kappa_ref_);
@@ -125,6 +128,8 @@ std::optional<base::Error> SystemData::make_thermal(SystemState& st, const devic
         const physics::Semiconductor& m = thermal_materials_[static_cast<std::size_t>(t.material)];
         t.impurity = device.total_impurity(node);
         t.impurity_mobility = models.doping_mobility ? t.impurity : 0.0;
+        t.donors_mobility = models.doping_mobility ? device.donors()[i] : 0.0;  // Unit 66
+        t.acceptors_mobility = models.doping_mobility ? device.acceptors()[i] : 0.0;
         t.narrowing_eV = models.bgn ? physics::bandgap_narrowing_eV(m, t.impurity) : 0.0;
         t.c_n = log_dos_n_[i] - band_shift_[i];
         t.c_p = -(log_dos_p_[i] + band_shift_[i]);
@@ -261,7 +266,19 @@ SystemData::ThermalState SystemData::thermal_state(std::size_t i, double tau) co
     s.nie = nie / Ns_;
     s.d_nie = s.nie * T0_ * physics::intrinsic_density_log_slope(m, T, t.narrowing_eV);
     const auto electron = physics::Carrier::electron, hole = physics::Carrier::hole;
-    if (masetti_electrons_) {  // Unit 38
+    // Unit 66 (KD4): Klaassen at the node's neutral equilibrium densities with the material's n_i
+    // (no band-gap narrowing, as the isothermal precompute); d/dT includes n_i's slope.
+    const auto klaassen = [&](physics::Carrier carrier) {
+        return physics::klaassen_equilibrium_mobility(
+            physics::klaassen_at(physics::klaassen_silicon, carrier, T), t.donors_mobility,
+            t.acceptors_mobility, physics::intrinsic_density(m, T),
+            physics::intrinsic_density_log_slope(m, T));
+    };
+    if (klaassen_electrons_) {
+        const physics::KlaassenMobility k = klaassen(electron);
+        s.mu_n = k.mobility;
+        s.d_mu_n = T0_ * k.d_dT;
+    } else if (masetti_electrons_) {  // Unit 38
         const auto& masetti = physics::masetti_phosphorus_silicon;
         s.mu_n = physics::masetti_mobility(masetti, t.impurity_mobility, T);
         s.d_mu_n = T0_ * physics::masetti_mobility_slope(masetti, t.impurity_mobility, T);
@@ -269,7 +286,11 @@ SystemData::ThermalState SystemData::thermal_state(std::size_t i, double tau) co
         s.mu_n = physics::caughey_thomas_mobility(m, electron, t.impurity_mobility, T);
         s.d_mu_n = T0_ * physics::caughey_thomas_mobility_slope(m, electron, t.impurity_mobility, T);
     }
-    if (masetti_holes_[static_cast<std::size_t>(t.material)] != 0) {  // Units 34, 35
+    if (klaassen_holes_) {
+        const physics::KlaassenMobility k = klaassen(hole);
+        s.mu_p = k.mobility;
+        s.d_mu_p = T0_ * k.d_dT;
+    } else if (masetti_holes_[static_cast<std::size_t>(t.material)] != 0) {  // Units 34, 35
         const auto& masetti = physics::masetti_boron_silicon;
         s.mu_p = physics::masetti_mobility(masetti, t.impurity_mobility, T);
         s.d_mu_p = T0_ * physics::masetti_mobility_slope(masetti, t.impurity_mobility, T);
