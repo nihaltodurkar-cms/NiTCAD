@@ -1,11 +1,14 @@
 // The band surface (band_surface.hpp).
 #include "NiTCAD/render/band_surface.hpp"
+#include "NiTCAD/render/streamlines.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <optional>
+#include <span>
 #include <string>
 #include <variant>
 
@@ -408,6 +411,79 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
         }
         if (!b.vertices.empty()) s.triangles.push_back(std::move(b));
     }
+    // BSD9: a cut line in the base plane, drawn on each shown level at its heights; a step where the owner's
+    // material changes (each segment split in 16, its owner at the part's middle: within 1/32 of an element).
+    if (o.cut && o.cut->samples.size() >= 2) {
+        const CutLine& c = *o.cut;
+        bool in_plane = true;
+        if (o.plane) {
+            const double nn = std::sqrt(dot(o.plane->normal, o.plane->normal));
+            const Point n = unit(o.plane->normal);
+            const double off = o.plane->offset / nn;
+            const double tol = 1e-9 * std::max(extent_um / um_per_cm, 1e-30);
+            in_plane = std::abs(dot(n, c.a) - off) <= tol && std::abs(dot(n, c.b) - off) <= tol;
+        }
+        const Point d = sub(c.b, c.a);
+        const double len = std::sqrt(dot(d, d));
+        if (in_plane && len > 0.0) {
+            const Locator locator(geometry);
+            LineBatch edge{"band cut", {0.0f, 0.0f, 0.0f, 1.0f}, 4.0f, true, {}};
+            const auto at = [&](double dist) {
+                const double t = dist / len;
+                return Point{c.a[0] + t * d[0], c.a[1] + t * d[1], c.a[2] + t * d[2]};
+            };
+            const auto put = [&](const Point& x, double e) {
+                const Point q = lift(x, e);
+                edge.points.push_back(Float3{static_cast<float>(q[0] * um_per_cm), static_cast<float>(q[1] * um_per_cm),
+                                             static_cast<float>(q[2] * um_per_cm)});
+            };
+            for (const std::size_t k : shown) {
+                std::optional<std::pair<Point, double>> last;
+                for (std::size_t i = 1; i < c.samples.size(); ++i) {
+                    if (c.samples[i].gap_before) {
+                        last.reset();
+                        continue;
+                    }
+                    constexpr int parts = 16;
+                    for (int j = 0; j < parts; ++j) {
+                        const double d0 = c.samples[i - 1].distance, d1 = c.samples[i].distance;
+                        const Point p0 = at(d0 + (d1 - d0) * j / parts), p1 = at(d0 + (d1 - d0) * (j + 1) / parts);
+                        const Point pm = at(d0 + (d1 - d0) * (j + 0.5) / parts);
+                        const auto hit = locator.locate(pm, c.samples[i].element);
+                        if (!hit) {
+                            last.reset();
+                            continue;
+                        }
+                        const NodeId owner = band_owner(geometry, hit->element, pm);
+                        if (keys[static_cast<std::size_t>(owner)] < 0) {
+                            last.reset();
+                            continue;
+                        }
+                        const double e0 = band_value(geometry, hit->element, p0, owner, keys, values(k));
+                        const double e1 = band_value(geometry, hit->element, p1, owner, keys, values(k));
+                        if (!std::isfinite(e0) || !std::isfinite(e1) || e0 < lo || e0 > hi || e1 < lo || e1 > hi) {
+                            last.reset();
+                            continue;
+                        }
+                        if (last && last->second != e0) {  // a step: straight up or down
+                            put(p0, last->second);
+                            put(p0, e0);
+                        }
+                        put(p0, e0);
+                        put(p1, e1);
+                        last = std::pair{p1, e1};
+                    }
+                }
+            }
+            if (!edge.points.empty()) {
+                LineBatch inner = edge;
+                inner.color = {1.0f, 1.0f, 1.0f, 1.0f};
+                inner.width_px = 2.0f;
+                s.lines.push_back(std::move(edge));
+                s.lines.push_back(std::move(inner));
+            }
+        }
+    }
     if (!o.by_level) s.colorbar = Colorbar{o.map, *scale, "E (eV)"};
     s.axes = std::array<SceneAxis, 3>{SceneAxis{base.u_title, 0.0, 1.0}, SceneAxis{"E (eV)", 0.0, out.um_per_eV},
                                       SceneAxis{base.v_title, 0.0, 1.0}};
@@ -435,6 +511,31 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
         }
     }
     return out;
+}
+
+std::optional<std::pair<double, double>> band_energy_range(const device::Device& device,
+                                                           std::span<const results::BiasPoint> points,
+                                                           const std::array<bool, 4>& levels) {
+    const auto keys = band_material_keys(device);
+    double lo = std::numeric_limits<double>::infinity(), hi = -lo;
+    for (const results::BiasPoint& p : points) {
+        for (std::size_t k = 0; k < 4; ++k) {
+            if (!levels[k]) continue;
+            const auto& v = level_values(p.bands, k);
+            if (v.size() != keys.size()) continue;
+            for (std::size_t i = 0; i < v.size(); ++i) {
+                if (keys[i] < 0 || !std::isfinite(v[i])) continue;
+                lo = std::min(lo, v[i]);
+                hi = std::max(hi, v[i]);
+            }
+        }
+    }
+    if (!(lo <= hi)) return std::nullopt;
+    if (!(hi - lo > 1e-9)) {
+        const double mid = 0.5 * (lo + hi);
+        return std::pair{mid - 0.5, mid + 0.5};
+    }
+    return std::pair{lo, hi};
 }
 
 void add_plane_outline(FieldScene& scene, const Geometry& geometry, const Plane& plane) {

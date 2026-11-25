@@ -21,6 +21,7 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/render/color.hpp"
+#include "NiTCAD/render/cut_line.hpp"
 #include "NiTCAD/render/geometry.hpp"
 #include "NiTCAD/render/scene.hpp"
 #include "NiTCAD/results/solution.hpp"
@@ -38,6 +39,9 @@ struct BandSurfaceOptions {
     bool by_level = false;                                  // BSQ4: colour by energy unless set
     Colormap map = Colormap::viridis;
     ViewOptions view;                                       // projection and camera angles
+    // BSD9: a cut line (render::cut_line) drawn on each shown level at its heights, as a polyline over the surfaces
+    // (stepping where they step); left out when it does not lie in the base plane.
+    std::optional<CutLine> cut;
 };
 
 // The scene, with what reading it back needs: a height is um_per_eV * E in scene y.
@@ -70,6 +74,13 @@ struct BandSurfaceScene {
 [[nodiscard]] std::optional<double> band_energy_at(const device::Device& device, const Geometry& geometry,
                                                    const results::BandDiagram& bands, BandLevel level,
                                                    std::size_t element, const Point& x);
+
+// One energy range over a run's points (BSD8): the lowest and highest finite value of the levels set, over the
+// semiconductor nodes of every point (a level of the wrong size skipped), widened by 0.5 eV each side about its
+// middle when it is one value (span under 1e-9 eV). Nothing when no value is finite.
+[[nodiscard]] std::optional<std::pair<double, double>> band_energy_range(const device::Device& device,
+                                                                         std::span<const results::BiasPoint> points,
+                                                                         const std::array<bool, 4>& levels);
 
 // The plane's outline on a device view (BSD6): the outer edges of the device's section by the plane (each edge of
 // Geometry::slice's polygons that no other polygon shares), as one on-top line batch "band plane" in dark orange.

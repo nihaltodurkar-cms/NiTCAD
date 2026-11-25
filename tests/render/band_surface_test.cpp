@@ -725,3 +725,109 @@ TEST_CASE("band surface: the inset's reference image (Unit 26o, BSC8)") {
     set_look(s->scene, Look::enhanced);
     render_test::check_image(*r.draw(s->scene, 960, 720), "bandsurface_inset");
 }
+
+TEST_CASE("band surface: one energy range over a run's points (Unit 26o, BSD8)") {
+    const Dev m = mos_like();
+    const auto make = [&](double shift) {
+        results::BiasPoint p;
+        p.bands = bands_of(m.device, [shift](double x, double, std::int32_t) { return 0.2 + 0.1 * x + shift; });
+        return p;
+    };
+    const std::vector<results::BiasPoint> run{make(0.0), make(0.3), make(-0.2)};
+    const auto r = band_energy_range(m.device, run, {true, true, false, false});
+    REQUIRE(r);
+    // Ec spans 0.2 + [0, 0.2] + shifts; Ev is Ec - 1.12.
+    CHECK(std::abs(r->first - (0.2 - 0.2 - 1.12)) < 1e-12);
+    CHECK(std::abs(r->second - (0.2 + 0.2 + 0.3)) < 1e-12);
+    // EFn alone (-0.1 x, the same at every point): its own span.
+    const auto efn = band_energy_range(m.device, run, {false, false, true, false});
+    REQUIRE(efn);
+    CHECK(std::abs(efn->first + 0.2) < 1e-12);
+    CHECK(std::abs(efn->second - 0.0) < 1e-12);
+    // EFp (0 everywhere): widened as a flat surface is.
+    const auto efp = band_energy_range(m.device, run, {false, false, false, true});
+    REQUIRE(efp);
+    CHECK(*efp == std::pair{-0.5, 0.5});
+    // Nothing finite: none.
+    results::BiasPoint empty;
+    empty.bands = bands_of(m.device, [](double, double, std::int32_t) { return not_a_number; });
+    CHECK_FALSE(band_energy_range(m.device, std::vector<results::BiasPoint>{empty}, {true, false, false, false}));
+}
+
+TEST_CASE("band surface: a cut line in the plane drawn at the band heights (Unit 26o, BSD9)") {
+    const auto check_cut = [](const Dev& m, const std::optional<Plane>& plane, double z_um) {
+        const Geometry g = geometry_of(m.device);
+        const auto b = bands_of(m.device, linear_ec);
+        auto cut = cut_line(g, {0.1 * um, 0.4 * um, z_um * um}, {1.9 * um, 0.4 * um, z_um * um});
+        REQUIRE(cut.has_value());
+        BandSurfaceOptions o;
+        o.plane = plane;
+        o.cut = *cut;
+        const auto s = band_surface_view(m.device, g, b, o);
+        REQUIRE(s.has_value());
+        const LineBatch* line = nullptr;
+        for (const LineBatch& l : s->scene.lines) {
+            if (l.name == "band cut") line = &l;
+        }
+        REQUIRE(line != nullptr);
+        CHECK(line->on_top);
+        REQUIRE(line->points.size() % 2 == 0);
+        REQUIRE(line->points.size() >= 4);
+        // Ec and Ev both drawn, each point at a level's height for its (x, y).
+        std::size_t on_ec = 0, on_ev = 0;
+        for (const Float3& p : line->points) {
+            CHECK(std::abs(p[2] - 0.4f) < 1e-5f);  // y = 0.4 um is scene z
+            const double e = p[1] / s->um_per_eV;
+            const double ec = linear_ec(p[0], 0.4, 0);
+            if (std::abs(e - ec) < 1e-5) ++on_ec;
+            else if (std::abs(e - (ec - 1.12)) < 1e-5) ++on_ev;
+            else FAIL_CHECK("a point off both levels: E = " << e);
+        }
+        CHECK(on_ec > 0);
+        CHECK(on_ev > 0);
+        // Without the cut, no such batch.
+        o.cut.reset();
+        const auto none = band_surface_view(m.device, g, b, o);
+        REQUIRE(none.has_value());
+        CHECK(std::ranges::none_of(none->scene.lines, [](const LineBatch& l) { return l.name == "band cut"; }));
+    };
+    check_cut(mos_like(), std::nullopt, 0.0);
+    check_cut(mos_like(true), Plane{{0.0, 0.0, 1.0}, 0.3 * um}, 0.3);
+    // A 3D cut line off the plane is not drawn.
+    const Dev m = mos_like(true);
+    const Geometry g = geometry_of(m.device);
+    auto off = cut_line(g, {0.1 * um, 0.4 * um, 0.1 * um}, {1.9 * um, 0.4 * um, 0.1 * um});
+    REQUIRE(off.has_value());
+    BandSurfaceOptions o;
+    o.plane = Plane{{0.0, 0.0, 1.0}, 0.3 * um};
+    o.cut = *off;
+    const auto s = band_surface_view(m.device, g, bands_of(m.device, linear_ec), o);
+    REQUIRE(s.has_value());
+    CHECK(std::ranges::none_of(s->scene.lines, [](const LineBatch& l) { return l.name == "band cut"; }));
+}
+
+TEST_CASE("band surface: the cut line steps with the bands at a heterojunction (Unit 26o, BSD9)") {
+    const Dev h = hetero();
+    const Geometry g = geometry_of(h.device);
+    const auto b = bands_of(h.device, [](double x, double, std::int32_t k) { return 0.4 + 0.05 * x + (k == 1 ? 0.2 : 0.0); });
+    auto cut = cut_line(g, {0.1 * um, 0.5 * um, 0.0}, {1.9 * um, 0.5 * um, 0.0});
+    REQUIRE(cut.has_value());
+    BandSurfaceOptions o;
+    o.levels = {true, false, false, false};
+    o.cut = *cut;
+    const auto s = band_surface_view(h.device, g, b, o);
+    REQUIRE(s.has_value());
+    const LineBatch* line = nullptr;
+    for (const LineBatch& l : s->scene.lines) {
+        if (l.name == "band cut") line = &l;
+    }
+    REQUIRE(line != nullptr);
+    // A vertical segment of 0.2 eV near the wall (x = 0.875 um, within 1/16 of an element).
+    bool step = false;
+    for (std::size_t i = 0; i + 1 < line->points.size(); i += 2) {
+        const Float3& a = line->points[i];
+        const Float3& c = line->points[i + 1];
+        if (a[0] == c[0] && std::abs(std::abs(c[1] - a[1]) / s->um_per_eV - 0.2) < 0.02 && std::abs(a[0] - 0.875f) < 0.02f) step = true;
+    }
+    CHECK(step);
+}
