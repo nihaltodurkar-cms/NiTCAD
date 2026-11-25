@@ -2785,6 +2785,32 @@ byte-identical to the 2D one (that test device is z-invariant). Limitation: `ren
 but not hidden; `band_energy_at` rebuilds the material keys per call; the enhanced look's feature edges draw stray
 lines on steep junction slopes (`set_look`, shared code).
 
+**Slice 1 record (2026-11-26; owner: "start slice 1").** Commits 23cc567 (BSD5 model and command: `ViewKind::
+band_surface` "band-surface", settings `band_levels`, `exaggeration`, `band_opacity`, `by_level`, `band_plane`, the
+energy range on `range`; `nitcad plot --view band-surface --band-levels --exaggeration --opacity --by-level
+--plane`; the app's images equal the command's byte for byte, 2D and 3D), f6a14ef (BSD6: `FieldScene::plane_inset`
+and `plane_inset_figure`, drawn top right in Direct2D; `add_plane_outline` on a 3D device's solid, field and slice
+views, `--plane` there too; references `bandsurface_inset` new and `bandsurface_mosfet3d` rewritten with its
+inset), 7beaaa7 (BSD7: `app::band_pick`, a ray–triangle pick on the drawn levels, read back through
+`render::band_energy_at`; `band_hover_text`; `render::band_owner`), 2f47556 (the window: Ec, Ev, EFn, EFp, Colour by
+level, Height × and Opacity in the inspector; the plane on the Slice plane / Slice at controls, one plane with the
+Slice view's; the hover readout), f3a5102 (a pick-from-above test). Tests run (Release): `app.view_settings`,
+`app.probe`, `app.layout`, `app.app_state`, `app_layering`, `app_window.window`, `app_window.analysis_window`,
+`app_window.hover_window`, `render.band_surface`, `render.axes3d`, `render.scene`, `render.image`,
+`render.cut_line`, `render_layering`: 14 of 14 pass; no full suite, no Debug. BSC10 checked by window messages (2D:
+Band surface chosen, Ev off, height 2, opacity refused out of range, point 0 stepped to, a substrate node hovered:
+the readout is `band_pick`'s and its Ec within 2e-3 eV of the node's, the cursor landing within a pixel; 3D: the
+plane set to x = 1 µm, the Slice view shows it, the Solid view outlines it, a Slice plane chosen there is the band
+surface's). BSC11: 10 mutants, one did not build; 7 of 9 caught at first, M6 (the farthest surface answering) then
+killed by a pick from above; M8 (the plane not copied to the slices) is equivalent, the Slice view's default taking
+the band plane. **Found and fixed:** choosing a bias point in the View tab's Point list snapped back to the shown
+point (stopping playback re-selected it before the choice was read) — a defect since Unit 26c. Calls made: the
+inset shows the device's bounding box (every shipped device is a box) seen with the camera applied to the device's
+x, y, z; the readout names the region, not the material (the material is a physics type, BSC4); a cut line is not
+passed to the band surface until BSD9. Deferred: the slice controls keep their "Slice" labels on the band surface;
+`band_pick` builds a `Locator` per hover (the HG7 budget not measured on the FinFET); the FinFET check (BSC8) waits
+for the solved file.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
