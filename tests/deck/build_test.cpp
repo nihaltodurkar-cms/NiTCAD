@@ -534,7 +534,7 @@ TEST_CASE("deck build: every mistake names its line", "[deck]") {
     expect(failure(head + "[equilibrium]\n[models]\nsrh = maybe\n"), "t.deck:14: 'maybe' is not on or off");
     expect(failure(head + "[equilibrium]\n[models]\nquantum = on\n"), "t.deck:14: unknown key 'quantum' in [models]");
     expect(failure(head + "[equilibrium]\n[models]\nhole_mobility = arora\n"),
-           "t.deck:14: hole_mobility is automatic, caughey_thomas or masetti");
+           "t.deck:14: hole_mobility is automatic, caughey_thomas, masetti, klaassen or klaassen_equilibrium");
     expect(failure(head + "[equilibrium]\n[solver]\nbackend = pardiso\n"), "t.deck:13: backend = pardiso needs 'mkl'");
     expect(failure(head + "[equilibrium]\n[solver]\nmax_cuts = 99\n"), "t.deck:14: 'max_cuts' must lie in 0..52");
     expect(failure(head + "[equilibrium]\n[solver]\nnatural_norm = rms\n"),
@@ -625,7 +625,38 @@ TEST_CASE("deck build: electron_mobility (Unit 38)", "[deck]") {
     CHECK(must(diode_deck + "[models]\nelectron_mobility = masetti\n").options.models.electron_mobility ==
           assemble::ElectronMobility::masetti);
     CHECK(failure(diode_deck + "[models]\nelectron_mobility = arora\n").find(
-              "electron_mobility is caughey_thomas or masetti") != std::string::npos);
+              "electron_mobility is caughey_thomas, masetti, klaassen or klaassen_equilibrium") != std::string::npos);
+}
+
+TEST_CASE("deck build: klaassen_equilibrium mobility (Unit 66, KC8, KC9)", "[deck]") {
+    const auto built =
+        must(diode_deck + "[models]\nelectron_mobility = klaassen_equilibrium\n"
+                          "hole_mobility = klaassen_equilibrium\n");
+    CHECK(built.options.models.electron_mobility == assemble::ElectronMobility::klaassen_equilibrium);
+    CHECK(built.options.models.hole_mobility == assemble::HoleMobility::klaassen_equilibrium);
+    // The run record carries the values KD7 fixes: electrons 3, holes 4.
+    const auto r = solve::make_run_record(built.device, built.options, built.points);
+    const auto has = [&](const char* key, double value) {
+        for (const auto& [k, v] : r.settings) {
+            if (k == key) return v == value;
+        }
+        return false;
+    };
+    CHECK(has("models.electron_mobility", 3.0));
+    CHECK(has("models.hole_mobility", 4.0));
+    // `klaassen` (carrier-dependent): electrons 2, holes 3.
+    const auto k = must(diode_deck + "[models]\nelectron_mobility = klaassen\nhole_mobility = klaassen\n");
+    CHECK(k.options.models.electron_mobility == assemble::ElectronMobility::klaassen);
+    CHECK(k.options.models.hole_mobility == assemble::HoleMobility::klaassen);
+    const auto rk = solve::make_run_record(k.device, k.options, k.points);
+    const auto value = [&](const char* key) {
+        for (const auto& [name, v] : rk.settings) {
+            if (name == key) return v;
+        }
+        return -1.0;
+    };
+    CHECK(value("models.electron_mobility") == 2.0);
+    CHECK(value("models.hole_mobility") == 3.0);
 }
 
 TEST_CASE("deck build: surface_mobility (Unit 46, LD1)", "[deck]") {

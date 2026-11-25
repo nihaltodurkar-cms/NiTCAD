@@ -52,7 +52,16 @@ struct ManufacturedSources {
 // to carry silicon's hole mobility parameters, or automatic (the default since Unit 35): Masetti
 // in the regions that carry silicon's hole mobility parameters, the material's Caughey-Thomas in
 // the others. Electrons keep Caughey-Thomas either way. The values are recorded in run records.
-enum class HoleMobility : std::uint8_t { caughey_thomas = 0, masetti = 1, automatic = 2 };
+// Unit 66 (DECISIONS.md, Unit 66): Klaassen's unified mobility (physics/klaassen_mobility.hpp),
+// silicon only like Masetti: klaassen_equilibrium at each node's neutral equilibrium densities
+// (every model), klaassen at the solution's n and p (isothermal drift-diffusion; KD5, KD6).
+enum class HoleMobility : std::uint8_t {
+    caughey_thomas = 0,
+    masetti = 1,
+    automatic = 2,
+    klaassen = 3,
+    klaassen_equilibrium = 4
+};
 
 // Whether a semiconductor's holes take Masetti's mobility under `model`: always for masetti, for
 // automatic when the material's hole mobility parameters are silicon's.
@@ -66,7 +75,13 @@ enum class HoleMobility : std::uint8_t { caughey_thomas = 0, masetti = 1, automa
 // The doping-dependent electron mobility (Unit 38): the material's Caughey-Thomas (the default)
 // or Masetti's phosphorus-doped silicon fit (physics/mobility.hpp), which needs every
 // semiconductor region to carry silicon's electron mobility parameters. Opt-in.
-enum class ElectronMobility : std::uint8_t { caughey_thomas = 0, masetti = 1 };
+// Unit 66: klaassen and klaassen_equilibrium as for holes.
+enum class ElectronMobility : std::uint8_t {
+    caughey_thomas = 0,
+    masetti = 1,
+    klaassen = 2,
+    klaassen_equilibrium = 3
+};
 
 // The dopant levels of incomplete ionization (Unit 37): each material's fixed levels (Unit 15,
 // the default) or Altermatt et al.'s density-dependent levels of silicon (physics/ionization.hpp;

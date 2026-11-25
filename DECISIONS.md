@@ -4076,6 +4076,185 @@ Seconds (build + solve), GMRES products and held memory:
   line of the `[gmres]`/`[amg]` cases and of the whole linalg binary (25 lines) appears unchanged on the branch,
   which only adds the `cpr_amg` lines. The full Release and Debug suites have not run (owner's word needed; no Debug build by
   standing rule). Nothing pushed.
+### Unit 66 — Philips unified (Klaassen) mobility, opt-in (proposed 2026-11-23; on `physics/klaassen-mobility`)
+
+**Owner request (2026-11-23):** "Implement Philips unified (Klaassen) model in my NiTCAD", then "choose recommended and
+start". Klaassen's model was one of the top gaps of the 2026-11-16 review (Shi 2026). It gives one description of the
+majority and minority mobilities of both carriers in silicon: lattice scattering, donor and acceptor scattering with
+screening by the carriers, electron–hole scattering and dopant clustering at high doping. It is the bipolar, power
+and solar-cell default of the commercial tools; Caughey-Thomas and Masetti give a minority carrier the majority
+mobility of the same total doping, which is wrong by up to a factor of about 2 in heavily doped emitters.
+
+**Standing conditions.** Opt-in. Unselected, everything is bit-identical to `main`: residuals, Jacobian patterns and
+values, run identities, result files, the Unit 40/59 traces and decks. Criteria are fixed before code and never
+loosened after a run (TVM2). Release and Debug suites with `/W4 /WX`, run only on the owner's word. Commits stay
+local; no push, PR or merge without the owner's word. The approach (staged, KQ1) and KQ2–KQ7 were ruled as
+recommended under the owner's standing instruction (2026-11-11) and the owner's "choose recommended and start".
+
+**Sources (read 2026-11-23; the 1992 papers themselves were not read, no copy in hand).** D. B. M. Klaassen,
+Solid-State Electron. 35, 953 (1992) and 961 (1992), as reproduced by: (S1) Sandia Charon User Manual v2.2,
+SAND2022-7653, section 7.4, eqs (62)–(74) and Tables 7-8, 7-9; (S2) DEVSIM, "Mobility modeling" (2009), its model
+code; (S3) COMSOL Semiconductor Module User's Guide 6.3/6.4, "Klaassen Unified Mobility Model", parameter list;
+(S4) Silvaco ATLAS User's Manual (an old edition), eqs 3-158–3-183. Copies stay in `C:\Users\disha\papers\klaassen\`
+(not committed). Where they disagree:
+- r1, r5: S1 and S3 give 0.7643 and −0.01552; S4 gives 0.7463 and −0.8552. Taken: S1/S3 (two independent sources;
+  S4's r1 is a digit transposition).
+- s1: S1 prints 0.89223, S3 and S4 0.89233. Taken: 0.89233.
+- Electron set: S4's defaults (1417, 52.2, 9.68e16, 0.68) are Klaassen's arsenic set (S1 Table 7-8); S1 and S3
+  give phosphorus (1414, 68.5, 9.20e16, 0.711) as the electron default. Taken: phosphorus (KQ4).
+- P_BH: S1, S2 use n + p; S4 uses n alone for electrons and p alone for holes. Taken: n + p (S1, S2).
+- Clustering: S1 eq (74) and S2 apply it to the dopant densities; S4 only inside P_CW. Taken: S1 (KQ5).
+- P_CW: S2 writes 3.97e13 (1/(Z³ N_sc)) ^(2/3) (T/300)² with Z the clustering factor; S1 3.97e13 N_sc^(−2/3) with
+  the temperature factor not legible; S4 3.97e13 (1/(Z³ N_D))^(2/3) (T/300)². Taken: 3.97e13 N_sc^(−2/3) (T/300)²,
+  Z = 1 (singly ionised dopants; the clustering already enters through N*), KQ5.
+- G(P) minimum: S1 holds G at its minimum for P below the minimiser (G otherwise turns up and can go negative for
+  small P). Taken (KQ6).
+
+**Model.** For carrier i (e or h), the other carrier j, lattice temperature T [K], N_D, N_A [cm⁻³], n, p [cm⁻³]:
+
+  1/μ_i = 1/μ_i,L + 1/μ_i,DAP                                                        (Matthiessen)
+  μ_i,L = μ_max,i (T/300)^(−θ_i)
+  μ_i,DAP = μ_i,N (N_i,sc / N_i,sc,eff) (N_ref,i / N_i,sc)^α_i + μ_i,c (n + p) / N_i,sc,eff
+  μ_i,N = μ_max,i² / (μ_max,i − μ_min,i) · (T/300)^(3α_i − 1.5)
+  μ_i,c = μ_max,i μ_min,i / (μ_max,i − μ_min,i) · (300/T)^0.5
+  N_D* = N_D (1 + 1 / (c_D + (N_ref,D / N_D)²)),  N_A* likewise with c_A, N_ref,A (N* = 0 at N = 0)
+  N_e,sc = N_D* + N_A* + p,             N_h,sc = N_A* + N_D* + n
+  N_e,sc,eff = N_D* + G(P_e) N_A* + p / F(P_e),   N_h,sc,eff = N_A* + G(P_h) N_D* + n / F(P_h)
+  P_i = [f_CW / P_CW,i + f_BH / P_BH,i]⁻¹,  P_CW,i = 3.97e13 N_i,sc^(−2/3) (T/300)²,
+                                             P_BH,i = 1.36e20 / (n + p) · (m_i/m0) (T/300)²
+  G(P) = 1 − s1 / [s2 + ((m0/m_i)(T/300))^s4 P]^s3 + s5 / [((m_i/m0)(300/T))^s7 P]^s6, held at its minimum below
+         the minimiser P_min,i (found once per (i, T) by Brent on the monotone derivative)
+  F(P_i) = (r1 P^r6 + r2 + r3 m_i/m_j) / (P^r6 + r4 + r5 m_i/m_j)
+
+Evaluated as 1/μ_i,DAP = N_i,sc,eff / [μ_i,N N_ref,i^α N_i,sc^(1−α) + μ_i,c (n + p)], which is 0 (μ = μ_i,L) when
+N_sc = 0 and n + p = 0; P = ∞ gives G = 1, F = r1 by their limits.
+
+Parameters (silicon): electrons (phosphorus) μ_max 1414, μ_min 68.5 cm²/(V s), N_ref 9.20e16 cm⁻³, α 0.711,
+θ 2.285; holes (boron) 470.5, 44.9, 2.23e17, 0.719, θ 2.247; c_D 0.21, c_A 0.50, N_ref,D 4.0e20, N_ref,A 7.2e20;
+m_e/m0 = 1, m_h/m0 = 1.258; f_CW 2.459, f_BH 3.828; s1–s7 0.89233, 0.41372, 0.19778, 0.28227, 0.005978, 1.80618,
+0.72169; r1–r6 0.7643, 2.2999, 6.5502, 2.3670, −0.01552, 0.6478 (S1, S3).
+
+**Design (KD1–KD9).**
+
+| ID | Decision | Reason | Limitation |
+|---|---|---|---|
+| KD1 | Physics: `physics/klaassen_mobility.hpp/.cpp`, `KlaassenParameters` (the set above, `klaassen_silicon`) and `klaassen_mobility(p, carrier, N_D, N_A, n, p, T)` returning μ and ∂μ/∂n, ∂μ/∂p, ∂μ/∂T, all analytic. Preconditions as Masetti's. | One function serves both variants and every assembly path; analytic partials for Newton (ARCHITECTURE section 5). | — |
+| KD2 | Two deck values per carrier (KQ1, KQ2): `electron_mobility` / `hole_mobility` = `klaassen` (n, p the solution's) or `klaassen_equilibrium` (n, p the neutral equilibrium of the node's doping: n₀ = N/2 + √((N/2)² + n_i²), p₀ = n_i²/n₀ with N = N_D − N_A, n_i the material's at T; static, like Masetti). Both carriers may differ. | `klaassen_equilibrium` is the drop-in (every path, no Jacobian change); `klaassen` is the model's purpose (high injection). | — |
+| KD3 | Silicon only: every semiconductor region must carry silicon's Caughey-Thomas mobility set, as Masetti (Units 34, 38); refused (`invalid_input`) otherwise. `doping_mobility off` makes N_D = N_A = 0 (μ then from carriers and lattice only). | The fits are silicon's. | Other materials: follow-up. |
+| KD4 | `klaassen_equilibrium` (slice 0): the node mobilities of drift_diffusion.cpp's precompute, electrothermal's node table (μ and ∂μ/∂T, as `masetti_mobility_slope`; n₀, p₀ re-evaluated at the node's T), energy balance and impact ionization read it unchanged. | No pattern change; bit-identical paths for everything else. | Carrier–carrier scattering at its equilibrium value only. |
+| KD5 | `klaassen` (slice 1): the node mobilities become functions of the node's n, p. Each Newton evaluation recomputes μ_n, μ_p and their n, p partials per semiconductor node; the edge low-field mobility stays the harmonic mean of its ends, so its partials reach n_a, p_a, n_b, p_b. The isothermal edge Jacobian gains the cross entries (electron row – p columns, hole row – n columns, both ends), added only when `klaassen` is selected. Field (Canali) and surface mobility chain through d μ / d μ₀ as today. | Exact Newton (quadratic convergence) is the project's rule; a lagged mobility would need outer iterations and change convergence behaviour. | Pattern grows 4 entries per edge direction when on. |
+| KD6 | Refused with `klaassen` (KQ3; `invalid_input`, before solving): electrothermal, energy balance, density gradient, impact ionization, quantum `mlda`. `klaassen_equilibrium` is allowed with all of them. | Each of these keeps its own node-mobility table or derivative chain; carrier-dependent versions are follow-ups. | Recorded follow-ups. |
+| KD7 | Run records: `models.electron_mobility` gains 2 (`klaassen`) and 3 (`klaassen_equilibrium`); `models.hole_mobility` gains 3 and 4 (2 is `automatic`). Written only when not the default, as now. | Run identities of existing decks unchanged. | — |
+| KD8 | Deck vocabulary, app field list and docs: the two values added to `deck_vocabulary.cpp` with their help text; ARCHITECTURE.md section 6 as-built block and the 11.3 row. | The app's deck editor offers the values. | — |
+| KD9 | Example: none new; the bundled diode deck gets a `klaassen` variant in a test only (KC7). | No new bundled file without the owner (the tree is the owner's). | — |
+
+**Questions (ruled as recommended, 2026-11-23).**
+
+| ID | Question | Options | Ruling |
+|---|---|---|---|
+| KQ1 | Scope | (a) equilibrium-carrier (doping-only) Klaassen only; (b) full carrier-dependent everywhere at once; (c) staged: (a) in every path in slice 0, full carrier dependence in isothermal drift-diffusion in slice 1, the rest refused and recorded | **(c)** |
+| KQ2 | How the variants are selected | (a) two deck values `klaassen`, `klaassen_equilibrium`; (b) one value and a separate switch | **(a)** |
+| KQ3 | `klaassen` with electrothermal, energy balance, density gradient, impact ionization, MLDA | (a) refused, follow-ups; (b) silently fall back to equilibrium carriers | **(a)**: no silent model change |
+| KQ4 | Electron parameter set | (a) phosphorus (S1, S3 default); (b) arsenic (S4 default); (c) per-region dopant choice | **(a)**, arsenic a recorded follow-up |
+| KQ5 | Clustering and P_CW | (a) clustering on the dopants (S1 eq 74), P_CW with N_sc and Z = 1; (b) S2's Z³ inside P_CW as well; (c) S4's form | **(a)** |
+| KQ6 | G(P) below its minimiser | (a) hold G at its minimum (S1); (b) the raw formula | **(a)** |
+| KQ7 | Published curves | (a) no digitised paper data (papers not in hand); KC2–KC5 check limits, Masetti agreement for majority carriers and the minority > majority property; (b) the owner supplies the papers first | **(a)**, recorded as open |
+
+**Criteria (KC1–KC10), fixed before code.**
+
+| ID | Criterion |
+|---|---|
+| KC1 | Off: every existing test passes unchanged; the Unit 59 NG1 trace set byte-identical to `main`'s; run identities and Jacobian patterns unchanged. |
+| KC2 | Limits: at N_D = N_A = n = p = 0, μ = μ_L to 1e-14 relative at 200, 300, 400 K; at 300 K μ_e = 1414, μ_h = 470.5. |
+| KC3 | Majority carriers at 300 K, n = N_D (N_A = 0, p = n_i²/n) and p = N_A: within 10 % of Masetti's phosphorus (electrons) and boron (holes) fits (physics/mobility.hpp) at every decade 1e14–1e20 cm⁻³; the largest deviation recorded. |
+| KC4 | Minority over majority at 300 K: μ_e in p-type (N_A, p = N_A) > μ_e in n-type (N_D = N_A) at 1e19 and 1e20 cm⁻³; likewise μ_h; the ratios recorded. |
+| KC5 | Partials: ∂μ/∂n, ∂μ/∂p, ∂μ/∂T against central differences to 1e-6 relative over a grid (N_D, N_A in {0, 1e15, 1e18, 1e20}, n, p in {0, 1e10, 1e16, 1e19}, T in {250, 300, 400}); G continuous at P_min. |
+| KC6 | `klaassen_equilibrium`: a PN diode IV (bundled 1D diode deck) converges at every bias; the Jacobian of a two-carrier state matches central differences of the residual to 1e-6 relative (existing FD-check helper), isothermal and electrothermal. |
+| KC7 | `klaassen`: the same Jacobian FD check (cross entries included) to 1e-6; the diode IV converges with Newton steps per bias no more than the Masetti run's plus 2; in high injection (forward bias with n, p > 10 N_D in the base) the current differs from `klaassen_equilibrium`'s (carrier–carrier scattering acts), the difference recorded. |
+| KC8 | Refusals: each KD3 and KD6 refusal names the region or model; the deck errors for unknown values list all values. |
+| KC9 | Run records and restart: the new values recorded; a resumed `klaassen` transient continues bit for bit (Unit 61). |
+| KC10 | Release and Debug suites (owner's word), NG1 traces vs `main`; `/W4 /WX` clean. |
+
+**Slices.** 0: physics + `klaassen_equilibrium` in every path + deck/records (KC2–KC6, KC8 partly). 1: `klaassen`
+carrier-dependent assembly and refusals (KC7–KC9). 2: ARCHITECTURE as-built + suites on the owner's word (KC1, KC10).
+
+**Slice 0 record, physics (2026-11-23).** `physics/klaassen_mobility.hpp/.cpp` (forward-mode partials in n, p, T;
+G's minimiser by 60 bisections of G' on ln P in [1e-8, 1e8]), `tests/physics/klaassen_test.cpp`. The formulas match
+an independent transcription (golden-section minimiser) to 1e-10 at 3 × 8 × 8 × 5 × 5 points per carrier. KC2 met.
+KC3 met: largest deviation from Masetti electrons 0.56 % (1e20), holes 4.64 % (1e18). KC4 met: minority/majority
+at 1e19 electrons 1.640, holes 1.790; at 1e20 electrons 2.261, holes 2.542. KC5: two readings, stated here and
+put to the owner as KQ8:
+- Written into the test before its first run: the points with N_D = N_A = 0 and a zero carrier density are left
+  out (not differentiable, the header says so).
+- **Changed after the first run (TVM2: a loosening, not self-ruled).** The first run failed 675 of 13410 checks,
+  all partials whose whole effect x ∂μ/∂x is under the central difference's rounding noise (about 5e-12 μ at
+  h = 1e-5 x), compared against a 1e-12 μ floor. The test now passes a partial that matches to 1e-6 relative OR
+  whose effect x |∂μ/∂x − fd| is below 1e-9 μ; with it, 13410/13410 pass. A mutant dropping F's partials
+  (μ through N_sc,eff) fails 1849 checks, so the test still detects a wrong partial.
+
+| ID | Question | Options | Ruling |
+|---|---|---|---|
+| KQ8 | KC5's floor for partials below the difference noise | (a) keep the 1e-9 μ effect floor (recommended: the 1e-12 floor was under the FD's own rounding, a test defect rather than a model one); (b) a tighter check by complex-step or higher-precision differences, KC5 open until then | **(a)**, the owner, 2026-11-25 ("choose recommended") |
+
+**Slice 0 record, `klaassen_equilibrium` (2026-11-25).** `ElectronMobility::klaassen_equilibrium` = 3,
+`HoleMobility::klaassen_equilibrium` = 4 (KD7); the silicon refusal (KD3); the isothermal node precompute
+(`klaassen_at` once per carrier per run) and the electrothermal node table (μ and the total ∂μ/∂T with n_i's
+slope; `klaassen_at` per node per evaluation, a cost to revisit if electrothermal runs slow); the deck values,
+vocabulary and hints; deck error messages now list all values (KC8). Tests, all Release:
+- KC6 met. FD Jacobian, isothermal: 1D heavily doped diode (1e19 / 1e18) worst column 4.5e-9, 2D with field
+  mobility 3.0e-9; electrothermal: 1D and 2D-with-field-mobility cases added to the Unit 23 gate, ≤ 1e-6, pass.
+  The residual differs from Masetti's at the same state (the model is in use). The Unit 9 diode 0–0.8 V: every
+  bias converges, Newton steps per bias equal Masetti's (1, 4, then 5); J is 2.2 % (0.05 V) to 6.2 % (0.5 V)
+  below Masetti's. Recorded cause: at 1e17 the Klaassen minority mobilities are below the majority ones
+  (electrons 665.6 vs Masetti 721.3, holes 310.7 vs 319.1 cm²/(V s); electron–hole scattering), crossing above
+  near 1e18 (313.4 vs 277.0, 184.0 vs 160.3).
+- KC8 partly met: the region refusal for either carrier; the deck messages. KC9 partly met: the run record carries
+  electrons 3, holes 4 (deck test).
+- Binaries run whole: physics, assemble, deck (before the new deck case; the case itself after), app — all pass.
+  The full Release and Debug suites have not run (owner's word; no Debug builds by the standing rule).
+
+**KQ8 ruled (2026-11-25):** the owner, "choose recommended": (a), the 1e-9 μ effect floor stands; KC5 met.
+
+| ID | Question | Options | Ruling |
+|---|---|---|---|
+| KQ9 | `klaassen` with Lombardi surface mobility (KD5 had it chained; found in slice 1 that Lombardi's E_perp slope and the n, p partials would both run through its end mobilities) | (a) refused in this unit, a recorded follow-up, as KD6's others; (b) chained now | **(a)**, ruled as recommended (2026-11-25, standing instruction); KD5's "surface mobility chain" is withdrawn |
+
+**Slice 1 record, `klaassen` (2026-11-25).** `ElectronMobility::klaassen` = 2, `HoleMobility::klaassen` = 3;
+`SystemData::klaassen_fluxes` (edge_fluxes with unit factors, then a = (a0 / μ0) μ(n, p, E): harmonic mean, Canali of
+it or between materials the mean of each end's Canali); `EdgeFlux::d_other1/2`; the carrier-flux term's pattern and
+stamping of the cross entries (4 per edge). Densities below 0 (Newton iterates) continue linearly with the slope at
+0, the mobility held at ≥ half its value at 0: the first FD gate run failed (worst 0.5) only because the probe's
+1e-7 step took tiny minority densities (9.4e-15 scaled) below 0, where a clamp at 0 halved the difference; the
+Jacobian entry itself was right (diagnosed, not a criterion change). Results, Release:
+- KC7 met. FD Jacobian with cross entries: 1D heavy 4.5e-9, 2D field mobility 5.7e-8, 1D electrons only 3.1e-9,
+  3D 4.3e-8 (≤ 1e-6); the pattern grows by exactly 4 per edge. Unit 9 diode 0–0.8 V: Newton steps equal Masetti's
+  at every bias (≤ +2 allowed). High injection (p+ 1e19 / n 1e15, to 0.9 V): base holes reach 1.906e17 cm⁻³
+  (191 N_D); `klaassen` against `klaassen_equilibrium` J is +0.4 % at 0.2–0.3 V, −0.26 % at 0.6 V, −11.0 % at 0.8 V
+  and −22.8 % at 0.9 V (carrier–carrier scattering); Newton 5–6 both.
+- KC8 met: refusals with electrothermal, energy balance, impact ionization, surface mobility (KQ9), quantum
+  confinement (each named), `klaassen_equilibrium` allowed with them; non-silicon regions named; deck messages list
+  all five / four values.
+- KC9 met: run records electrons 2, holes 3 (deck test); a `klaassen` transient (diode pulse, BDF2 adaptive)
+  resumes bit for bit at four stop points (Unit 61 harness).
+- Run: physics, assemble, app binaries whole; solve `[klaassen]`, `[resume]`; the deck's mobility cases. Full
+  suites not run (owner's word); no Debug.
+
+**Slice 2 docs (2026-11-25).** ARCHITECTURE.md: the Unit 66 as-built block at the end of 6.2 and the 11.3 nanoscale
+row's mobility mention. Remaining: KC10 (full Release and Debug suites), on the owner's word.
+
+**KC1 met (2026-11-25, owner's word).** NG1 traces of the five traced binaries (assemble, deck, adapt, validation,
+solve; Release, MKL) on the branch against `main` 42b4306 (the merge base; its HC1 traces, PARDISO cases from its
+MKL re-trace), compared order-independently by case. All five binaries pass. 445 common cases: 443 identical; the
+electrothermal FD-gate case keeps every `main` record and adds only its two new Klaassen subcases; the GMRES-ILUT
+quasi-static C-V case differs only by attribution: the shared static fixture of `mos_test.cpp` (computed once, by
+whichever case runs first) now lands there, not in P3, and the records together are the same. 9 cases are new
+(Klaassen 5; PARDISO 4, skipped in the non-MKL `main` run) and P3's key is gone (the attribution above); the 4 PARDISO cases match `main`'s
+MKL trace with the same fixture attribution. Run identities (deck traces 65/65 identical) and Jacobian patterns
+unchanged.
+
+**KC10 (2026-11-25, owner's word).** Release: build `/W4 /WX` clean, full suite 302/302 (3787 s, ctest -j 4).
+Debug not run: the owner stopped it before it started ("dont start the debug process"); Debug is left to CI.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

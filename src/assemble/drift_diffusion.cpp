@@ -19,6 +19,7 @@
 #include "NiTCAD/physics/band_to_band.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
+#include "NiTCAD/physics/klaassen_mobility.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
@@ -227,6 +228,45 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             return refuse("energy balance with band-to-band tunnelling is not supported");
         }
     }
+    // Unit 66 (KD3): Klaassen's parameters are silicon's; every semiconductor region must carry
+    // silicon's electron and hole mobility sets when either carrier selects a Klaassen model.
+    const bool klaassen_carriers = models.electron_mobility == ElectronMobility::klaassen ||
+                                   models.hole_mobility == HoleMobility::klaassen;
+    if (klaassen_carriers) {
+        // KD6, KQ3, KQ9: the models that keep their own mobility tables or derivative chains.
+        const char* other = models.electrothermal       ? "electrothermal"
+                            : models.energy_balance     ? "energy balance"
+                            : models.impact_ionization  ? "impact ionization"
+                            : models.surface_mobility != SurfaceMobility::off ? "surface mobility"
+                            : models.quantum_confinement != QuantumConfinement::off
+                                ? "quantum confinement"
+                                : nullptr;
+        if (other != nullptr) {
+            return std::unexpected(base::Error{
+                base::ErrorCode::invalid_input,
+                std::string("klaassen mobility (carrier-dependent) with ") + other +
+                    " is not supported; klaassen_equilibrium is (DECISIONS.md, Unit 66)",
+                {}});
+        }
+    }
+    if (klaassen_carriers || models.electron_mobility == ElectronMobility::klaassen_equilibrium ||
+        models.hole_mobility == HoleMobility::klaassen_equilibrium) {
+        for (const device::Region& r : device.regions()) {
+            const auto* s = std::get_if<physics::Semiconductor>(&r.material);
+            if (s && !(s->parameters().electron_mobility ==
+                           physics::silicon_parameters.electron_mobility &&
+                       s->parameters().hole_mobility ==
+                           physics::silicon_parameters.hole_mobility)) {
+                return std::unexpected(base::Error{
+                    base::ErrorCode::invalid_input,
+                    std::string(klaassen_carriers ? "klaassen" : "klaassen_equilibrium") +
+                        " mobility: region '" + r.name +
+                        "' does not have silicon's mobility (Klaassen's parameters are "
+                        "silicon's)",
+                    {}});
+            }
+        }
+    }
     // Unit 34: Masetti's coefficients are boron-doped silicon's, so every semiconductor region must
     // carry silicon's hole mobility (its Caughey-Thomas set stands for "silicon" here).
     if (models.hole_mobility == HoleMobility::masetti) {
@@ -242,7 +282,9 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             }
         }
     } else if (models.hole_mobility != HoleMobility::caughey_thomas &&
-               models.hole_mobility != HoleMobility::automatic) {
+               models.hole_mobility != HoleMobility::automatic &&
+               models.hole_mobility != HoleMobility::klaassen &&
+               models.hole_mobility != HoleMobility::klaassen_equilibrium) {
         return refuse("unknown hole mobility model");
     }
     // Unit 38: likewise for Masetti's phosphorus-doped silicon electrons.
@@ -259,7 +301,9 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
                     {}});
             }
         }
-    } else if (models.electron_mobility != ElectronMobility::caughey_thomas) {
+    } else if (models.electron_mobility != ElectronMobility::caughey_thomas &&
+               models.electron_mobility != ElectronMobility::klaassen &&
+               models.electron_mobility != ElectronMobility::klaassen_equilibrium) {
         return refuse("unknown electron mobility model");
     }
     // Unit 46 (DECISIONS.md LD6, LD8): Lombardi's coefficients are silicon's; impact ionization
@@ -379,6 +423,33 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
     s.auger_n_.resize(n);
     s.auger_p_.resize(n);
     std::vector<double> mu_n(n), mu_p(n), N_bulk(n, 0.0);
+    // Unit 66: Klaassen at the run's temperature, prepared once per carrier that selects it.
+    std::optional<physics::KlaassenAtTemperature> klaassen_n, klaassen_p;
+    const bool klaassen_e = models.electron_mobility == ElectronMobility::klaassen ||
+                            models.electron_mobility == ElectronMobility::klaassen_equilibrium;
+    const bool klaassen_h = models.hole_mobility == HoleMobility::klaassen ||
+                            models.hole_mobility == HoleMobility::klaassen_equilibrium;
+    if (klaassen_e) {
+        klaassen_n = physics::klaassen_at(physics::klaassen_silicon, physics::Carrier::electron, T);
+    }
+    if (klaassen_h) {
+        klaassen_p = physics::klaassen_at(physics::klaassen_silicon, physics::Carrier::hole, T);
+    }
+    // KD5: with `klaassen` the node mobilities follow n and p in edge_fluxes; the precomputed ones
+    // (at neutral equilibrium) stay as the edges' reference mobility of their factors an, ap.
+    s.klaassen_carriers_ = klaassen_carriers;
+    if (klaassen_carriers) {
+        if (models.electron_mobility == ElectronMobility::klaassen) s.klaassen_n_ = klaassen_n;
+        if (models.hole_mobility == HoleMobility::klaassen) s.klaassen_p_ = klaassen_p;
+        s.klaassen_donors_.assign(n, 0.0);
+        s.klaassen_acceptors_.assign(n, 0.0);
+        if (models.doping_mobility) {
+            for (std::size_t i = 0; i < n; ++i) {
+                s.klaassen_donors_[i] = device.donors()[i];
+                s.klaassen_acceptors_[i] = device.acceptors()[i];
+            }
+        }
+    }
     for (std::size_t i = 0; i < n; ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
         if (s.insulator_[i] != 0) {  // placeholders; no carrier equation reads them
@@ -391,13 +462,31 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
         const double N = device.total_impurity(node);
         const double N_mobility = models.doping_mobility ? N : 0.0;
         N_bulk[i] = N_mobility;
-        mu_n[i] = models.electron_mobility == ElectronMobility::masetti
-                      ? physics::masetti_mobility(physics::masetti_phosphorus_silicon, N_mobility, T)
-                      : physics::caughey_thomas_mobility(m, physics::Carrier::electron, N_mobility,
-                                                         T);
-        mu_p[i] = masetti_holes(models.hole_mobility, m.parameters())
-                      ? physics::masetti_mobility(physics::masetti_boron_silicon, N_mobility, T)
-                      : physics::caughey_thomas_mobility(m, physics::Carrier::hole, N_mobility, T);
+        // Unit 66 (KD2): Klaassen at the node's neutral equilibrium densities, n_i the material's.
+        const auto klaassen = [&](const physics::KlaassenAtTemperature& at) {
+            const double N_D = models.doping_mobility ? device.donors()[i] : 0.0;
+            const double N_A = models.doping_mobility ? device.acceptors()[i] : 0.0;
+            return physics::klaassen_equilibrium_mobility(at, N_D, N_A,
+                                                          physics::intrinsic_density(m, T), 0.0)
+                .mobility;
+        };
+        if (klaassen_e) {
+            mu_n[i] = klaassen(*klaassen_n);
+        } else {
+            mu_n[i] = models.electron_mobility == ElectronMobility::masetti
+                          ? physics::masetti_mobility(physics::masetti_phosphorus_silicon,
+                                                      N_mobility, T)
+                          : physics::caughey_thomas_mobility(m, physics::Carrier::electron,
+                                                             N_mobility, T);
+        }
+        if (klaassen_h) {
+            mu_p[i] = klaassen(*klaassen_p);
+        } else {
+            mu_p[i] = masetti_holes(models.hole_mobility, m.parameters())
+                          ? physics::masetti_mobility(physics::masetti_boron_silicon, N_mobility, T)
+                          : physics::caughey_thomas_mobility(m, physics::Carrier::hole, N_mobility,
+                                                             T);
+        }
         s.tau_n_[i] = physics::scharfetter_lifetime(m, physics::Carrier::electron, N);
         s.tau_p_[i] = physics::scharfetter_lifetime(m, physics::Carrier::hole, N);
         s.auger_n_[i] = m.parameters().auger.Cn;
@@ -953,7 +1042,8 @@ std::pair<EdgeFlux, EdgeFlux> SystemData::edge_fluxes(
         delta_p += x[m_ * e.b + 4] - x[m_ * e.a + 4];
     }
     // Unit edge factors when the Canali or Lombardi factor follows (never on a thermionic edge).
-    const bool unit_factor = field_mobility_ || e.surface;
+    // Unit 66: and with the carrier-dependent Klaassen mobility.
+    const bool unit_factor = field_mobility_ || e.surface || klaassen_carriers_;
     EdgeFlux fn = e.thermionic ? thermionic_electron_flux(e.te_kn, delta_n, e.te_log_nc,
                                                           e.te_ratio_nc, na, nb)
                                : sg_electron_flux(unit_factor ? 1.0 : e.an, 0.0, delta_n,
@@ -975,6 +1065,7 @@ std::pair<EdgeFlux, EdgeFlux> SystemData::edge_fluxes(
     }
     if (slope != nullptr) *slope = SurfaceSlope{};
     if (!unit_factor || e.thermionic) return {fn, fp};
+    if (klaassen_carriers_) return klaassen_fluxes(e, x, dpsi, fn, fp);
     // Edge factor a(E) = a0 mu(E) / mu0, E = field |dpsi|; the flux is linear in a, so
     // d flux / d dpsi gains (flux / a) da/d dpsi. mu(E) is the Canali mobility of mu0 (Unit 13),
     // or between two materials the harmonic mean of each end's Canali mobility (Unit 15). With
@@ -1043,6 +1134,80 @@ std::pair<EdgeFlux, EdgeFlux> SystemData::edge_fluxes(
                               e.ap * (mp.d_perp / e.mu_p) * fp.flux};
     }
     return {scaled(fn, e.an, e.mu_n, mn.mu), scaled(fp, e.ap, e.mu_p, mp.mu)};
+}
+
+std::pair<EdgeFlux, EdgeFlux> SystemData::klaassen_fluxes(const EdgeTerm& e,
+                                                          std::span<const double> x, double dpsi,
+                                                          EdgeFlux fn, EdgeFlux fp) const {
+    const double E = e.field * std::abs(dpsi);
+    const double dE = dpsi > 0.0 ? e.field : dpsi < 0.0 ? -e.field : 0.0;  // dE / d dpsi
+    // An end's mobility and its partials in the scaled n and p (x[m i + 1], x[m i + 2]).
+    // Below 0 (a Newton iterate) a density continues linearly with the slope at 0, so the
+    // residual stays smooth there; the mobility is kept at least half its value at 0.
+    struct End {
+        double mu, d_n, d_p;
+    };
+    const auto end = [&](const std::optional<physics::KlaassenAtTemperature>& at,
+                         std::size_t i, double fixed) {
+        if (!at) return End{fixed, 0.0, 0.0};
+        const double n = x[m_ * i + 1], p = x[m_ * i + 2];
+        const physics::KlaassenMobility k = physics::klaassen_mobility(
+            *at, klaassen_donors_[i], klaassen_acceptors_[i], std::max(n, 0.0) * Ns_,
+            std::max(p, 0.0) * Ns_);
+        const double d_n = k.d_dn * Ns_, d_p = k.d_dp * Ns_;
+        const double mu = k.mobility + (n < 0.0 ? d_n * n : 0.0) + (p < 0.0 ? d_p * p : 0.0);
+        if (mu < 0.5 * k.mobility) return End{0.5 * k.mobility, 0.0, 0.0};
+        return End{mu, d_n, d_p};
+    };
+    // The edge mobility mu(mu_a, mu_b, E) as edge_fluxes forms it, with d mu / d mu_a, d mu_b,
+    // d mu / dE: the harmonic mean; with field mobility the Canali mobility of the mean, or
+    // between two materials the harmonic mean of each end's Canali mobility.
+    struct Edge {
+        double mu, d_a, d_b, d_E;
+    };
+    const auto edge = [&](double mu_a, double mu_b, const physics::CanaliParameters& sat_a,
+                          const physics::CanaliParameters& sat_b) {
+        const double sum = mu_a + mu_b;
+        const double h = 2.0 * mu_a * mu_b / sum;
+        const double h_a = 2.0 * mu_b * mu_b / (sum * sum), h_b = 2.0 * mu_a * mu_a / (sum * sum);
+        if (!field_mobility_) return Edge{h, h_a, h_b, 0.0};
+        if (!e.mixed) {
+            const physics::FieldMobility c = physics::canali_mobility(h, E, sat_a);
+            const double k = (c.mobility + E * c.d_dE) / h;  // d mu / d mu0
+            return Edge{c.mobility, k * h_a, k * h_b, c.d_dE};
+        }
+        const physics::FieldMobility ca = physics::canali_mobility(mu_a, E, sat_a);
+        const physics::FieldMobility cb = physics::canali_mobility(mu_b, E, sat_b);
+        const double s = ca.mobility + cb.mobility;
+        const double w_a = 2.0 * cb.mobility * cb.mobility / (s * s);
+        const double w_b = 2.0 * ca.mobility * ca.mobility / (s * s);
+        return Edge{2.0 * ca.mobility * cb.mobility / s,
+                    w_a * (ca.mobility + E * ca.d_dE) / mu_a,
+                    w_b * (cb.mobility + E * cb.d_dE) / mu_b, w_a * ca.d_dE + w_b * cb.d_dE};
+    };
+    // flux = a unit, a = (a0 / mu0) mu: every unit partial scales by a; mu adds its own.
+    const auto carrier = [&](EdgeFlux unit, double a0, double mu0, const End& A, const End& B,
+                             const physics::CanaliParameters& sat_a,
+                             const physics::CanaliParameters& sat_b, bool electron) {
+        const Edge m = edge(A.mu, B.mu, sat_a, sat_b);
+        const double g = a0 / mu0, a = g * m.mu;
+        const double F = unit.flux * g;  // d flux / d mu
+        const double own_a = electron ? A.d_n : A.d_p, own_b = electron ? B.d_n : B.d_p;
+        const double oth_a = electron ? A.d_p : A.d_n, oth_b = electron ? B.d_p : B.d_n;
+        EdgeFlux f{a * unit.flux,
+                   a * unit.d_psi1 - F * m.d_E * dE,
+                   a * unit.d_psi2 + F * m.d_E * dE,
+                   a * unit.d_c1 + F * m.d_a * own_a,
+                   a * unit.d_c2 + F * m.d_b * own_b,
+                   a * unit.d_delta};
+        f.d_other1 = F * m.d_a * oth_a;
+        f.d_other2 = F * m.d_b * oth_b;
+        return f;
+    };
+    const End na = end(klaassen_n_, e.a, e.mu_n_a), nb = end(klaassen_n_, e.b, e.mu_n_b);
+    const End pa = end(klaassen_p_, e.a, e.mu_p_a), pb = end(klaassen_p_, e.b, e.mu_p_b);
+    return {carrier(fn, e.an, e.mu_n, na, nb, e.sat_n, e.mixed ? e.sat_n_b : e.sat_n, true),
+            carrier(fp, e.ap, e.mu_p, pa, pb, e.sat_p, e.mixed ? e.sat_p_b : e.sat_p, false)};
 }
 
 SystemData::SurfaceField SystemData::surface_field(const EdgeTerm& e,
