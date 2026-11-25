@@ -6,6 +6,7 @@
 #include "main_window.hpp"
 #include "viewport.hpp"
 #include "fixtures.hpp"
+#include "NiTCAD/app/probe.hpp"
 #include "NiTCAD/render/image.hpp"
 
 #include <windows.h>
@@ -1970,4 +1971,131 @@ TEST_CASE("app window: a shown window with a deck closes cleanly without the hos
         pump_for(0.1);
     }
     SUCCEED("closed");
+}
+
+namespace {
+
+// A move to the view's client pixel, as the mouse sends it (no button down).
+void hover(MainWindow& w, float x, float y) {
+    SendMessageW(w.viewport().hwnd(), WM_MOUSEMOVE, 0,
+                 MAKELPARAM(static_cast<int>(std::lround(x)), static_cast<int>(std::lround(y))));
+}
+
+}  // namespace
+
+TEST_CASE("app window 26o: the band surface in the inspector, stepped, hovered; its plane shared with Slice (BSD5-BSD7, BSC10)", "[app]") {
+    using app::ViewKind;
+    const fs::path dir = app_test::scratch("window_band_surface");
+    {
+        const fs::path deck = app_test::write(dir, "mosfet.deck", app_test::mosfet2d);
+        auto w = window();
+        REQUIRE(w->open_deck(deck));
+        REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+        w->execute(Command::run);
+        REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+        w->select_tab(MainWindow::tab_view);
+        const std::array<int, 7> band_controls{MainWindow::id_band_ec, MainWindow::id_band_ev, MainWindow::id_band_efn,
+                                               MainWindow::id_band_efp, MainWindow::id_by_level,
+                                               MainWindow::id_exaggeration, MainWindow::id_band_opacity};
+        for (const int id : band_controls) CHECK_FALSE(shown(*w, id));
+        choose(*w, MainWindow::id_view, L"band-surface");
+        REQUIRE(w->settings().kind == ViewKind::band_surface);
+        for (const int id : band_controls) {
+            CAPTURE(id);
+            CHECK(shown(*w, id));
+        }
+        CHECK(shown(*w, MainWindow::id_range_min));
+        // Ev off, the heights doubled; a bad value is refused and the setting kept.
+        click(*w, MainWindow::id_band_ev);
+        CHECK(w->settings().band_levels == std::array<bool, 4>{true, false, false, false});
+        apply_text(*w, MainWindow::id_exaggeration, "2");
+        CHECK(w->settings().exaggeration == 2.0);
+        apply_text(*w, MainWindow::id_exaggeration, "20");
+        CHECK(w->settings().exaggeration == 2.0);
+        apply_text(*w, MainWindow::id_band_opacity, "0.5");
+        CHECK(w->settings().band_opacity == 0.5f);
+        apply_text(*w, MainWindow::id_band_opacity, "1");
+        // The first bias point: the scene is that point's.
+        HWND list = w->child(MainWindow::id_point);
+        SendMessageW(list, CB_SETCURSEL, 0, 0);
+        SendMessageW(GetParent(list), WM_COMMAND, MAKEWPARAM(MainWindow::id_point, CBN_SELCHANGE), reinterpret_cast<LPARAM>(list));
+        REQUIRE(w->settings().point == std::optional<std::size_t>{0});
+        REQUIRE(w->scene() != nullptr);
+        const auto& f = std::get<render::FieldScene>(*w->scene());
+        auto expected = app::build_scene(*w->workspace(), w->settings());
+        REQUIRE(expected);
+        const auto& e = std::get<render::FieldScene>(*expected);
+        REQUIRE(f.triangles.size() == e.triangles.size());
+        for (std::size_t k = 0; k < f.triangles.size(); ++k) {
+            CHECK(f.triangles[k].name == e.triangles[k].name);
+            CHECK(f.triangles[k].vertices.size() == e.triangles[k].vertices.size());
+        }
+        // Hover over a substrate node's Ec: the readout's Ec is that node's.
+        const auto& m = w->workspace()->device->mesh();
+        std::size_t node = 0;
+        double best = 1e300;
+        for (std::size_t i = 0; i < m.node_count(); ++i) {
+            const double d = std::hypot(m.points()[i][0] - 1.0e-4, m.points()[i][1] - 0.3e-4);
+            if (d < best) best = d, node = i;
+        }
+        const double ec = w->workspace()->points[0].bands.conduction_eV[node];
+        REQUIRE(std::isfinite(ec));
+        const int W = w->viewport().width(), H = w->viewport().height();
+        const double k = (*f.axes)[1].per_unit;
+        const auto& p = m.points()[node];
+        const render::ScreenPoint at = render::screen_position(
+            f, W, H, {static_cast<float>(p[0] * 1e4), static_cast<float>(k * ec), static_cast<float>(p[1] * 1e4)});
+        hover(*w, at.x, at.y);
+        REQUIRE(w->readout_shown());
+        const auto hit = app::band_pick(*w->workspace(), w->settings(), f, W, H, std::round(at.x), std::round(at.y));
+        REQUIRE(hit);
+        REQUIRE(hit->energy_eV[0]);
+        CHECK(std::abs(*hit->energy_eV[0] - ec) < 2e-3);
+        CHECK(w->readout_text() == app::band_hover_text(*hit, 2));
+        CHECK(w->readout_text().starts_with("Ec = "));
+        CHECK(w->status(3).starts_with("Ec = "));
+        hover(*w, 1.0f, 1.0f);
+        CHECK_FALSE(w->readout_shown());
+    }
+    {
+        const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+        auto w = window();
+        REQUIRE(w->open_deck(deck));
+        REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+        w->execute(Command::run);
+        REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+        w->select_tab(MainWindow::tab_view);
+        choose(*w, MainWindow::id_view, L"band-surface");
+        REQUIRE(w->settings().kind == ViewKind::band_surface);
+        // The plane through the device's centre normal to z, by default; the slice controls set it.
+        REQUIRE(w->settings().band_plane);
+        CHECK(w->settings().band_plane->axis == 2);
+        CHECK(std::abs(w->settings().band_plane->at_um - 0.4) < 1e-9);
+        CHECK(shown(*w, MainWindow::id_slice_axis));
+        choose(*w, MainWindow::id_slice_axis, L"x");
+        apply_text(*w, MainWindow::id_slice_at, "1");
+        REQUIRE(w->settings().band_plane);
+        CHECK(w->settings().band_plane->axis == 0);
+        CHECK(w->settings().band_plane->at_um == 1.0);
+        REQUIRE(w->scene());
+        REQUIRE(std::get<render::FieldScene>(*w->scene()).plane_inset);
+        CHECK(std::get<render::FieldScene>(*w->scene()).plane_inset->axis == 0);
+        // The Slice view shows the same plane; the Solid view outlines it.
+        choose(*w, MainWindow::id_view, L"slice");
+        REQUIRE(w->settings().slices.size() == 1);
+        CHECK(w->settings().slices.front().axis == 0);
+        CHECK(w->settings().slices.front().at_um == 1.0);
+        choose(*w, MainWindow::id_view, L"solid");
+        REQUIRE(w->scene());
+        const auto& solid = std::get<render::FieldScene>(*w->scene());
+        CHECK(std::ranges::any_of(solid.lines, [](const render::LineBatch& l) { return l.name == "band plane"; }));
+        // A plane picked in the Slice view is the band surface's when it is chosen.
+        choose(*w, MainWindow::id_view, L"slice");
+        choose(*w, MainWindow::id_slice_axis, L"y");
+        apply_text(*w, MainWindow::id_slice_at, "0.5");
+        choose(*w, MainWindow::id_view, L"band-surface");
+        REQUIRE(w->settings().band_plane);
+        CHECK(w->settings().band_plane->axis == 1);
+        CHECK(w->settings().band_plane->at_um == 0.5);
+    }
 }

@@ -262,6 +262,8 @@ public:
         id_axis_box,
         // Unit 26j: the console's rich edit and tool strip.
         id_console_text, id_console_tabs, id_console_points,
+        // Unit 26o (BSD5): the band surface's levels, colour by level, height scale and opacity.
+        id_band_ec, id_band_ev, id_band_efn, id_band_efp, id_by_level, id_exaggeration, id_band_opacity,
         // Look A: the inspector's section headers, a section each.
         id_section_first, id_section_last = id_section_first + section_count - 1,
         id_first_label = 5100,
