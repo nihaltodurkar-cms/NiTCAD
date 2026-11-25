@@ -4194,7 +4194,7 @@ put to the owner as KQ8:
 
 | ID | Question | Options | Ruling |
 |---|---|---|---|
-| KQ8 | KC5's floor for partials below the difference noise | (a) keep the 1e-9 μ effect floor (recommended: the 1e-12 floor was under the FD's own rounding, a test defect rather than a model one); (b) a tighter check by complex-step or higher-precision differences, KC5 open until then | **open — the owner's word (TVM2)** |
+| KQ8 | KC5's floor for partials below the difference noise | (a) keep the 1e-9 μ effect floor (recommended: the 1e-12 floor was under the FD's own rounding, a test defect rather than a model one); (b) a tighter check by complex-step or higher-precision differences, KC5 open until then | **(a)**, the owner, 2026-11-25 ("choose recommended") |
 
 **Slice 0 record, `klaassen_equilibrium` (2026-11-25).** `ElectronMobility::klaassen_equilibrium` = 3,
 `HoleMobility::klaassen_equilibrium` = 4 (KD7); the silicon refusal (KD3); the isothermal node precompute
@@ -4212,6 +4212,32 @@ vocabulary and hints; deck error messages now list all values (KC8). Tests, all 
   electrons 3, holes 4 (deck test).
 - Binaries run whole: physics, assemble, deck (before the new deck case; the case itself after), app — all pass.
   The full Release and Debug suites have not run (owner's word; no Debug builds by the standing rule).
+
+**KQ8 ruled (2026-11-25):** the owner, "choose recommended": (a), the 1e-9 μ effect floor stands; KC5 met.
+
+| ID | Question | Options | Ruling |
+|---|---|---|---|
+| KQ9 | `klaassen` with Lombardi surface mobility (KD5 had it chained; found in slice 1 that Lombardi's E_perp slope and the n, p partials would both run through its end mobilities) | (a) refused in this unit, a recorded follow-up, as KD6's others; (b) chained now | **(a)**, ruled as recommended (2026-11-25, standing instruction); KD5's "surface mobility chain" is withdrawn |
+
+**Slice 1 record, `klaassen` (2026-11-25).** `ElectronMobility::klaassen` = 2, `HoleMobility::klaassen` = 3;
+`SystemData::klaassen_fluxes` (edge_fluxes with unit factors, then a = (a0 / μ0) μ(n, p, E): harmonic mean, Canali of
+it or between materials the mean of each end's Canali); `EdgeFlux::d_other1/2`; the carrier-flux term's pattern and
+stamping of the cross entries (4 per edge). Densities below 0 (Newton iterates) continue linearly with the slope at
+0, the mobility held at ≥ half its value at 0: the first FD gate run failed (worst 0.5) only because the probe's
+1e-7 step took tiny minority densities (9.4e-15 scaled) below 0, where a clamp at 0 halved the difference; the
+Jacobian entry itself was right (diagnosed, not a criterion change). Results, Release:
+- KC7 met. FD Jacobian with cross entries: 1D heavy 4.5e-9, 2D field mobility 5.7e-8, 1D electrons only 3.1e-9,
+  3D 4.3e-8 (≤ 1e-6); the pattern grows by exactly 4 per edge. Unit 9 diode 0–0.8 V: Newton steps equal Masetti's
+  at every bias (≤ +2 allowed). High injection (p+ 1e19 / n 1e15, to 0.9 V): base holes reach 1.906e17 cm⁻³
+  (191 N_D); `klaassen` against `klaassen_equilibrium` J is +0.4 % at 0.2–0.3 V, −0.26 % at 0.6 V, −11.0 % at 0.8 V
+  and −22.8 % at 0.9 V (carrier–carrier scattering); Newton 5–6 both.
+- KC8 met: refusals with electrothermal, energy balance, impact ionization, surface mobility (KQ9), quantum
+  confinement (each named), `klaassen_equilibrium` allowed with them; non-silicon regions named; deck messages list
+  all five / four values.
+- KC9 met: run records electrons 2, holes 3 (deck test); a `klaassen` transient (diode pulse, BDF2 adaptive)
+  resumes bit for bit at four stop points (Unit 61 harness).
+- Run: physics, assemble, app binaries whole; solve `[klaassen]`, `[resume]`; the deck's mobility cases. Full
+  suites not run (owner's word); no Debug.
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 

@@ -305,3 +305,22 @@ TEST_CASE("transient resume: refusals (RG4)", "[solve][resume]") {
     REQUIRE(none.has_value());
     CHECK_FALSE(none->resume.has_value());
 }
+
+TEST_CASE("transient resume: the carrier-dependent Klaassen mobility continues bit for bit (Unit 66, KC9)",
+          "[solve][resume]") {
+    const device::Device d = diode(false);
+    Case c{d,
+           {*Waveform::pulse(0.0, 0.5, 100e-12, 200e-12, 50e-12, 50e-12), Waveform::constant(0.0)},
+           {.t_end_s = 400e-12, .dt_initial_s = 1e-13, .rtol = 1e-3, .output_times_s = {200e-12}}};
+    c.options.steady.models.electron_mobility = assemble::ElectronMobility::klaassen;
+    c.options.steady.models.hole_mobility = assemble::HoleMobility::klaassen;
+    results::Transient full;
+    const auto accepting = accepting_attempts(c, full);
+    REQUIRE(full.points.size() > 6);
+    std::size_t mid_ramp = 0;
+    for (std::size_t k = 0; k < full.points.size(); ++k)
+        if (full.points[k].time_s > 110e-12 && full.points[k].time_s < 140e-12) mid_ramp = k;
+    REQUIRE(mid_ramp > 0);
+    for (const std::size_t k : {std::size_t{2}, point_at(full, 100e-12), mid_ramp, full.points.size() - 2})
+        stop_and_continue(c, full, accepting, k);
+}

@@ -26,10 +26,10 @@ constexpr std::array<std::string_view, 3> electrodes{"n_poly", "p_poly", "metal"
 constexpr std::array<std::string_view, 2> transports{"drift_diffusion", "thermionic"};
 constexpr std::array<std::string_view, 2> thermal_kinds{"isothermal", "resistance"};
 constexpr std::array<std::string_view, 3> btbt_nonlocal{"off", "kane", "direct_wkb"};
-constexpr std::array<std::string_view, 4> hole_mobility{"automatic", "caughey_thomas", "masetti",
-                                                       "klaassen_equilibrium"};
-constexpr std::array<std::string_view, 3> electron_mobility{"caughey_thomas", "masetti",
-                                                           "klaassen_equilibrium"};
+constexpr std::array<std::string_view, 5> hole_mobility{"automatic", "caughey_thomas", "masetti",
+                                                       "klaassen", "klaassen_equilibrium"};
+constexpr std::array<std::string_view, 4> electron_mobility{"caughey_thomas", "masetti",
+                                                           "klaassen", "klaassen_equilibrium"};
 constexpr std::array<std::string_view, 2> surface_mobility{"off", "lombardi"};
 constexpr std::array<std::string_view, 3> quantum_confinement{"off", "mlda", "density_gradient"};
 constexpr std::array<std::string_view, 2> ionization_levels{"fixed", "altermatt"};
@@ -141,8 +141,8 @@ constexpr std::array<KeyInfo, 4> thermal_contact_keys{{
 
 constexpr std::array<KeyInfo, 25> model_keys{{
     {"doping_mobility", 0, false, "on", "doping-dependent mobility", on_off, {}, {}},
-    {"hole_mobility", 0, false, "automatic", "automatic | caughey_thomas | masetti | klaassen_equilibrium", hole_mobility, {}, {}},
-    {"electron_mobility", 0, false, "caughey_thomas", "caughey_thomas | masetti | klaassen_equilibrium", electron_mobility, {}, {}},
+    {"hole_mobility", 0, false, "automatic", "automatic | caughey_thomas | masetti | klaassen | klaassen_equilibrium", hole_mobility, {}, {}},
+    {"electron_mobility", 0, false, "caughey_thomas", "caughey_thomas | masetti | klaassen | klaassen_equilibrium", electron_mobility, {}, {}},
     {"surface_mobility", 0, false, "off", "off | lombardi (inversion layers)", surface_mobility, {}, {}},
     {"quantum_confinement", 0, false, "off", "off | mlda | density_gradient (near insulators)",
      quantum_confinement, {}, {}},

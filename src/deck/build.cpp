@@ -1430,13 +1430,15 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
             if (e.value == "caughey_thomas") m.hole_mobility = assemble::HoleMobility::caughey_thomas;
             else if (e.value == "masetti") m.hole_mobility = assemble::HoleMobility::masetti;
             else if (e.value == "automatic") m.hole_mobility = assemble::HoleMobility::automatic;
+            else if (e.value == "klaassen") m.hole_mobility = assemble::HoleMobility::klaassen;
             else if (e.value == "klaassen_equilibrium") m.hole_mobility = assemble::HoleMobility::klaassen_equilibrium;
-            else return std::unexpected(at(e.line, "hole_mobility is automatic, caughey_thomas, masetti or klaassen_equilibrium"));
+            else return std::unexpected(at(e.line, "hole_mobility is automatic, caughey_thomas, masetti, klaassen or klaassen_equilibrium"));
         } else if (e.key == "electron_mobility") {
             if (e.value == "caughey_thomas") m.electron_mobility = assemble::ElectronMobility::caughey_thomas;
             else if (e.value == "masetti") m.electron_mobility = assemble::ElectronMobility::masetti;
+            else if (e.value == "klaassen") m.electron_mobility = assemble::ElectronMobility::klaassen;
             else if (e.value == "klaassen_equilibrium") m.electron_mobility = assemble::ElectronMobility::klaassen_equilibrium;
-            else return std::unexpected(at(e.line, "electron_mobility is caughey_thomas, masetti or klaassen_equilibrium"));
+            else return std::unexpected(at(e.line, "electron_mobility is caughey_thomas, masetti, klaassen or klaassen_equilibrium"));
         } else if (e.key == "surface_mobility") {
             if (e.value == "off") m.surface_mobility = assemble::SurfaceMobility::off;
             else if (e.value == "lombardi") m.surface_mobility = assemble::SurfaceMobility::lombardi;

@@ -616,11 +616,24 @@ public:
     }
     // Lombardi (Unit 46): the continuity rows of both ends with the psi columns of the edge's
     // E_perp stencil; none without the model.
+    // Unit 66 (KD5): with the carrier-dependent Klaassen mobility, each end's continuity rows with
+    // the other end's other-carrier column (electron row - p, hole row - n).
     void pattern(const SystemData& s, const SystemState&,
                  std::vector<linalg::Triplet>& t) const override {
         surface_pattern(s, t, 2);
+        if (!s.klaassen_carriers_) return;
+        const std::size_t m = s.m_;
+        for (const EdgeTerm& e : s.edges_) {
+            if (e.charged || !e.carriers || e.thermionic) continue;
+            for (const auto [r, c] : {std::pair{e.a, e.b}, std::pair{e.b, e.a}}) {
+                t.push_back({static_cast<linalg::Index>(m * r + 1),
+                             static_cast<linalg::Index>(m * c + 2), 0.0});
+                t.push_back({static_cast<linalg::Index>(m * r + 2),
+                             static_cast<linalg::Index>(m * c + 1), 0.0});
+            }
+        }
     }
-    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
@@ -642,6 +655,24 @@ public:
                         values[j.pos[1][0]] -= slope.n * w;
                         values[j.pos[1][1]] -= slope.p * w;
                     }
+                }
+            }
+            if (jacobian && s.klaassen_carriers_ && !e.thermionic) {
+                // Unit 66: the other carrier's partials (+ at a, - at b).
+                const auto cross = [&](std::size_t row, std::size_t col) -> double& {
+                    return values[detail::position(st.pattern_, row, col)];
+                };
+                if (s.contact_[a] < 0) {
+                    at(s, ev, a, 1, 2) += fn.d_other1;
+                    cross(m * a + 1, m * b + 2) += fn.d_other2;
+                    at(s, ev, a, 2, 1) += fp.d_other1;
+                    cross(m * a + 2, m * b + 1) += fp.d_other2;
+                }
+                if (s.contact_[b] < 0) {
+                    cross(m * b + 1, m * a + 2) -= fn.d_other1;
+                    at(s, ev, b, 1, 2) -= fn.d_other2;
+                    cross(m * b + 2, m * a + 1) -= fp.d_other1;
+                    at(s, ev, b, 2, 1) -= fp.d_other2;
                 }
             }
             if (s.contact_[a] < 0) {

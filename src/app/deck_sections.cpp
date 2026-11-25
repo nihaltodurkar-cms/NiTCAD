@@ -19,8 +19,8 @@ constexpr std::array<KeySpec, 4> mesh_keys{{{"min_angle", "20.7", "generate2d, e
 
 constexpr std::array<KeySpec, 25> model_keys{{
     {"doping_mobility", "on", "doping-dependent mobility"},
-    {"hole_mobility", "automatic", "automatic | caughey_thomas | masetti | klaassen_equilibrium"},
-    {"electron_mobility", "caughey_thomas", "caughey_thomas | masetti | klaassen_equilibrium"},
+    {"hole_mobility", "automatic", "automatic | caughey_thomas | masetti | klaassen | klaassen_equilibrium"},
+    {"electron_mobility", "caughey_thomas", "caughey_thomas | masetti | klaassen | klaassen_equilibrium"},
     {"surface_mobility", "off", "off | lombardi (inversion layers)"},
     {"quantum_confinement", "off", "off | mlda | density_gradient (near insulators)"},
     {"mlda_mass_n", "0.98", "mlda: electron quantization mass, m0"},
