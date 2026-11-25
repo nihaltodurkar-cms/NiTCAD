@@ -119,6 +119,18 @@ std::size_t System::stride() const noexcept { return data_->stride(); }
 double System::time_scale() const noexcept { return data_->rate_scale_; }
 std::size_t System::trap_slots() const noexcept { return data_->trap_slots(); }
 std::size_t System::storage_width() const noexcept { return data_->storage_width(); }
+std::vector<double> System::heavy_ion_deposits() const { return data_->heavy_ion_deposits_; }
+std::vector<double> System::heavy_ion_generation(double t_s) const {
+    const SystemData& s = *data_;
+    if (s.heavy_ion_tracks_.empty()) return {};
+    std::vector<double> g(s.node_count(), 0.0);
+    for (std::size_t k = 0; k < s.heavy_ion_tracks_.size(); ++k) {
+        const double T = physics::heavy_ion_time_profile(s.heavy_ion_tracks_[k], t_s);
+        const std::vector<double>& pairs = s.heavy_ion_pairs_[k];
+        for (std::size_t i = 0; i < g.size(); ++i) g[i] += pairs[i] * T;
+    }
+    return g;
+}
 
 const SystemData& System::data(const SystemKey& /*key*/) const noexcept { return *data_; }
 const SystemState& System::state(const SystemKey& /*key*/) const noexcept { return *state_; }
@@ -852,6 +864,44 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
     if (models.energy_balance) {
         if (auto e = s.make_energy_balance(st, device, models))
             return std::unexpected(std::move(*e));
+    }
+    // Heavy-ion tracks (Unit 65; DECISIONS.md HD1, HD2, HD6, HD7): each checked for the mesh's
+    // dimension, its pairs point-evaluated at every semiconductor node off the ohmic contacts, and
+    // its mesh deposit; a track that deposits nothing is refused.
+    if (const std::vector<physics::HeavyIonTrack>* tracks = models.heavy_ions; tracks && !tracks->empty()) {
+        if (models.electrothermal || models.energy_balance) {
+            return refuse("heavy-ion tracks are not supported with the electrothermal or energy-balance model");
+        }
+        const mesh::Mesh& grid = device.mesh();
+        const int D = grid.dimension();
+        const auto points = grid.points();
+        const auto volumes = grid.volumes();
+        const std::size_t nodes = grid.node_count();
+        for (std::size_t k = 0; k < tracks->size(); ++k) {
+            auto track = physics::check_heavy_ion_track((*tracks)[k], D);
+            if (!track) {
+                base::Error e = std::move(track.error());
+                e.message += " (track " + std::to_string(k) + ")";
+                e.context = base::ErrorContext{.index = k, .value = std::nullopt};
+                return std::unexpected(std::move(e));
+            }
+            std::vector<double> pairs(nodes, 0.0);
+            double deposit = 0.0;
+            for (std::size_t i = 0; i < nodes; ++i) {
+                if (s.insulator_[i] != 0 || s.contact_[i] >= 0) continue;
+                pairs[i] = physics::heavy_ion_pairs(*track, D, points[i]);
+                deposit += volumes[i] * pairs[i];
+            }
+            if (!(deposit > 0.0)) {
+                return std::unexpected(base::Error{
+                    base::ErrorCode::invalid_input,
+                    "heavy-ion track " + std::to_string(k) + " deposits no charge in a semiconductor node",
+                    base::ErrorContext{.index = k, .value = std::nullopt}});
+            }
+            s.heavy_ion_tracks_.push_back(*track);
+            s.heavy_ion_pairs_.push_back(std::move(pairs));
+            s.heavy_ion_deposits_.push_back(base::q_C * deposit);
+        }
     }
     return Made{std::move(data), std::move(st)};
 }

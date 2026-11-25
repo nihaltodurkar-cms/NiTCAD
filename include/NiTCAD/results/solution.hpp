@@ -89,6 +89,10 @@ struct RateFields {
     std::vector<double> band_to_band_p;
     std::vector<double> net_n;  // the sum of every mechanism, as the electron rows see it
     std::vector<double> net_p;
+    // Heavy-ion pair generation (Unit 65, HD8; transient snapshots only), as a rate: -G, the
+    // instantaneous rate at the snapshot time. Not part of net_n and net_p (a time source, not a
+    // mechanism of the state). Empty without tracks.
+    std::vector<double> heavy_ion;
 };
 
 struct BiasPoint {

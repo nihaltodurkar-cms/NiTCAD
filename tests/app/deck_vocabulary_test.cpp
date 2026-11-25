@@ -83,6 +83,12 @@ Base base_for(std::string_view kind, std::string_view context) {
                 "thermal_contact sink"};
     }
     if (kind == "transient") return {app_test::transient_diode(), "transient"};
+    if (kind == "heavy_ion") {  // Unit 65: a whole 1D track on the transient diode
+        return {app_test::transient_diode() +
+                    "\n[heavy_ion s]\nstart = 0.9um\ndirection = 1\nlength = 0.2um\nlet = 0.001\n"
+                    "area = 1um2\nt0 = 20ps\nsigma = 2ps\n",
+                "heavy_ion s"};
+    }
     if (kind == "small_signal") {
         return {app_test::diode_device + "\n[small_signal]\ncontact anode = 0\nfrequencies = 1e6\n", "small_signal"};
     }

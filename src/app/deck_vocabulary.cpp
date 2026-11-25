@@ -295,7 +295,20 @@ constexpr std::array<KeyInfo, 10> output_keys{{
     {"adapt_history", 0, false, "<file>", "an [adapt] run's learning history (.nithist, Unit 17b)", {}, {}, {}},
 }};
 
-constexpr std::array<SectionInfo, 16> sections{{
+constexpr std::array<KeyInfo, 10> heavy_ion_keys{{  // Unit 65 (HD9): no defaults
+    {"start", 0, false, "<x [y [z]]>", "the track's start (lengths)", {}, {}, {}},
+    {"direction", 0, false, "<dx [dy [dz]]>", "the track's direction (normalised)", {}, {}, {}},
+    {"length", 0, false, "<length>", "the track's length", {}, {}, {}},
+    {"let", 0, false, "<pC/um>", "charge deposited per length (or let_mev)", {}, {}, {}},
+    {"let_mev", 0, false, "<MeV cm^2/mg>", "LET, converted with silicon's 3.6 eV and 2.329 g/cm^3", {}, {}, {}},
+    {"radius", 0, false, "<length>", "the Gaussian radius (2D, 3D)", {}, {}, {}},
+    {"depth", 0, false, "<length>", "2D: the depth the section stands for", {}, {}, {}},
+    {"area", 0, false, "<cm^2 | um2>", "1D: the track's cross-section", {}, {}, {}},
+    {"t0", 0, false, "<time>", "the pulse's centre (at least 4 sigma)", {}, {}, {}},
+    {"sigma", 0, false, "<time>", "the pulse's width", {}, {}, {}},
+}};
+
+constexpr std::array<SectionInfo, 17> sections{{
     {"device", 0, false, "the device's temperature", device_keys, {}},
     {"mesh", 0, false, "the mesh: tensor, generated or from a file", mesh_keys, "type"},
     {"region", 1, true, "a region: its material and where it is", region_keys, {}},
@@ -308,6 +321,7 @@ constexpr std::array<SectionInfo, 16> sections{{
     {"equilibrium", 0, false, "the analysis: the equilibrium solve (no keys)", {}, {}},
     {"sweep", 0, false, "the analysis: a steady bias sweep", sweep_keys, {}},
     {"transient", 0, false, "the analysis: a transient run", transient_keys, {}},
+    {"heavy_ion", 1, true, "a heavy-ion track in a transient run (Unit 65)", heavy_ion_keys, {}},
     {"small_signal", 0, false, "the analysis: small-signal (AC) at operating points", small_signal_keys, {}},
     {"trace", 0, false, "the analysis: an arc-length trace", trace_keys, {}},
     {"output", 0, false, "files the run writes, relative to the deck", output_keys, {}},

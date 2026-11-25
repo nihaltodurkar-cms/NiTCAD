@@ -117,6 +117,15 @@ TEST_CASE("app views: names, and the views and fields a workspace offers", "[app
         CHECK(has(with, "Tn"));
         CHECK(has(with, "Tp"));
     }
+    // Unit 65 (HC10): the heavy-ion generation only in a result that has it.
+    CHECK_FALSE(has(fields, "Gion"));
+    {
+        app::Workspace struck;
+        struck.device = std::make_unique<device::Device>(*mosfet().workspace.device);
+        struck.points = mosfet().workspace.points;
+        struck.points.back().rates.heavy_ion.assign(struck.device->mesh().node_count(), -1e25);
+        CHECK(has(app::available_fields(struck), "Gion"));
+    }
     // Before a run: the doping only.
     const fs::path dir = app_test::scratch("views_unrun");
     auto unrun = app::workspace_from_deck(app_test::write(dir, "d.deck", app_test::mosfet2d));

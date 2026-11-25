@@ -425,6 +425,41 @@ public:
     }
 };
 
+// Heavy-ion pair generation (Unit 65; DECISIONS.md HD2, HD3): +V G/R0 in the electron row and
+// -V G/R0 in the hole row of every semiconductor node off the ohmic contacts, G the sum over the
+// tracks of their pairs at the node times the step average of their time profile over
+// [start_time_s, time_s], so the charge each track puts in over a run is its exact integral
+// whatever the steps. Only in time steps; independent of the state: no Jacobian entries.
+class SystemData::Terms::HeavyIons final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"heavy-ion generation", TermDomain::nodes, densities, {}, false};  // no partials
+    }
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
+        if (ev.step == nullptr) return;
+        const double h = ev.step->time_s - ev.step->start_time_s;
+        if (!(h > 0.0)) return;
+        std::vector<double> average;  // per track [1/s]
+        bool any = false;
+        for (const physics::HeavyIonTrack& t : s.heavy_ion_tracks_) {
+            average.push_back(physics::heavy_ion_time_fraction(t, ev.step->start_time_s, ev.step->time_s) / h);
+            any = any || average.back() != 0.0;
+        }
+        if (!any) return;
+        const std::size_t m = s.m_;
+        const double to_rate = s.rate_scale_ / s.Ns_;  // 1 / R0
+        for (std::size_t i = 0; i < s.node_count(); ++i) {
+            if (!semiconductor(s, i)) continue;
+            double G = 0.0;
+            for (std::size_t k = 0; k < average.size(); ++k) G += s.heavy_ion_pairs_[k][i] * average[k];
+            if (G == 0.0) continue;
+            const double V = s.volume_[i];
+            ev.f[m * i + 1] += V * (G * to_rate);
+            ev.f[m * i + 2] -= V * (G * to_rate);
+        }
+    }
+};
+
 // The declared interfaces' half-edge fluxes, fixed and trapped charge and surface recombination
 // (interface_edges.hpp): the insulator node's Poisson row, then the semiconductor node's rows.
 class SystemData::Terms::Interfaces final : public Term {
@@ -1131,6 +1166,11 @@ std::span<const CompositionEntry> SystemData::Terms::isothermal_table() {
         {E::poisson | E::continuity,
          [](const SystemData&, const SystemState&, M m) { return m.manufactured != nullptr; },
          &make_term<Manufactured>},
+        {+E::continuity,
+         [](const SystemData&, const SystemState&, M m) {
+             return m.heavy_ions != nullptr && !m.heavy_ions->empty();
+         },
+         &make_term<HeavyIons>},
         {+E::energy, [](const SystemData&, const SystemState&, M m) { return m.energy_balance; },
          &energy_rows},
         {+E::interfaces, interfaces, &make_term<Interfaces>},

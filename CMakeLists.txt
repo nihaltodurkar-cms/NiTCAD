@@ -372,6 +372,12 @@ add_executable(nitcad_mesh_test
 target_include_directories(nitcad_mesh_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)
 nitcad_add_file_tests(mesh nitcad_mesh_test)
+# PR #120's Debug CI (run 45591610401, 4609029) passed every test but ran past its 150-minute limit:
+# mesh.layered3d_slanted took 4280 s and mesh.interface_pieces 3170 s there (2755 s and 1954 s on the
+# push run of the same commit). Release only, as app.solid; Debug reports them disabled.
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+  set_tests_properties(mesh.layered3d_slanted mesh.interface_pieces PROPERTIES DISABLED TRUE)
+endif()
 
 # --- physics layer (silicon parameters, Caughey-Thomas, SRH, Boltzmann statistics) --
 add_library(nitcad_physics STATIC
@@ -393,6 +399,7 @@ add_library(nitcad_physics STATIC
   src/physics/quantum_confinement.cpp
   src/physics/gate_tunnelling.cpp
   src/physics/energy_balance.cpp
+  src/physics/heavy_ion.cpp
   src/physics/klaassen_mobility.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -418,6 +425,7 @@ add_executable(nitcad_physics_test
   tests/physics/ionization_density_test.cpp
   tests/physics/gate_tunnelling_test.cpp
   tests/physics/energy_balance_test.cpp
+  tests/physics/heavy_ion_test.cpp
   tests/physics/klaassen_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
@@ -684,6 +692,7 @@ add_executable(nitcad_solve_test
   tests/solve/insulator_test.cpp
   tests/solve/transient_test.cpp
   tests/solve/transient_resume_test.cpp
+  tests/solve/heavy_ion_test.cpp
   tests/solve/trace_resume_test.cpp
   tests/solve/small_signal_test.cpp
   tests/solve/impact_ionization_test.cpp
@@ -733,6 +742,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME solve_unstructured COMMAND nitcad_solve_test "[unstructured]")
   # And the MLDA MOS-C gates (tests/solve/quantum_confinement_test.cpp, [.mlda]; Unit 47).
   add_test(NAME solve_mlda COMMAND nitcad_solve_test "[mlda]")
+  # And the heavy-ion collection gates (tests/solve/heavy_ion_test.cpp, [.heavy_ion]; Unit 65).
+  add_test(NAME solve_heavy_ion COMMAND nitcad_solve_test "[heavy_ion]")
 endif()
 
 # --- deck layer (the text input deck, its meaning and the batch runner; Unit 31) ----------
@@ -744,7 +755,7 @@ add_library(nitcad_deck STATIC
   src/deck/dimension_sweep.cpp)
 add_library(NiTCAD::deck ALIAS nitcad_deck)
 target_include_directories(nitcad_deck PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(nitcad_deck PUBLIC NiTCAD::base NiTCAD::io NiTCAD::solve)
+target_link_libraries(nitcad_deck PUBLIC NiTCAD::base NiTCAD::io NiTCAD::solve NiTCAD::analysis)
 
 add_executable(nitcad_deck_test
   tests/deck/syntax_test.cpp
@@ -766,6 +777,7 @@ add_executable(nitcad_deck_test
   tests/deck/cross_run_learning_test.cpp
   tests/deck/deck_compare_test.cpp
   tests/deck/solver_profile_test.cpp
+  tests/deck/heavy_ion_test.cpp
   tests/solve/process_memory.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")

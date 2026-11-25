@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "NiTCAD/physics/heavy_ion.hpp"
 #include "NiTCAD/physics/quantum_confinement.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 
@@ -191,6 +192,11 @@ struct PhysicsModels {
     // bit-identical to a build without it. Not owned: the sources must outlive every system created
     // with these models (a raw pointer keeps PhysicsModels a literal type, usable in constexpr).
     const ManufacturedSources* manufactured = nullptr;
+    // Heavy-ion tracks (Unit 65; DECISIONS.md HD1-HD10; physics/heavy_ion.hpp): electron-hole
+    // pair generation along each track, in time steps only (a steady solve sees none). Set by
+    // solve_transient from TransientOptions::heavy_ions; null (the default): no term, every result
+    // bit-identical to a build without it. Not owned, as `manufactured`.
+    const std::vector<physics::HeavyIonTrack>* heavy_ions = nullptr;
 };
 
 }  // namespace NiTCAD::assemble

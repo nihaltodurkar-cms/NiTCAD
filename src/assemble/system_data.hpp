@@ -545,6 +545,11 @@ struct SystemData {
     int dimension_ = 1;
     double generation_scale_ = 0.0;        // 1 / R0: [cm^-3 s^-1] to the rows' scaled rate
     const ManufacturedSources* manufactured_ = nullptr;  // models.manufactured (TVQ3), not owned
+    // Heavy-ion tracks (Unit 65): the checked tracks and, per track, (LET / q) R at every node
+    // [cm^-3 per unit of T], 0 on insulator and ohmic contact nodes. Empty without tracks.
+    std::vector<physics::HeavyIonTrack> heavy_ion_tracks_;
+    std::vector<std::vector<double>> heavy_ion_pairs_;
+    std::vector<double> heavy_ion_deposits_;  // per track [C / cm^(3-D)] (HD7)
     double impact_resolution_ = 0.0;       // models.impact_current_resolution
     std::size_t contact_count_ = 0;
     double rate_scale_ = 0.0;             // Ns / R0: scaled SRH call to R / R0

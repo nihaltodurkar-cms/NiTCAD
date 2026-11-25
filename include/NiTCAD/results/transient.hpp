@@ -44,6 +44,10 @@ struct TimePoint {
     // contact, as BiasPoint::thermal_contact_heat, at this time.
     std::vector<double> thermal_contact_heat;
     ConvergenceRecord convergence;  // empty for the starting state
+    // Heavy-ion tracks (Unit 65, HD8): the charge the tracks have generated from t = 0 to this time,
+    // in C / cm^(3-D) (the sum over the tracks of the mesh deposit times the integral of the time
+    // profile); absent without tracks.
+    std::optional<double> heavy_ion_charge;
 };
 
 // The fields at one time point.
@@ -58,7 +62,9 @@ struct TransientSnapshot {
     // Electron occupancy of each interface trap level on each interface edge (empty without
     // traps), in the assembler's slot order.
     std::vector<double> trap_occupancy;
-    // Generation-recombination rates (Unit 45; steady traps); empty when not stored.
+    // Generation-recombination rates (Unit 45; steady traps); empty when not stored. With heavy-ion
+    // tracks (Unit 65, HD8) `heavy_ion` holds their rate at the snapshot time whether or not the
+    // others are stored.
     RateFields rates;
 };
 
