@@ -4240,8 +4240,17 @@ Jacobian entry itself was right (diagnosed, not a criterion change). Results, Re
   suites not run (owner's word); no Debug.
 
 **Slice 2 docs (2026-11-25).** ARCHITECTURE.md: the Unit 66 as-built block at the end of 6.2 and the 11.3 nanoscale
-row's mobility mention. Remaining: KC1 (NG1 traces vs `main`) and KC10 (full Release and Debug suites), on the
-owner's word.
+row's mobility mention. Remaining: KC10 (full Release and Debug suites), on the owner's word.
+
+**KC1 met (2026-11-25, owner's word).** NG1 traces of the five traced binaries (assemble, deck, adapt, validation,
+solve; Release, MKL) on the branch against `main` 42b4306 (the merge base; its HC1 traces, PARDISO cases from its
+MKL re-trace), compared order-independently by case. All five binaries pass. 445 common cases: 443 identical; the
+electrothermal FD-gate case keeps every `main` record and adds only its two new Klaassen subcases; the GMRES-ILUT
+quasi-static C-V case differs only by attribution: the shared static fixture of `mos_test.cpp` (computed once, by
+whichever case runs first) now lands there, not in P3, and the records together are the same. 9 cases are new
+(Klaassen 5; PARDISO 4, skipped in the non-MKL `main` run) and P3's key is gone (the attribution above); the 4 PARDISO cases match `main`'s
+MKL trace with the same fixture attribution. Run identities (deck traces 65/65 identical) and Jacobian patterns
+unchanged.
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
