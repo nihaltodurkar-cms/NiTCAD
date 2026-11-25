@@ -1,0 +1,96 @@
+# 3D bulk n-channel FinFET, coarse mesh: the textbook picture of a FinFET.
+# A grey silicon substrate; a light-blue insulator (STI) on it; a thin silicon fin rising out of the
+# substrate through the insulator and running from source to drain; a green metal gate block lying
+# on the insulator across the fin; an orange 1 nm gate oxide wrapping the fin's top and both sides
+# under the gate. The transfer curve Id-Vg at Vd = 50 mV.
+#
+# Axes (nm): x along the fin, source (0) to drain (90), gate 35-55 (Lg = 20 nm);
+# y vertical: substrate 0-40, insulator 40-70, fin 40-100 (30 nm above the insulator),
+# gate oxide to 101, gate block to 120; z across: fin 25-35 (10 nm wide), oxide 24-36, domain 0-60.
+#
+# The gate metal is not meshed as a metal: it is a block of very high permittivity (eps_r 1e4) with
+# the gate contact on its top, so it holds the gate's potential to within a fraction of a mV, as a
+# metal would, while the domain stays the box the deck format needs. Outside the gate the space above
+# the insulator is air. Source and drain contacts are the fin's two end faces above the insulator
+# (its n+ part); the body contact is the substrate's bottom.
+#
+# Mesh: coarse tensor, 5 nm along the fin (4 nm under the gate), 5 nm up the fin, 2 nm across it,
+# 1 nm through the oxide (about 6,700 nodes). Not predictive at this size: refine before trusting
+# currents.
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 35nm, 8) + linspace(35nm, 55nm, 6) + linspace(55nm, 90nm, 8)
+y = linspace(0, 40nm, 5) + linspace(40nm, 70nm, 7) + linspace(70nm, 100nm, 7) + linspace(100nm, 101nm, 2) + linspace(101nm, 120nm, 4)
+z = linspace(0, 24nm, 5) + linspace(24nm, 25nm, 2) + linspace(25nm, 35nm, 6) + linspace(35nm, 36nm, 2) + linspace(36nm, 60nm, 5)
+
+# The background: air above the insulator, beside the gate.
+[region air]
+material = insulator
+eps_r = 1
+
+[region insulator]
+material = sio2
+box = 0 90nm  40nm 70nm  0 60nm
+
+[region gate_metal]
+material = insulator
+eps_r = 1e4
+box = 35nm 55nm  70nm 120nm  0 60nm
+
+[region gate_oxide]
+material = sio2
+box = 35nm 55nm  70nm 101nm  24nm 36nm
+
+[region silicon]
+material = silicon
+box = 0 90nm  0 40nm  0 60nm
+box = 0 90nm  40nm 100nm  25nm 35nm
+
+[doping]
+profile = acceptor constant 1e17
+profile = donor gaussian 1e20 axis=y center=100nm width=8nm x=-10nm:33nm z=25nm:35nm lateral=2nm
+profile = donor gaussian 1e20 axis=y center=100nm width=8nm x=57nm:100nm z=25nm:35nm lateral=2nm
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  70nm 100nm  25nm 35nm
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = 90nm 90nm  70nm 100nm  25nm 35nm
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = 35nm 55nm  120nm 120nm  0 60nm
+electrode = metal
+work_function = 4.5
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[models]
+fermi_dirac = on
+field_mobility = on
+electron_mobility = masetti
+
+[solver]
+backend = gmres_ilut
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate = 0 : 1 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = finfet_bulk_3d.nitsweep
+device = finfet_bulk_3d.nitdev
+table = finfet_bulk_3d.csv
