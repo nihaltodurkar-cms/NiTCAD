@@ -372,6 +372,12 @@ add_executable(nitcad_mesh_test
 target_include_directories(nitcad_mesh_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)
 nitcad_add_file_tests(mesh nitcad_mesh_test)
+# PR #120's Debug CI (run 45591610401, 4609029) passed every test but ran past its 150-minute limit:
+# mesh.layered3d_slanted took 4280 s and mesh.interface_pieces 3170 s there (2755 s and 1954 s on the
+# push run of the same commit). Release only, as app.solid; Debug reports them disabled.
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+  set_tests_properties(mesh.layered3d_slanted mesh.interface_pieces PROPERTIES DISABLED TRUE)
+endif()
 
 # --- physics layer (silicon parameters, Caughey-Thomas, SRH, Boltzmann statistics) --
 add_library(nitcad_physics STATIC
