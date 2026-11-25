@@ -4441,6 +4441,10 @@ the model is off), the deck keys, the run record and the vocabularies.
   - the electrothermal refusal removed (the refusals test);
   - the run-record key written when off (the deck run-record test).
 
+**Slice 2 (2026-11-25).** ARCHITECTURE.md: the as-built block after Unit 20's, Unit 20's exclusion note, the
+Unit 16 doping entry (the depth-axis window) and the 11.3 nanoscale-physics row. TAC11 (Release and Debug full
+suites) waits for the owner's word.
+
 **Review focus (not otherwise exercised; each pinned by a test in the slice that owns the code).**
 1. A node where F is exactly 0, e.g. a symmetric centre: plain SRH must still be added there. The E_r/F division
    must not run, and LocalTunnelling's `continue` pattern must not be copied. Test `tat zero field keeps SRH`
