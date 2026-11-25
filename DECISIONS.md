@@ -4339,6 +4339,55 @@ factor (S4 eq 3-71):
 | TAC10 | Run records: the TAD8 keys written when on, absent when off; a two-deck identity check (on vs off) differs. |
 | TAC11 | Suites: Release `/W4 /WX` full suite on the owner's word; Debug only on the owner's word. |
 
+**Pre-code corrections (2026-11-25, slice 0, before any code ran; the owner's "go ahead").** I found these
+while writing the TAC tests. They replace the plan text above where they differ. They correct defects, and no
+criterion was loosened.
+- TAD1, quadrature:
+  - In u, the low-field integrand peaks within K^{-2/3} of u = 0, next to the u^{3/2} kink, far inside the first
+    panel. So the rule is applied after the substitution u = v²: Γ = 2a ∫₀¹ v exp(a v² − K v³) dv, and
+    dΓ/dF = (K/F) 2a ∫₀¹ v⁴ exp(…) dv. Both integrands are analytic.
+  - The 16 × 8 Gauss–Legendre panels cover [0, v_max] in v. v_max = 1, or the point past the maximum where the
+    exponent has fallen 50 below it (bisection).
+  - The underflow clause "Γ = 0 when K > a + 745" is wrong and dropped. As F → 0, Γ → a Γ(5/3) K^{−2/3} ∝ F^{2/3}:
+    it never underflows, and dΓ/dF is unbounded there. Γ = d_dF = 0 only at F = 0 or where K overflows.
+  - So Γ has a cusp (∝ |E|^{2/3}) at zero field. For example, a = 21.7 gives Γ ≈ 0.15 at 1e4 V/cm and ≈ 0.03 at
+    1e3 V/cm, so neutral regions with fields of 1e2–1e3 V/cm see a few-percent enhancement. That is the model, and
+    TAC8 records the forward-bias change.
+- TAC3: the reference is independent of the production rule. It is composite Simpson in v with 2¹⁶ intervals
+  (same 1e-12), not a finer copy of the same Gauss nodes.
+- TAC4 as written was vacuous. Its region (u* ≤ 0.25 with (F/F_Γ)² ≥ 5) is empty for a < 60, because
+  (F/F_Γ)² = a v*²/3 with v* = √u*. Replaced by:
+  - (i) the low-field limit: Γ within 1e-3 of a Γ(5/3) K^{−2/3} where a K^{−2/3} = 1e-4, on the TAC2 (a, T) grid;
+  - (ii) the Laplace form at v* = 0.7, for a ∈ {40, 62, 100, 200} at 300 K: the relative deviation strictly
+    decreasing and ≤ 5% at a = 200, every value recorded;
+  - (iii) F_Γ = 3.69e5 V/cm to 0.5% (silicon, m 0.25, 300 K), kept.
+
+**Slice 0 (2026-11-25).** `hurkx_enhancement` with the tests TAC2–TAC5 and `tat extreme field finite`, all
+red first against a stub that returns 0. Three cases passed on the stub (zero field, extreme field, and the 1e-300
+field), and they guard limits a stub satisfies trivially.
+- **The run exposed a quadrature fault, fixed.** With 16 panels, TAC3 missed by up to 1.7e-10 at high field
+  (a = 62). There the exponent changes by about 8 across a panel. The panel count is now the larger of 16 and
+  ⌈(2a v_max + 3K v_max²) v_max / 4⌉, so φ changes by at most 4 across a panel. The Simpson reference's own error
+  there is about 1e-13.
+- **TAC5's difference changed.** Central difference with h = 1e-4 F missed by up to 1.6e-6 (a = 62, F ≥ 9e5 V/cm).
+  That is the difference's own truncation, about (2(F/F_Γ)² h/F)²/6, because Γ grows like e^{(F/F_Γ)²}. It is now
+  the fourth-order 5-point difference, same 1e-6. This is a defect in the test, not the criterion.
+- Results:
+  - TAC2: met.
+  - TAC3: largest relative deviation 5.7e-14.
+  - TAC4 (i): met. TAC4 (ii) Laplace deviations: 0.61%, 0.30%, 0.18%, 0.086% at a = 40, 62, 100, 200
+    (decreasing, ≤ 5%). TAC4 (iii): met.
+  - TAC5: met.
+- Physics binary: 139/139 cases.
+- Hand mutants, 5/5 caught:
+  - d_dF with v³ for v⁴;
+  - a 4-point rule;
+  - a prefactor dropped;
+  - ħ → h;
+  - tail 50 → 5.
+- The plan's "15 panels" mutant was replaced. With adaptive panels it changes Γ by about 1e-14, so it is
+  equivalent under TAC3's 1e-12 and cannot be caught.
+
 **Review focus (not otherwise exercised; each pinned by a test in the slice that owns the code).**
 1. A node where F is exactly 0, e.g. a symmetric centre: plain SRH must still be added there. The E_r/F division
    must not run, and LocalTunnelling's `continue` pattern must not be copied. Test `tat zero field keeps SRH`
