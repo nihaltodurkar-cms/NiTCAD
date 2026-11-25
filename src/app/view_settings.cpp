@@ -198,7 +198,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
     if (o.cut) {
         const bool device_view = o.kind == ViewKind::solid || o.kind == ViewKind::mesh || o.kind == ViewKind::field ||
                                  o.kind == ViewKind::slice || o.kind == ViewKind::iso || o.kind == ViewKind::quality ||
-                                 o.kind == ViewKind::difference;
+                                 o.kind == ViewKind::difference || o.kind == ViewKind::band_surface;
         if (o.kind != ViewKind::profile && o.kind != ViewKind::bands && !(device_view && m.dimension() >= 2)) {
             return std::unexpected(invalid("a cut line applies to the profile and bands views and to 2D and 3D device views"));
         }
@@ -429,7 +429,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         auto* f = std::get_if<FieldScene>(&scene);
         if (auto drawn = overlays(f); !drawn) return std::unexpected(std::move(drawn.error()));
         if (f) {
-            if (cut) add_cut_line(*f, *cut);
+            if (cut && o.kind != ViewKind::band_surface) add_cut_line(*f, *cut);  // BSD9: drawn on its surfaces
             if (band_plane && o.kind != ViewKind::band_surface) add_plane_outline(*f, geometry, *band_plane);
             apply_camera(*f, o);
             set_look(*f, o.enhanced ? Look::enhanced : Look::classic);  // Unit 26f (KD5): after every overlay
@@ -694,7 +694,10 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         }
         bo.exaggeration = o.exaggeration;
         bo.opacity = o.band_opacity;
+        // BSD8: one range over the run unless the point's own is asked for; a range set wins.
         bo.range_eV = o.range;
+        if (!o.range && !o.band_fit_point) bo.range_eV = band_energy_range(device, w.points, o.band_levels);
+        bo.cut = cut;
         bo.by_level = o.by_level;
         bo.map = *colormap;
         bo.view = view;
@@ -1046,6 +1049,7 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
         if (s.exaggeration != 1.0) a.insert(a.end(), {"--exaggeration", std::format("{}", s.exaggeration)});
         if (s.band_opacity != 1.0f) a.insert(a.end(), {"--opacity", std::format("{}", s.band_opacity)});
         if (s.by_level) a.emplace_back("--by-level");
+        if (s.band_fit_point) a.emplace_back("--fit-point");
     }
     if (s.band_plane && takes_band_plane(s.kind)) {
         a.insert(a.end(), {"--plane", std::string(1, static_cast<char>('x' + s.band_plane->axis)) + "=" +

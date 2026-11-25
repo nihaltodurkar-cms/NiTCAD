@@ -7,6 +7,7 @@
 #include "viewport.hpp"
 #include "fixtures.hpp"
 #include "NiTCAD/app/probe.hpp"
+#include "NiTCAD/render/band_surface.hpp"
 #include "NiTCAD/render/image.hpp"
 
 #include <windows.h>
@@ -1994,8 +1995,8 @@ TEST_CASE("app window 26o: the band surface in the inspector, stepped, hovered; 
         w->execute(Command::run);
         REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
         w->select_tab(MainWindow::tab_view);
-        const std::array<int, 7> band_controls{MainWindow::id_band_ec, MainWindow::id_band_ev, MainWindow::id_band_efn,
-                                               MainWindow::id_band_efp, MainWindow::id_by_level,
+        const std::array<int, 8> band_controls{MainWindow::id_band_ec, MainWindow::id_band_ev, MainWindow::id_band_efn,
+                                               MainWindow::id_band_efp, MainWindow::id_by_level, MainWindow::id_band_fit,
                                                MainWindow::id_exaggeration, MainWindow::id_band_opacity};
         for (const int id : band_controls) CHECK_FALSE(shown(*w, id));
         choose(*w, MainWindow::id_view, L"band-surface");
@@ -2056,6 +2057,29 @@ TEST_CASE("app window 26o: the band surface in the inspector, stepped, hovered; 
         CHECK(w->status(3).starts_with("Ec = "));
         hover(*w, 1.0f, 1.0f);
         CHECK_FALSE(w->readout_shown());
+        // Slice 2 (BSD8, BSD9): one range over the run until Fit this point; a cut line drawn on the surfaces.
+        CHECK_FALSE(w->settings().band_fit_point);
+        const auto lo_of = [&] { return std::get<render::FieldScene>(*w->scene()).colorbar->scale.lo(); };
+        const auto run = render::band_energy_range(*w->workspace()->device, w->workspace()->points,
+                                                   std::array<bool, 4>{true, false, false, false});
+        REQUIRE(run);
+        CHECK(lo_of() == run->first);
+        click(*w, MainWindow::id_band_fit);
+        CHECK(w->settings().band_fit_point);
+        auto own = app::build_scene(*w->workspace(), w->settings());
+        REQUIRE(own);
+        CHECK(lo_of() == std::get<render::FieldScene>(*own).colorbar->scale.lo());
+        CHECK(lo_of() != run->first);
+        click(*w, MainWindow::id_band_fit);
+        CHECK_FALSE(w->settings().band_fit_point);
+        apply_cut(*w, "0.1,0.5:1.9,0.5");
+        CHECK(w->tab() == MainWindow::tab_curves);  // the line's band diagram, as for every view
+        w->select_tab(MainWindow::tab_view);
+        REQUIRE(w->settings().kind == ViewKind::band_surface);
+        const auto& lines = std::get<render::FieldScene>(*w->scene()).lines;
+        CHECK(std::ranges::any_of(lines, [](const render::LineBatch& l) { return l.name == "band cut"; }));
+        CHECK(std::ranges::none_of(lines, [](const render::LineBatch& l) { return l.name == "cut line"; }));
+        apply_cut(*w, "");
     }
     {
         const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);

@@ -1599,3 +1599,90 @@ TEST_CASE("app views 26o: the band surface's plane drawn on the solid, field and
     CHECK(bad.status != 0);
     CHECK(bad.output.find("--plane applies to") != std::string::npos);
 }
+
+TEST_CASE("app views 26o: one energy range over the run; a cut line on the surfaces (BSD8, BSD9, BSC5)", "[app]") {
+    const app::Workspace& w = mosfet().workspace;
+    REQUIRE(w.points.size() >= 3);
+    ViewSettings s;
+    s.kind = ViewKind::band_surface;
+    CHECK_FALSE(s.band_fit_point);
+    const auto run_range = render::band_energy_range(*w.device, w.points, s.band_levels);
+    REQUIRE(run_range);
+    const auto scene_at = [&](std::size_t i, const ViewSettings& v) {
+        ViewSettings t = v;
+        t.point = i;
+        auto b = app::build_scene(w, t);
+        REQUIRE(b);
+        return std::get<render::FieldScene>(std::move(*b));
+    };
+    // The same range at every point; the scene is the one point i's bands alone draw on that range.
+    const auto first = scene_at(0, s);
+    REQUIRE(first.colorbar);
+    for (std::size_t i = 0; i < w.points.size(); ++i) {
+        CAPTURE(i);
+        const auto f = scene_at(i, s);
+        REQUIRE(f.colorbar);
+        CHECK(f.colorbar->scale.lo() == run_range->first);
+        CHECK(f.colorbar->scale.hi() == run_range->second);
+        CHECK((*f.axes)[1].per_unit == (*first.axes)[1].per_unit);
+        render::BandSurfaceOptions o;
+        o.range_eV = run_range;
+        auto alone = render::band_surface_view(*w.device, *w.geometry, w.points[i].bands, o);
+        REQUIRE(alone);
+        for (const render::TriangleBatch& d : alone->scene.triangles) {
+            const auto t = std::ranges::find(f.triangles, d.name, &render::TriangleBatch::name);
+            REQUIRE(t != f.triangles.end());
+            REQUIRE(t->vertices.size() == d.vertices.size());
+            bool same = true;
+            for (std::size_t k = 0; k < d.vertices.size(); ++k) same = same && t->vertices[k].position == d.vertices[k].position;
+            CHECK(same);
+        }
+    }
+    // Stepping i -> j -> i gives the same scene.
+    const auto again = scene_at(0, s);
+    REQUIRE(again.triangles.size() == first.triangles.size());
+    for (std::size_t k = 0; k < first.triangles.size(); ++k) {
+        bool same = first.triangles[k].vertices.size() == again.triangles[k].vertices.size();
+        for (std::size_t i = 0; same && i < first.triangles[k].vertices.size(); ++i) {
+            same = first.triangles[k].vertices[i].position == again.triangles[k].vertices[i].position;
+        }
+        CHECK(same);
+    }
+    // Fit this point: the point's own range, named --fit-point.
+    ViewSettings fit = s;
+    fit.band_fit_point = true;
+    const auto own = scene_at(0, fit);
+    const auto own_direct = render::band_surface_view(*w.device, *w.geometry, w.points[0].bands);
+    REQUIRE(own_direct);
+    CHECK(own.colorbar->scale.lo() == own_direct->range_eV.first);
+    CHECK(own.colorbar->scale.hi() == own_direct->range_eV.second);
+    CHECK(has(app::plot_arguments(fit), "--fit-point"));
+    CHECK_FALSE(has(app::plot_arguments(s), "--fit-point"));
+    // A cut line: drawn on the surfaces, not on the base.
+    ViewSettings cut = s;
+    cut.cut = ViewSettings::Cut{{0.1, 0.5}, {1.9, 0.5}};
+    const auto with = scene_at(1, cut);
+    CHECK(std::ranges::any_of(with.lines, [](const render::LineBatch& l) { return l.name == "band cut"; }));
+    CHECK(std::ranges::none_of(with.lines, [](const render::LineBatch& l) { return l.name == "cut line"; }));
+    // nitcad plot draws the same images.
+    const fs::path out = app_test::scratch("views_26o_run");
+    int n = 0;
+    for (ViewSettings v : {s, fit, cut}) {
+        v.point = 1;
+        auto scene = app::build_scene(w, v);
+        REQUIRE(scene);
+        const render::Image mine = draw(*scene, 480, 360);
+        const fs::path png = out / std::format("r{}.png", n++);
+        std::string args = "plot " + app_test::quoted(mosfet().deck);
+        for (const std::string& a : app::plot_arguments(v)) args += " \"" + a + "\"";
+        args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+        const auto cli = app_test::nitcad(args);
+        CAPTURE(args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto theirs = render::load_png(png);
+        REQUIRE(theirs);
+        const auto d = render::compare(mine, *theirs, 0);
+        REQUIRE(d);
+        CHECK(d->max_channel == 0);
+    }
+}

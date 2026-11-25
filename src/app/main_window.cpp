@@ -400,7 +400,7 @@ bool MainWindow::create_children() {
     // scale and opacity (after the range).
     for (const auto& [id, text] : {std::pair{id_band_ec, L"Ec"}, std::pair{id_band_ev, L"Ev"},
                                    std::pair{id_band_efn, L"EFn"}, std::pair{id_band_efp, L"EFp"},
-                                   std::pair{id_by_level, L"Colour by level"}}) {
+                                   std::pair{id_by_level, L"Colour by level"}, std::pair{id_band_fit, L"Fit this point"}}) {
         make(L"BUTTON", text, WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id);
     }
     make(L"STATIC", L"Height ×", WS_VISIBLE | SS_CENTERIMAGE, inspector_, label++);
@@ -703,7 +703,7 @@ const std::array<std::vector<int>, MainWindow::section_count>& section_members()
                          M::id_exaggeration, label_band_opacity, M::id_band_opacity},
         std::vector<int>{M::id_contours, M::id_edges, M::id_contacts, M::id_opaque, M::id_perspective, M::id_enhanced,
                          M::id_axis_box, M::id_band_ec, M::id_band_ev, M::id_band_efn, M::id_band_efp,
-                         M::id_by_level},
+                         M::id_by_level, M::id_band_fit},
         std::vector<int>{first_label + 5, M::id_slice_axis, first_label + 6, M::id_slice_at, M::id_clip, M::id_clip_box,
                          label_clip_x, M::id_clip_x0, M::id_clip_x1, label_clip_x + 1, M::id_clip_y0, M::id_clip_y1,
                          label_clip_x + 2, M::id_clip_z0, M::id_clip_z1},
@@ -1732,10 +1732,7 @@ void MainWindow::refresh() {
     // The cut line where the view uses it: plotted along, or drawn on a 2D or 3D device view.
     ViewSettings shown = s;
     const bool along = s.kind == ViewKind::profile || s.kind == ViewKind::bands;
-    // Not on the band surface (Unit 26o): a line on its surfaces is slice 2's (BSD9).
-    if (along || (!is_plot(s.kind) && s.kind != ViewKind::band_surface && workspace_->device->mesh().dimension() > 1)) {
-        shown.cut = cut_;
-    }
+    if (along || (!is_plot(s.kind) && workspace_->device->mesh().dimension() > 1)) shown.cut = cut_;
     // Unit 26n slice 3 (DT7): a sweep view on the Curves tab draws the sweep's runs, not this run's.
     std::expected<Scene, base::Error> scene = std::unexpected(base::Error{base::ErrorCode::invalid_input, {}, std::nullopt});
     if (tab_ == tab_curves && sweep_view_ >= 0 && sweep_results_) {
@@ -1930,6 +1927,7 @@ void MainWindow::sync_inspector() {
     }
     for (std::size_t k = 0; k < 4; ++k) check(id_band_ec + static_cast<int>(k), s.band_levels[k]);
     check(id_by_level, s.by_level);
+    check(id_band_fit, s.band_fit_point);
     // The boxes (ZD1); a clipping box's text stays while there is none, to be checked again.
     for (const int id : {id_slice_at, id_levels, id_cut, id_arrow_count, id_line_count, id_seeds, id_gap,
                          id_exaggeration, id_band_opacity}) {
@@ -2107,7 +2105,7 @@ void MainWindow::show_inspector_groups() {
     // ZD3: the colour range on the views drawn on a colour scale of the field.
     // Unit 26o (BSD5): the band surface's controls with that view; its energy range on the range's boxes.
     const bool band = tab_ == tab_view && workspace_ && s.kind == ViewKind::band_surface;
-    show({id_band_ec, id_band_ev, id_band_efn, id_band_efp, id_by_level, label_exaggeration, id_exaggeration,
+    show({id_band_ec, id_band_ev, id_band_efn, id_band_efp, id_by_level, id_band_fit, label_exaggeration, id_exaggeration,
           label_band_opacity, id_band_opacity},
          band);
     show({label_range, id_range_min, id_range_max, id_range_auto},
@@ -2218,6 +2216,8 @@ void MainWindow::on_inspector(int id, int code) {
         s.frequency = k >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(k)) : std::nullopt;
     } else if (id == id_axis && selection) {
         s.axis = std::clamp(combo_index(child(id_axis)), 0, 2);
+    } else if (clicked && id == id_band_fit) {
+        s.band_fit_point = Button_GetCheck(child(id)) == BST_CHECKED;  // BSD8
     } else if (clicked && id >= id_band_ec && id <= id_by_level) {
         // Unit 26o (BSD5): a level shown or not, or colour by level.
         const bool on = Button_GetCheck(child(id)) == BST_CHECKED;

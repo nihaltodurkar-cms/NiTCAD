@@ -71,6 +71,7 @@ constexpr const char* plot_usage =
     "  bands   --view band-surface: Ec, Ev, EFn, EFp as energy heights (a 3D device on --plane x|y|z=<um>)\n"
     "          [--band-levels Ec,Ev,EFn,EFp (Ec,Ev)] [--exaggeration <0.1..10>] [--opacity <0.2..1>]\n"
     "          [--by-level] (each level in its own colour) [--range <lo>,<hi> (eV)]\n"
+    "          [--fit-point] (this point's range, not one over the run) [--cut <segment in the plane>]\n"
     "  explode --view exploded [--field <f>] [--axis x|y|z (y)] [--gap <um> (12% of the extent)]\n"
     "  film    --view filmstrip --field <f> (a transient run) [--every <k>] [--columns <c> (4)]\n"
     "          (--size is each frame's, 640x480 by default)\n"
@@ -151,6 +152,7 @@ struct Options {
     double exaggeration = 1.0;
     float opacity = 1.0f;
     bool by_level = false;
+    bool fit_point = false;
     std::optional<Plane> plane;
     int width = 1280, height = 960;
     bool size_given = false;
@@ -516,6 +518,8 @@ int plot(int argc, char** argv) {
             if (!n) return usage(std::string(a) + " needs a number");
             if (a == "--exaggeration") o.exaggeration = *n;
             else o.opacity = static_cast<float>(*n);
+        } else if (a == "--fit-point") {
+            o.fit_point = true;
         } else if (a == "--by-level") {
             o.by_level = true;
         } else if (a == "--plane") {
@@ -714,7 +718,7 @@ int plot(int argc, char** argv) {
     std::optional<CutLine> cut;
     if (!o.cut.empty()) {
         const bool device_view = o.view == "solid" || o.view == "mesh" || o.view == "field" || o.view == "slice" ||
-                                 o.view == "iso" || o.view == "quality" || o.view == "difference";
+                                 o.view == "iso" || o.view == "quality" || o.view == "difference" || o.view == "band-surface";
         if (o.view != "profile" && o.view != "bands" && !(device_view && m.dimension() >= 2)) {
             return fail("a cut line applies to the profile and bands views and to 2D and 3D device views");
         }
@@ -1105,6 +1109,8 @@ int plot(int argc, char** argv) {
         b.exaggeration = o.exaggeration;
         b.opacity = o.opacity;
         b.range_eV = o.range;
+        if (!o.range && !o.fit_point) b.range_eV = band_energy_range(*device, points, o.band_levels);
+        b.cut = cut;
         b.by_level = o.by_level;
         b.map = *colormap;
         b.view = view;
@@ -1238,7 +1244,7 @@ int plot(int argc, char** argv) {
         }
     }
 
-    if (cut && field_scene) add_cut_line(*field_scene, *cut);
+    if (cut && field_scene && o.view != "band-surface") add_cut_line(*field_scene, *cut);
     // Unit 26o (BSD6): the band surface's plane outlined on a 3D solid, field or slice view.
     if (o.plane && field_scene && o.view != "band-surface") add_plane_outline(*field_scene, *geometry, *o.plane);
     // Unit 26f (KD6): the look last, so its feature edges see every overlay; 2D ignores it.

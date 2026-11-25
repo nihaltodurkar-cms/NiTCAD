@@ -130,6 +130,7 @@ struct ViewSettings {
     double exaggeration = 1.0;
     float band_opacity = 1.0f;
     bool by_level = false;
+    bool band_fit_point = false;  // Unit 26o (BSD8): the point's own range, not one over the run
     std::optional<Slice> band_plane;
 };
 
