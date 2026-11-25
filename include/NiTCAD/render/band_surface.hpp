@@ -9,15 +9,67 @@
 // heterointerface, equal semiconductor parameters).
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
+#include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
+#include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
+#include "NiTCAD/render/color.hpp"
 #include "NiTCAD/render/geometry.hpp"
+#include "NiTCAD/render/scene.hpp"
+#include "NiTCAD/results/solution.hpp"
 
 namespace NiTCAD::render {
+
+enum class BandLevel : std::uint8_t { conduction, valence, electron_fermi, hole_fermi };
+
+struct BandSurfaceOptions {
+    std::array<bool, 4> levels{true, true, false, false};  // Ec, Ev, EFn, EFp (BandLevel order)
+    std::optional<Plane> plane;                             // the section of a 3D device (cm); none in 2D
+    double exaggeration = 1.0;                              // [0.1, 10]: the heights' scale on the default
+    float opacity = 1.0f;                                   // [0.2, 1]
+    std::optional<std::pair<double, double>> range_eV;      // lo < hi; empty: fitted to the drawn levels
+    bool by_level = false;                                  // BSQ4: colour by energy unless set
+    Colormap map = Colormap::viridis;
+    ViewOptions view;                                       // projection and camera angles
+};
+
+// The scene, with what reading it back needs: a height is um_per_eV * E in scene y.
+struct BandSurfaceScene {
+    FieldScene scene;
+    double um_per_eV = 0.0;
+    std::pair<double, double> range_eV{};
+    std::size_t dropped = 0;  // pieces not drawn: a level not finite at one of their points, or of zero area
+};
+
+// The levels as energy-height surfaces (BSD1-BSD4). The base is the 2D device's elements, or the 3D device's
+// section by options.plane (Geometry::slice); its axes (u, v) are scene x and z in um: in 2D x and y, for a plane
+// normal to an axis the other two in order, else u the plane's projection of the first world axis not along the
+// normal and v = n x u. Scene y is um_per_eV * E: by default 0.6 times the base's larger extent over the
+// range's span (1 eV for a single value, the range then widened by 0.5 eV each side), times exaggeration. One
+// batch per level shown, named Ec, Ev, EFn, EFp, with walls between materials in the same batch (vertical,
+// normals in the base plane); coloured by energy on one linear scale (a colorbar "E (eV)") or each in the band
+// diagram's colour. The range clips the pieces. scene.axes names the axes ("x (µm)", "E (eV)", ...).
+// Errors (invalid_input): a 1D device; a plane in 2D or none in 3D; a level not one value per node; no level
+// shown; exaggeration or opacity out of range; range lo >= hi or not finite; the plane missing the device;
+// nothing finite to draw.
+[[nodiscard]] std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Device& device,
+                                                                            const Geometry& geometry,
+                                                                            const results::BandDiagram& bands,
+                                                                            const BandSurfaceOptions& options = {});
+
+// A level at point x (cm) in element e as the surface draws it (BSD2), in double: nullopt where x's control-volume
+// owner is an insulator or the value is not finite. The owner is the element's node whose piece holds x (a
+// tensor cell's corner sub-box, a simplex's largest barycentric weight).
+[[nodiscard]] std::optional<double> band_energy_at(const device::Device& device, const Geometry& geometry,
+                                                   const results::BandDiagram& bands, BandLevel level,
+                                                   std::size_t element, const Point& x);
 
 // One key per mesh node: -1 on insulator nodes; semiconductor nodes share a key exactly when their regions'
 // semiconductor parameters compare equal. Keys count from 0 in region order.
