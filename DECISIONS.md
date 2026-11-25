@@ -270,18 +270,19 @@ more cases are measured.
 
 ---
 
-## Closed units: summaries (full records in `docs/decisions/`)
+## Closed units: summaries (full records in git history)
 
 Each unit's complete record — the design rows, criteria, owner rulings in their own words, measurements and
-as-built notes — was moved to its own file under [`docs/decisions/`](docs/decisions/) without changing a word (2026-11-14). Below
-are the main points of each: scope, its decision IDs, outcome, the owner's rulings and accepted limitations, and where it
-landed. Rule for later units: a unit's record stays here in full while it is open, then moves to `docs/decisions/` and
-leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of a row ID ("DECISIONS.md PV3", "DECISIONS
+as-built notes — was moved to its own file under `docs/decisions/` without changing a word (2026-11-14). The owner
+removed that directory on 2026-11-23 (`088d1b6`); each summary below names its record file, which is still in git
+history: `git show 088d1b6~1:docs/decisions/<file>`. Below are the main points of each: scope, its decision IDs,
+outcome, the owner's rulings and accepted limitations, and where it landed. Units closed since keep their full record
+in this file. A citation elsewhere (code comments, ARCHITECTURE.md) of a row ID ("DECISIONS.md PV3", "DECISIONS
 11.2", "DECISIONS Unit 55 15.13") is found in that unit's record file, unchanged.
 
 ### Meshing and geometry
 
-- **Unit 16 — unstructured 2D and 3D meshing** ([record](docs/decisions/unit-16.md); `main` `a09cf43`, PR #35).
+- **Unit 16 — unstructured 2D and 3D meshing** (record `unit-16.md`; `main` `a09cf43`, PR #35).
   - **Owner rulings R1–R4 (2026-10-14):** 2D and 3D in one unit; an in-tree generator with no new dependency;
     interfaces as node regions with straddled node pairs; analytic doping profiles.
   - **Constructions M1–M16:** exact predicates; a simplex import with checked duals (P0–P3, P5); a 2D generator
@@ -290,22 +291,22 @@ leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of 
   - **Evidence labels:** proven, cited, heuristic (capped), limitation.
   - **U14 (MOSFET gate):** unmet with isotropic triangles; met with a structured layer under the gate.
   - Every 2D and 3D gate passed.
-- **Unit 49 — boundary fill between a structured layer's columns** ([record](docs/decisions/unit-49.md); `main` `5bb47c3`, PR #69).
+- **Unit 49 — boundary fill between a structured layer's columns** (record `unit-49.md`; `main` `5bb47c3`, PR #69).
   - Fixed a Unit 16 `generate_mesh` bug in the fill between layer columns.
   - CI's Release job failed at vcpkg checkout, so the merge was unverified on CI.
-- **Unit 53 — FinFET geometry and meshing** ([record](docs/decisions/unit-53.md); `main` `a2a57a0`, PR #74).
+- **Unit 53 — FinFET geometry and meshing** (record `unit-53.md`; `main` `a2a57a0`, PR #74).
   - **FD1–FD15, FC1–FC14:** non-convex regions (piecewise linear complexes, `extrude3d` sections); boundary recovery;
     junction lines and bends; patches cut by interfaces; the reduced and shaped FinFET decks (about 3e5 nodes,
     P4/P6-certified).
   - FC10 met: the shaped deck converges at all 17 points.
   - **Accepted as limitations (owner, 2026-10-31):** FC8 (flat gate, an error floor at the fin's top corners); FC9
     (13.9% low in on-current against the tensor reference, not diagnosed); FC14 (Debug +146 s over 120 s).
-- **Unit 54 — 3D structured boundary layers in swept meshes** ([record](docs/decisions/unit-54.md); `main` `95c2254`, PR #75).
+- **Unit 54 — 3D structured boundary layers in swept meshes** (record `unit-54.md`; `main` `95c2254`, PR #75).
   - **UD1–UD13, UC1–UC13:** extrusions with 2D cross-section layers.
   - UC9 met: the shaped deck converges with 71,188 nodes, in 892 s.
   - **Accepted as limitations (owner, 2026-10-31):** UC7; UC8 (8,300 nodes, about as accurate as the coarse tensor
     mesh but outside the bound at 5 of 17 points).
-- **Unit 17 — intelligent adaptive mesh refinement and state transfer** ([record](docs/decisions/unit-17.md); `main`
+- **Unit 17 — intelligent adaptive mesh refinement and state transfer** (record `unit-17.md`; `main`
   `72377ad`, PR #81).
   - **AD1–AD10, AC1–AC21, rulings AQ1–AQ5, ID/AR rows:** goal-driven refinement through the generators' size field
     (tensor, 2D and swept meshes), physics indicators, adjoint goal weighting (a transposed solve), one mesh per sweep,
@@ -313,14 +314,14 @@ leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of 
   - Slice 7 suites: Release 217/217; Debug 198/199 (the known `app.live_check` flake under `-j 6`).
   - **Accepted as limitations (ARCHITECTURE.md 11.3):** AC14, AC15, AC16 (well MOSFET tolerance mode, 1.92× the
     DOFs; tensor budget mode, a tie within AR9's uncertainty, `[!shouldfail]`), and AC8's FinFET target.
-- **Unit 17b — cross-run learning for adaptive refinement** ([record](docs/decisions/unit-17b.md); `main` `dae4568`,
+- **Unit 17b — cross-run learning for adaptive refinement** (record `unit-17b.md`; `main` `dae4568`,
   PR #82).
   - **LB1–LB13 (Unit 17's ID8–ID10, AC19, AC21):** opt-in learned first mesh from adapt history (`[output]
     adapt_history`), gradient-boosted trees plus ridge in a versioned `.nitlearn` model, reproducible and
     device-held-out; 22 hand mutants killed.
   - AC19: recall 0.90, precision 0.72; m7 met (a pass saved). **Accepted as a limitation:** m6's DOF miss (1.15×,
     `[!shouldfail]`), the criterion unchanged.
-- **Unit 17c — adaptation for derived goals: V_T, g_m and swing** ([record](docs/decisions/unit-17c.md); `main`
+- **Unit 17c — adaptation for derived goals: V_T, g_m and swing** (record `unit-17c.md`; `main`
   `9fd9fa1`, PR #85).
   - **DG1–DG12, DC1–DC10, DQ1–DQ4, DR rows:** `solve/adapt_derived` with each derived goal's own adjoint over several
     points; the extractor formulas restated in solve and held bit-equal to `analysis/dc.hpp` by a test; V_T absolute
@@ -330,61 +331,61 @@ leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of 
 
 ### Solver robustness and numerics
 
-- **Unit 36 — trace robustness at the current-resolution floor** ([record](docs/decisions/unit-36.md); `main` `07cd53a`, PR #46).
+- **Unit 36 — trace robustness at the current-resolution floor** (record `unit-36.md`; `main` `07cd53a`, PR #46).
   - **R1–R3, TR1–TR7:** the arc row's products in compensated arithmetic; a corrector-distance test.
   - The zener band-to-band trace on the defaults now completes, and the open-base snap-back takes 59 points (was about 5000).
   - **Limitation:** the arc metric's current term still comes from the contact current.
-- **Unit 41 — last-bit reproducibility on hybrid CPUs** ([record](docs/decisions/unit-41.md); `main` `67e8fe5`, PR #51).
+- **Unit 41 — last-bit reproducibility on hybrid CPUs** (record `unit-41.md`; `main` `67e8fe5`, PR #51).
   - Eigen's cache sizes are pinned to the P-core values, so results do not depend on core type.
   - Fix chosen by the owner (2026-10-17); the P-core results were kept.
-- **Unit 44 — iterative linear solver** ([record](docs/decisions/unit-44.md); `main` `b518c99`, PR #54).
+- **Unit 44 — iterative linear solver** (record `unit-44.md`; `main` `b518c99`, PR #54).
   - **LS1–LS6, LQ1–LQ4, LG1–LG8:** GMRES with ILUT, opt-in, real and complex, with a reported SparseLU fallback.
   - In 3D it is 9–72× faster and uses 8–26× less memory than SparseLU.
-- **Unit 50 — Newton at the rounding floor** ([record](docs/decisions/unit-50.md); `main` `0c14841`, PR #71).
+- **Unit 50 — Newton at the rounding floor** (record `unit-50.md`; `main` `0c14841`, PR #71).
   - The residual line search takes the full step once the residual is at rounding (this unstopped the FinFET with MLDA).
   - Adds an opt-in `minority_floor` for uncontacted n+ regions under an oxide.
-- **Parallel test suites** ([record](docs/decisions/parallel-test-suites.md); `main` `2fe1879`, PR #62).
+- **Parallel test suites** (record `parallel-test-suites.md`; `main` `2fe1879`, PR #62).
   - Owner, 2026-10-23: "the test is taking too long", then "do the test-speed".
   - The suites run in parallel; the Release suite went from about 1,013 s to about 618 s.
   - The WG1 bound is 250 ms on CI.
 
 ### Physics models (each opt-in and bit-identical when off unless stated)
 
-- **Unit 34 — Masetti hole mobility** ([record](docs/decisions/unit-34.md); `main` `e14a53f`, PR #42).
+- **Unit 34 — Masetti hole mobility** (record `unit-34.md`; `main` `e14a53f`, PR #42).
   - Criteria AC1–AC9; off by default.
   - The largest boron resistivity gap falls from 48% to 11%.
   - **Accepted as limitations (owner, 2026-10-15):** AC3 and AC5 at 1e18, as documented limitations, not as passed criteria.
-- **Unit 35 — published silicon defaults** ([record](docs/decisions/unit-35.md); `main` `2d1fdc7`, PR #44).
+- **Unit 35 — published silicon defaults** (record `unit-35.md`; `main` `2d1fdc7`, PR #44).
   - A default change the owner authorized (S1–S5, DC1–DC10).
   - The band set is now Couderc et al. (2014): n_i(300 K) = 9.673e9.
   - The hole mobility is `automatic` (Masetti on silicon).
   - The legacy set and Caughey–Thomas stay selectable and reproduce old results byte for byte.
-- **Unit 37 — density-dependent dopant ionization** ([record](docs/decisions/unit-37.md); `main` `16a77b5`, PR #47).
+- **Unit 37 — density-dependent dopant ionization** (record `unit-37.md`; `main` `16a77b5`, PR #47).
   - **I1–I5, II1–II7:** Altermatt et al.'s levels as `ionization_levels = altermatt`.
   - The incomplete-ionization gaps at 1e19 fall from +138%/+241% to +3%/+4%.
   - **Limitation:** donors are taken as phosphorus and acceptors as boron.
-- **Unit 38 — Masetti electron mobility** ([record](docs/decisions/unit-38.md); `main` `1b446d0`, PR #48).
+- **Unit 38 — Masetti electron mobility** (record `unit-38.md`; `main` `1b446d0`, PR #48).
   - **E1–E4, ME1–ME7:** `electron_mobility = masetti`.
   - The largest phosphorus gap falls from 8.8% to 6.2%.
   - **Limitations:** μ_max = 1414 rests on one reproduction; phosphorus only.
-- **Unit 46 — Lombardi surface mobility** ([record](docs/decisions/unit-46.md); `main` `51c2da9`, PR #64).
+- **Unit 46 — Lombardi surface mobility** (record `unit-46.md`; `main` `51c2da9`, PR #64).
   - **LD1–LD8, LS1–LS12:** E⊥ per edge, an exact Jacobian; works with electrothermal; refused with impact ionization (LD8).
   - On the FinFET deck the on-current falls by 12%.
   - **Accepted as limitations of the model as specified:** LS6, LS8 and the mesh dependence.
-- **Unit 47 — MLDA quantum confinement** ([record](docs/decisions/unit-47.md); `main` `329f203`, PR #66).
+- **Unit 47 — MLDA quantum confinement** (record `unit-47.md`; `main` `329f203`, PR #66).
   - **QD1–QD10, QC1–QC13:** the density of states times 1 − exp(−d²/λ²); no new unknowns; both statistics.
   - Refused with electrothermal, thermionic interfaces and non-silicon regions.
   - On the MOS-C the peak moves 0.8 nm and V_T rises 26 mV.
-- **Unit 48 — Schottky contacts** ([record](docs/decisions/unit-48.md); `main` `baa8a76`, PR #67; the ruling in PR #68).
+- **Unit 48 — Schottky contacts** (record `unit-48.md`; `main` `baa8a76`, PR #67; the ruling in PR #68).
   - SD1–SD9, SC1–SC17.
   - Merged while CI was running.
   - **Accepted as limitations (owner, 2026-10-28: "accept it as limitations"):** five unmet criteria, as limitations
     of the criteria as written, not defects of the model.
-- **Unit 51 — gate tunnelling** ([record](docs/decisions/unit-51.md); `main` `cb3f9de`, PR #72).
+- **Unit 51 — gate tunnelling** (record `unit-51.md`; `main` `cb3f9de`, PR #72).
   - **GD1–GD10, GC1–GC17, GR1–GR12:** Tsu–Esaki with WKB, through a lumped oxide or straight meshed paths; self-consistent with an exact Jacobian.
   - MLDA with tunnelling is refused (GR12).
   - **Limitation (GR5):** a tunnelling MOS-C with no minority-carrier contact is near-singular.
-- **Unit 52 — energy-balance transport** ([record](docs/decisions/unit-52.md); `main` `85ad670`, PR #73).
+- **Unit 52 — energy-balance transport** (record `unit-52.md`; `main` `85ad670`, PR #73).
   - **ED1–ED14, EC1–EC19:** both carrier temperatures as Newton unknowns; Scharfetter–Gummel energy fluxes.
   - The peak velocity in the ballistic diode is 1.93 v_s.
   - EC13's energy half was ruled "accept as built" (2026-10-29).
@@ -393,36 +394,36 @@ leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of 
 
 ### Inputs, outputs and results
 
-- **Unit 31 — device files, the input deck and `nitcad`** ([record](docs/decisions/unit-31.md); `main` `6f67510`, PR #37).
+- **Unit 31 — device files, the input deck and `nitcad`** (record `unit-31.md`; `main` `6f67510`, PR #37).
   - **DK1–DK11:** our own sectioned `key = value` format with an in-tree parser (no TOML or JSON dependency); devices on disk; `nitcad check|run`.
-- **Unit 32 — the weighted terminal current** ([record](docs/decisions/unit-32.md); `main` `6e54c69`, PR #39).
+- **Unit 32 — the weighted terminal current** (record `unit-32.md`; `main` `6e54c69`, PR #39).
   - **W1–W8:** opt-in conductance-weighted current extraction with an adjoint error estimate.
   - The MOSFET off state and sub-floor diode currents are resolved.
-- **Unit 42 — results and provenance** ([record](docs/decisions/unit-42.md); `main` `145f23c`, PR #52).
+- **Unit 42 — results and provenance** (record `unit-42.md`; `main` `145f23c`, PR #52).
   - **PV1–PV7, PD1–PD5, PG1–PG8:** build, revision, platform, start and wall time in every run record and file; `nitcad --version`.
   - Accepted by the owner 2026-10-17.
-- **Unit 43 — transient, small-signal and trace analyses in the deck** ([record](docs/decisions/unit-43.md); `main` `913dac0`, PR #53).
+- **Unit 43 — transient, small-signal and trace analyses in the deck** (record `unit-43.md`; `main` `913dac0`, PR #53).
   - AN1–AN8, AQ1–AQ5, AG1–AG8.
   - Accepted by the owner 2026-10-17.
-- **Unit 45 — rates and the mesh digest in results** ([record](docs/decisions/unit-45.md); `main` `81622ca`, PR #56).
+- **Unit 45 — rates and the mesh digest in results** (record `unit-45.md`; `main` `81622ca`, PR #56).
   - RS1–RS6, RQ1–RQ4, RG1–RG8.
   - Accepted by the owner 2026-10-21.
 
 ### Architecture
 
-- **Unit 40 — generic fields and equations behind the assembler** ([record](docs/decisions/unit-40.md); `main` `629bed0`, PR #50).
+- **Unit 40 — generic fields and equations behind the assembler** (record `unit-40.md`; `main` `629bed0`, PR #50).
   - **FE1–FE7, FD1–FD9, FG1–FG9, FR1–FR9:** field descriptors and equation terms behind `DriftDiffusion`, bit-identical.
   - Deferred: the insulator nodes' unused unknowns (FD5); concurrent assembly (FD6); the "derived" field kind (FD7).
   - Accepted by the owner 2026-10-17.
 
 ### Validation against published data
 
-- **Unit 33 — validation against published data** ([record](docs/decisions/unit-33.md); `main` `a14ac96`, PR #41).
+- **Unit 33 — validation against published data** (record `unit-33.md`; `main` `a14ac96`, PR #41).
   - **V1–V6:** references are values printed in the source's text or tables (no digitized curves), run as decks in `benchmarks/`.
   - Gaps are pinned, not tuned: boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%.
-- **Unit 39 — breakdown validation** ([record](docs/decisions/unit-39.md)).
+- **Unit 39 — breakdown validation** (record `unit-39.md`).
   - **Deferred** by the owner (2026-10-16): Sze and Gibbons (1966) and the reviews reproducing it are paywalled or behind a login.
-- **Unit 55 — theoretical calculation validation framework** ([record](docs/decisions/unit-55.md); **deferred by the owner 2026-11-12**).
+- **Unit 55 — theoretical calculation validation framework** (record `unit-55.md`; **deferred by the owner 2026-11-12**).
   - **Design (§1–§9):**
     - V&V levels L0–L5 (TVM1: no claim is made at a level until the levels below it pass);
     - reference classes E/D/A/M/H/P/X and independence grades I0–I3 (I0, a reference that calls NiTCAD code, is not evidence);
@@ -443,31 +444,31 @@ leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of 
 
 ### Visualization and the Windows application
 
-- **Units 25 and 26 — plan; Unit 25a, visualization** ([record](docs/decisions/units-25-26.md); 25a on `main` `6d2135b`, PR #55).
+- **Units 25 and 26 — plan; Unit 25a, visualization** (record `units-25-26.md`; 25a on `main` `6d2135b`, PR #55).
   - VR1–VR9, VQ1–VQ14, VG1–VG8, WG1–WG6.
   - CPU scenes; Direct3D 12 / Direct2D drawing to PNG; `nitcad plot`.
   - **Stack:** Win32 + D3D12 + D2D only.
   - Accepted by the owner 2026-10-21.
-- **Unit 25b — derived fields, isosurfaces, streamlines** ([record](docs/decisions/unit-25b.md); `main` `8256cf8`, PR #57).
+- **Unit 25b — derived fields, isosurfaces, streamlines** (record `unit-25b.md`; `main` `8256cf8`, PR #57).
   - DS1–DS8, BQ1–BQ3, BG1–BG9.
-- **Unit 25c — arrows, clipping box, exploded view, filmstrips** ([record](docs/decisions/unit-25c.md); PR #58).
+- **Unit 25c — arrows, clipping box, exploded view, filmstrips** (record `unit-25c.md`; PR #58).
   - DC1–DC6, CQ1–CQ4, CG1–CG9.
   - Accepted by the owner 2026-10-22.
-- **Unit 26 — the Windows application** ([record](docs/decisions/unit-26.md); `main` `e9b1d71`, PR #59).
+- **Unit 26 — the Windows application** (record `unit-26.md`; `main` `e9b1d71`, PR #59).
   - **AQ1–AQ4, WG1–WG8:** `nitcad-app.exe`, with a deck editor, a worker thread, a run monitor, results and `--self-test`.
   - Accepted by the owner 2026-10-22.
-- **Unit 26b — the analysis workspace** ([record](docs/decisions/unit-26b.md); `main` `51face0`, PR #60).
+- **Unit 26b — the analysis workspace** (record `unit-26b.md`; `main` `51face0`, PR #60).
   - **XD1–XD7, XG1–XG8:** live checking, structure preview, cut lines, run comparison, mesh quality.
   - The WG1 gap is deferred for the owner to investigate.
-- **Unit 26c — GUI catch-up** ([record](docs/decisions/unit-26c.md); `main` `1be857e`, PR #61).
+- **Unit 26c — GUI catch-up** (record `unit-26c.md`; `main` `1be857e`, PR #61).
   - **YD1–YD6, YG1–YG6:** the 25b/25c views in the window, region visibility, playback, clip sliders.
   - The WG1 spikes are still open; the debug-layer self-test gap bound is 1000 ms (ruling 2026-10-31).
-- **Unit 26d — GUI quick wins** ([record](docs/decisions/unit-26d.md); `main` `9fa3759`, PR #86).
+- **Unit 26d — GUI quick wins** (record `unit-26d.md`; `main` `9fa3759`, PR #86).
   - **ZD1–ZD8, ZQ1–ZQ4, ZG1–ZG10:** Apply removed (Enter or focus loss), bias/time point labels, colour range
     min/max/auto, drag and drop, taskbar progress and flash, dark title bar, units in the metrics strip, viridis as
     the app's 3D default (`nitcad plot` keeps turbo).
   - App tests 66/66, window tests 24/24, 13 hand mutants caught; the Debug suite left to CI.
-- **Unit 57 — generic fields and equations, completed** ([record](docs/decisions/unit-57.md); `main` `2306228`, PR
+- **Unit 57 — generic fields and equations, completed** (record `unit-57.md`; `main` `2306228`, PR
   #87; accepted by the owner 2026-11-18).
   - **GE1–GE7, GG1–GG9, GQ1–GQ6 (a):** model data in `SystemData`, state in `SystemState`; `DriftDiffusion` retired
     for `assemble::System` and topic headers; derived and edge fields (`derived.hpp`); equilibrium Poisson from the
@@ -475,7 +476,7 @@ leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of 
     `System` (DofMap and pattern grow by one field, FD, quadratic Newton, k = 0 identity, second-order MMS).
   - Every slice bit-identical (81/81 traced entries at GG8, 38 deck files), FG4 without slowdown, 233/233 Release,
     9/9 GG8 mutants. MSVC 14.52.37025 miscompiles (`= {}` dropped at /O1, /O2): build stays on 14.51 (Q11).
-- **Unit 59 — a natural-test norm for reverse bias** ([record](docs/decisions/unit-59.md); `main` `38163aa`, PR
+- **Unit 59 — a natural-test norm for reverse bias** (record `unit-59.md`; `main` `38163aa`, PR
   #101; closed 2026-11-20).
   - **ND1–ND5, NG1–NG7, NQ1–NQ7 (recommended):** opt-in `[solver] natural_norm = weighted` (default
     `convergence`, Unit 30's test unchanged); `System::natural_size` measures both corrections at the iterate,
@@ -484,7 +485,7 @@ leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of 
     benchmark 10/10 in 93 (2/10 with Unit 30's norm, a drop bisected to Unit 35's defaults). NG1 86/89 traces
     byte-identical, 3 with added cases only; NG2 38/38 deck files; 8/8 mutants. Suites from CI on `38163aa`
     (Release 248/248, Debug 227/227) and Unit 58's later local runs.
-- **Unit 60 — release version policy (PD5) and cross-machine comparison** ([record](docs/decisions/unit-60.md);
+- **Unit 60 — release version policy (PD5) and cross-machine comparison** (record `unit-60.md`;
   `main` `9093cc8`, PR #96; closed 2026-11-20).
   - **RV/XC/XG/VQ/XQ (recommended):** SemVer 0.1.0 (untagged; only the owner tags), a `v*` tag check in CI;
     `nitcad compare` as a tolerance comparison, not a bit digest (6.8), exit 4 on `differ`; references for
