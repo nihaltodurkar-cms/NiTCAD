@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -20,6 +21,15 @@
 using namespace NiTCAD::mesh;
 
 namespace {
+
+// True on the hosted CI runner: the environment variable CI set, as GitHub Actions sets it.
+bool on_ci() {
+    char* value = nullptr;
+    std::size_t length = 0;
+    const bool ci = _dupenv_s(&value, &length, "CI") == 0 && value != nullptr && *value != '\0';
+    std::free(value);
+    return ci;
+}
 
 LayeredShape box(double x0, double x1, double y0, double y1, std::int32_t region) {
     return {{{x0, y0, 0}, {x1, y0, 0}, {x1, y1, 0}, {x0, y1, 0}}, region};
@@ -244,8 +254,9 @@ TEST_CASE("mesh layered: 200 rectangles resolve in at most 5 ms (GE5)", "[mesh][
     std::ranges::sort(ms);
     WARN(std::format("GE5: 200 rectangles resolved in {:.2f} ms (median of 5), {} polygons", ms[2], polygons));
     // Release only, as KG6 (owner, 2026-11-19): the unoptimised Debug build takes about 20x longer; there it is recorded.
+    // The CI runner records it too (owner, 2026-11-25, as SE5): 6.09 ms there on 42b4306; this workstation is the gate.
 #ifdef NDEBUG
-    CHECK(ms[2] <= 5.0);
+    if (!on_ci()) CHECK(ms[2] <= 5.0);
 #endif
 }
 // --- slice 4: slanted edges (GD10) ----------------------------------------------------------------------------------
