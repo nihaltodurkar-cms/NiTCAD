@@ -2811,6 +2811,25 @@ passed to the band surface until BSD9. Deferred: the slice controls keep their "
 `band_pick` builds a `Locator` per hover (the HG7 budget not measured on the FinFET); the FinFET check (BSC8) waits
 for the solved file.
 
+**Slice 2 record (2026-11-26; owner: "start slice 2 use max 3 cores").** Commits 7e18331 (render:
+`band_energy_range`, the shown levels' lowest and highest finite semiconductor value over every point, widened as a
+flat surface is; `BandSurfaceOptions::cut`, a cut line in the base plane drawn on each shown level as an on-top black
+line with a white core, "band cut", its segments split in 16 so a step lands within 1/32 of an element and stands
+vertical; a line off a 3D plane is not drawn), 6cd5dc4 (BSD8 and BSD9 in the app model, `nitcad plot --fit-point`
+and `--cut` on the band-surface view, and the window's Fit this point box; the cut line on that view is drawn on the
+surfaces, not on the base), af7819e (the --fit-point image check moved to where the point's range differs). Precedence:
+a range set wins, then Fit this point, else the run's range. Tests run (Release, 3 cores): `render.band_surface`
+21/21 cases, `app views 26o*`, `app window 26o*`, and build\rt2.cmd's 14 tests (window, app, render, layering):
+all pass; no full suite, no Debug. BSC5 checked: on the 2D MOSFET's sweep every point's scene has the run's range
+and vertices bit-identical to one built from that point's bands alone on that range; stepping 0 → i → 0 gives the
+same scene; the app's images equal nitcad plot's byte for byte with and without Fit this point and with a cut line.
+BSC11: 10 mutants, one did not build; 8 of 9 caught at first, M2 (`--fit-point` ignored by nitcad plot) then killed
+— on this run Ec and Ev move little (the first point's range is the run's to 1e-7 eV) and EFn, EFp stay flat, so the
+check now uses the last point, 2e-4 eV off. Calls made: drawing a cut line still opens its band diagram on the Curves
+tab, as on every view (the window test returns to the View tab); the cut line is not drawn on the base under the
+surfaces. Deferred: playback over the run's points (BSD8 keeps the call point-indexed for it); BSC8 (FinFET) waits
+for the solved file.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
