@@ -288,6 +288,7 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
     d.integers<device::RegionId>(device.node_region());
     d.reals(device.donors());
     d.reals(device.acceptors());
+    if (!device.bound_charge().empty()) d.reals(device.bound_charge());  // Unit 68 slice 2
     d.integer(device.contacts().size());
     for (const device::Contact& c : device.contacts()) {
         d.text(c.name);

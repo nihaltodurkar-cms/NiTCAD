@@ -411,6 +411,7 @@ add_library(nitcad_physics STATIC
   src/physics/materials.cpp
   src/physics/sige.cpp
   src/physics/nitrides.cpp
+  src/physics/polarization.cpp
   src/physics/interface_traps.cpp
   src/physics/impact_ionization.cpp
   src/physics/band_to_band.cpp
@@ -802,6 +803,7 @@ add_executable(nitcad_deck_test
   tests/deck/total_dose_test.cpp
   tests/deck/schottky_test.cpp
   tests/deck/sige_hbt_test.cpp
+  tests/deck/polarization_test.cpp
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp
   tests/deck/complex_finfet_test.cpp

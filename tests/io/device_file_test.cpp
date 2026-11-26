@@ -94,6 +94,8 @@ Device rich_device() {
     algaas.electron_mobility.N_ref_T_exponent = 1.3;  // Unit 68 slice 2
     algaas.hole_mobility.alpha_T_exponent = 0.31;
     algaas.alloy_mobility = physics::algan_parameters(0.3)->alloy_mobility;
+    std::vector<double> bound(donors.size());  // Unit 68 slice 2: 0 on the oxide, as its doping
+    for (std::size_t i = 0; i < bound.size(); ++i) bound[i] = 1e-3 * donors[i] - 0.3000000000000001e-3 * acceptors[i];
     auto d = Device::create(
         {.mesh = std::move(m),
          .temperature_K = 301.5,
@@ -103,6 +105,7 @@ Device rich_device() {
          .node_region = std::move(region),
          .donors = std::move(donors),
          .acceptors = std::move(acceptors),
+         .bound_charge = std::move(bound),
          .contacts = {{"anode", ContactKind::ohmic, std::move(left)},
                       {"cathode", ContactKind::ohmic, std::move(right)},
                       {"gate", ContactKind::electrode, std::move(top), {},
@@ -176,6 +179,7 @@ void check_same(const Device& a, const Device& b) {
           std::vector(b.node_region().begin(), b.node_region().end()));
     CHECK(same_bits(a.donors(), b.donors()));
     CHECK(same_bits(a.acceptors(), b.acceptors()));
+    CHECK(same_bits(a.bound_charge(), b.bound_charge()));  // Unit 68 slice 2
     REQUIRE(a.contacts().size() == b.contacts().size());
     for (std::size_t c = 0; c < a.contacts().size(); ++c) {
         const auto& x = a.contacts()[c];

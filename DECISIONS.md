@@ -5161,6 +5161,24 @@ Engineer's questions answered "choose recommended" (2026-11-27):
 Slice 1 left this: the material hash took every parameter path, so adding paths (its alloy gap)
 moved every set's hash. Paths added after slice 0 enter it only when nonzero (MAC1).
 
+Step 2, polarization (MAD9), the engineer's rulings (recommended, reported to the owner):
+- Lattice constants a0 from M2': GaN 3.189, AlN 3.112, InN 3.533 A (pp. 2, 32, 50). Alloys: a0, e31, e33,
+  c13 and c33 linear in x (Vegard; Ambacher's practice); P_sp with the owner's bowing.
+- The engine had fixed sheet charge only at semiconductor-insulator interfaces. The polarization charge is a
+  new optional per-node bound charge (`DeviceDescription::bound_charge`, cm^-3, empty: none, bit-identical),
+  added to the Poisson row; device files carry it (key 12) and the run identity hashes it, both only when
+  given. The deck lumps it: on each edge i -> j the sheet (P_i - P_j)(c.e_ij) times the dual face's area,
+  half to each end (all to the semiconductor end beside an insulator or metal, whose P is 0); on the free
+  faces normal to c, P.n times the face area. Side walls (edges normal to c) carry none.
+- Strain: "the thinner on the thicker" generalised: the thickest nitride region along c is the relaxed
+  reference and every other nitride region is pseudomorphic on it, or partly relaxed by its `relaxation =
+  r` (a = a0 + (1 - r)(a_ref - a0)). A graded nitride region's layers each take their own composition, so
+  the grading's bulk charge appears.
+- `c_axis = [-]x|y|z` names the c direction (substrate to surface); default y (x on a 1D mesh).
+  `polarization_scale` scales all of it, interface and surface alike.
+Check: Al0.25Ga0.75N pseudomorphic on GaN gives sigma 0.019361 C/m^2 = 1.208e13 cm^-2 (Ambacher et al.
+report about 1.1-1.3e13 for x = 0.25); a 1D stack at equilibrium holds 1.206e13 cm^-2 electrons in the well.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

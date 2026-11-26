@@ -412,6 +412,7 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
     SystemState st;
     s.volume_ = std::move(scaled->volume);
     s.doping_ = std::move(scaled->doping);
+    s.bound_ = std::move(scaled->bound_charge);
     s.n_ie_ = std::move(scaled->n_ie);
     s.log_dos_n_ = std::move(scaled->log_dos_n);
     s.log_dos_p_ = std::move(scaled->log_dos_p);

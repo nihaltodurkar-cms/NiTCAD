@@ -44,6 +44,7 @@ struct ScaledDevice {
     std::vector<double> doping;          // (N_D - N_A) / Ns
     std::vector<double> donors;          // N_D / Ns
     std::vector<double> acceptors;       // N_A / Ns
+    std::vector<double> bound_charge;    // bound charge / Ns (Unit 68 slice 2); empty: none
     std::vector<physics::DopantLevels> levels;  // the material's dopant levels in units of kT
     std::vector<double> radiative;       // the material's radiative coefficient [cm^3/s]
     std::vector<double> n_ie;            // n_ie / Ns (effective n_ie with band-gap narrowing)

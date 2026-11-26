@@ -24,7 +24,7 @@ using detail::Writer;
 namespace device_key {
 constexpr std::uint16_t mesh = 1, temperature = 2, region = 3, node_region = 4, donors = 5,
                         acceptors = 6, contact = 7, interface = 8, cells = 9, thermal_contact = 10,
-                        certificate = 11;
+                        certificate = 11, bound_charge = 12;  // 12: Unit 68 slice 2, only when given
 }
 namespace region_key {
 constexpr std::uint16_t name = 1, kind = 2, parameters = 3;  // kind 0 semiconductor, 1 insulator
@@ -516,6 +516,7 @@ std::expected<void, base::Error> save_device(const std::filesystem::path& path,
            std::vector<std::int64_t>(d.node_region().begin(), d.node_region().end()));
     w.f64s(device_key::donors, d.donors());
     w.f64s(device_key::acceptors, d.acceptors());
+    if (!d.bound_charge().empty()) w.f64s(device_key::bound_charge, d.bound_charge());
     for (const device::Contact& c : d.contacts()) w.record(device_key::contact, write_contact(c));
     for (const device::Interface& f : d.interfaces()) {
         w.record(device_key::interface, write_interface(f));
@@ -558,6 +559,8 @@ std::expected<device::Device, base::Error> load_device(const std::filesystem::pa
     NITCAD_IO_TRY(acceptors, r.f64s(device_key::acceptors));
     d.donors = std::move(donors);
     d.acceptors = std::move(acceptors);
+    NITCAD_IO_TRY(bound, r.f64s_or_empty(device_key::bound_charge));
+    d.bound_charge = std::move(bound);
     NITCAD_IO_TRY(contacts, r.records(device_key::contact));
     for (const Reader& c : contacts) {
         NITCAD_IO_TRY(contact, read_contact(c));

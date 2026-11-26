@@ -104,6 +104,10 @@ struct DeviceDescription {
     std::vector<RegionId> node_region;  // one per mesh node, indexing regions
     std::vector<double> donors;         // N_D per mesh node [cm^-3]; 0 on insulator nodes
     std::vector<double> acceptors;      // N_A per mesh node [cm^-3]; 0 on insulator nodes
+    // Unit 68 slice 2 (MAD9): a fixed bound charge per mesh node [cm^-3] (positive for positive
+    // charge), the polarization charge lumped into control volumes; 0 on insulator nodes. Empty:
+    // none (every device before it).
+    std::vector<double> bound_charge;
     std::vector<Contact> contacts;
     std::vector<Interface> interfaces;  // declared interfaces; may be empty
     // The cells of a tensor-product mesh (mesh::TensorCells, Unit 20), which nonlocal tunnelling
@@ -175,6 +179,7 @@ public:
     [[nodiscard]] std::span<const RegionId> node_region() const noexcept { return d_.node_region; }
     [[nodiscard]] std::span<const double> donors() const noexcept { return d_.donors; }
     [[nodiscard]] std::span<const double> acceptors() const noexcept { return d_.acceptors; }
+    [[nodiscard]] std::span<const double> bound_charge() const noexcept { return d_.bound_charge; }  // may be empty
     [[nodiscard]] std::span<const Contact> contacts() const noexcept { return d_.contacts; }
     [[nodiscard]] std::span<const Interface> interfaces() const noexcept { return d_.interfaces; }
     [[nodiscard]] std::span<const ThermalContact> thermal_contacts() const noexcept {

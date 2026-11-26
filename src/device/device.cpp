@@ -119,6 +119,16 @@ std::optional<base::Error> check_nodes(const DeviceDescription& d) {
     for (std::size_t r = 0; r < used.size(); ++r) {
         if (!used[r]) return invalid("region has no nodes", r);
     }
+    if (!d.bound_charge.empty()) {  // Unit 68 slice 2 (MAD9)
+        if (d.bound_charge.size() != n) return invalid("bound_charge needs one entry per mesh node, or none");
+        for (std::size_t i = 0; i < n; ++i) {
+            const double c = d.bound_charge[i];
+            if (!std::isfinite(c)) return invalid("bound charge is not finite", i, c);
+            if (c != 0.0 && is_insulator(d.regions[static_cast<std::size_t>(d.node_region[i])])) {
+                return invalid("insulator node has a nonzero bound charge", i, c);
+            }
+        }
+    }
     return std::nullopt;
 }
 

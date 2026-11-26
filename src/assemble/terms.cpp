@@ -196,6 +196,20 @@ public:
     }
 };
 
+// Unit 68 slice 2 (MAD9): the bound (polarization) charge, a fixed positive charge in the Poisson
+// row, -V (n - p - N - b) (added; no partials). Absent when the device has none.
+class SystemData::Terms::BoundCharge final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"bound charge", TermDomain::nodes, psi_only, psi_only, false};
+    }
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
+        for (std::size_t i = 0; i < s.node_count(); ++i) {
+            if (semiconductor(s, i)) ev.f[s.m_ * i] += s.volume_[i] * s.bound_[i];
+        }
+    }
+};
+
 // Incomplete ionization: the Poisson row's charge with the ionized dopants, -V (n - p - N+ + N-),
 // in place of the Poisson charge's (assigned).
 class SystemData::Terms::Ionization final : public Term {
@@ -1193,6 +1207,9 @@ public:
     }
 };
 
+std::shared_ptr<const SystemData::Term> SystemData::Terms::bound_charge() {
+    return std::make_shared<BoundCharge>();
+}
 std::shared_ptr<const SystemData::Term> SystemData::Terms::poisson_charge() {
     return std::make_shared<PoissonCharge>();
 }
@@ -1245,6 +1262,8 @@ std::span<const CompositionEntry> SystemData::Terms::isothermal_table() {
         {+E::poisson,
          [](const SystemData&, const SystemState&, M m) { return m.incomplete_ionization; },
          &make_term<Ionization>},
+        {+E::poisson, [](const SystemData& s, const SystemState&, M) { return !s.bound_.empty(); },
+         &make_term<BoundCharge>},
         {+E::gate, gated, &make_term<Gate>},
         {+E::continuity,
          [](const SystemData&, const SystemState&, M m) {
