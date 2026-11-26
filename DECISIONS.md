@@ -4953,6 +4953,32 @@ main 5904b83 and this branch: 48 of 71 output files byte-identical; the other 23
 differ only in provenance (identical byte for byte once it is cleared and the file re-saved). The 14 3D decks were not
 run (hours each, owner). Not run: the full Release suite.
 
+**Amendment 4 (2026-11-26), slice 5 sources and split; owner "start slice 5".** In hand: M5 (Robertson 2004, Table 2
+read from the page image: K, gap, CB offset on Si for SiO2, Si3N4, Al2O3, Ta2O5, TiO2, ZrO2, HfO2, La2O3); M8
+(Michaelson 1977, Table III, polycrystalline preferred values: Al 4.28, W 4.55, Ni 5.15, Pt 5.65, Au 5.1, Ti 4.33,
+Mo 4.6, Cu 4.65, Pd 5.12, Co 5.0, Cr 4.5, Ru 4.71 eV); M16 (Cassabois, arXiv:1512.02962, the preprint: indirect gap
+5.955 eV). Added, open access, in `papers\Unit 68\open-access\`: (M20) G. Greczynski, arXiv:2405.10919 (UPS work
+functions: TiN 4.70 eV, mean of 4.69-4.71 over three films; TaN 4.41 eV), replacing "TiN/TaN from M5's references"
+in MAD6, cross-checked against (M21) A. Rehman et al., J. Phys. Chem. Lett. 2024, arXiv:2403.11765 (air-exposed TiN
+4.9 +- 0.3, TaN 4.7 +- 0.3 eV; recorded as the spread); (M22) V. V. Afanas'ev et al., Appl. Phys. Lett. 96, 052103
+(2010) (Si/MgO: CB 3.37 eV above the Si VB; gap 6.1 eV amorphous, 7.83 eV crystal); (M23) H. N. Abbasi et al.,
+arXiv:2407.17360 (AlN gap 6.07 eV, affinity 1.83-1.94 eV); (M24) M. Salmani-Jelodar et al., arXiv:1502.06178
+(electron tunnelling masses, secondary, from Yeo 2002 and Robertson 2000). Not usable: Sun et al. 2017 (AlN/Si
+offset 1.58-4.94 eV with anneal); the Sze & Ng copy from a shadow library (not used; M18 stays unread). Gehring's
+thesis Table 5.1 (the Unit 51 source) gives offsets, no masses. Split (MAQ2 kept: each part starts with its
+sources): **slice 5a** now: metal regions (MAD6), the metal presets of MAD6 and MAD14 with sources (the twelve M8
+metals, `tin` and `tan` from M20, `n_poly` and `p_poly` as the existing polysilicon electrode kinds), and
+`metal = <preset>` on contacts. **Slice 5b** waits: the dielectrics (MAD5, MAD13), because no source in hand gives a
+hole tunnelling mass and `Insulator::create` refuses band data without one (MAD13: no mass, no band data; shipping
+ε-only sets now and band data later would move their recorded hashes); they start with Y.-C. Yeo et al., Appl.
+Phys. Lett. 81, 2091 (2002) or an owner ruling on hole masses. **Slice 5c** waits: the silicide presets (MAD14),
+for M18 or J. M. Andrews, J. C. Phillips, Phys. Rev. Lett. 35, 56 (1975). Metal-region design, ruled as recommended:
+a metal region is an insulator region flagged `metal` (no carriers, no new unknowns); every node of it is a node
+of the one `kind = electrode` contact naming it (`region = <name>`), which may lie off the boundary patches; an edge
+with one metal end takes the permittivity of its other end (the metal surface is the electrode surface, as an
+electrode patch's nodes are; edges between two metal nodes join two held nodes and do not count); a metal node
+joined by an edge to a semiconductor node is refused (a metal on a semiconductor is a Schottky or ohmic contact).
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a
