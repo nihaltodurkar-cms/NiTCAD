@@ -116,7 +116,7 @@ constexpr std::array<KeyInfo, 1> doping_keys{{
      shapes, {}},
 }};
 
-constexpr std::array<KeyInfo, 19> contact_keys{{
+constexpr std::array<KeyInfo, 22> contact_keys{{
     {"kind", 0, false, "ohmic", "ohmic | gate | electrode | schottky", contact_kinds, {}, {}},
     {"patch", 0, false, "<boundary patch>", "the boundary patch the contact lies on", {}, {}, {}},
     {"region", 0, false, "<metal region>", "electrode: the metal region it holds, in place of patch (Unit 68)", {}, {}, "electrode"},
@@ -136,9 +136,12 @@ constexpr std::array<KeyInfo, 19> contact_keys{{
     {"oxide_mass_n", 0, false, "0", "gate: electron tunnelling mass, m0", {}, {}, "gate"},
     {"oxide_mass_p", 0, false, "0", "gate: hole tunnelling mass, m0", {}, {}, "gate"},
     {"oxide_mass_evb", 0, false, "0", "gate: valence-band electron tunnelling mass, m0 (0: the electron's)", {}, {}, "gate"},
+    {"dose", 0, false, "<rad>", "gate: total ionizing dose, rad(SiO2); adds trapped oxide charge", {}, {}, "gate"},
+    {"dose_field", 0, false, "0", "gate: oxide field during irradiation, V/cm", {}, {}, "gate"},
+    {"hole_trapping", 0, false, "<0..1>", "gate: fraction of the dose's holes trapped (with dose)", {}, {}, "gate"},
 }};
 
-constexpr std::array<KeyInfo, 8> interface_keys{{
+constexpr std::array<KeyInfo, 13> interface_keys{{
     {"transport", 0, false, "drift_diffusion", "drift_diffusion | thermionic", transports, {}, {}},
     {"fixed_charge", 0, false, "0", "interface charge, cm^-2", {}, {}, {}},
     {"recombination_velocity_n", 0, false, "0", "surface recombination velocity, cm/s", {}, {}, {}},
@@ -147,6 +150,11 @@ constexpr std::array<KeyInfo, 8> interface_keys{{
     {"trap_band", 0, true, "acceptor <D_it> <E_low> <E_high>", "a band of traps", dopants, {}, {}},
     {"thermal_velocity_n", 0, false, "<cm/s>", "traps: electron thermal velocity", {}, {}, {}},
     {"thermal_velocity_p", 0, false, "<cm/s>", "traps: hole thermal velocity", {}, {}, {}},
+    {"dose", 0, false, "<rad>", "total ionizing dose, rad(SiO2); adds trapped oxide charge", {}, {}, {}},
+    {"dose_field", 0, false, "0", "oxide field during irradiation, V/cm", {}, {}, {}},
+    {"hole_trapping", 0, false, "<0..1>", "fraction of the dose's holes trapped (with dose)", {}, {}, {}},
+    {"dose_oxide_thickness", 0, false, "<length>", "the irradiated oxide's thickness (with dose)", {}, {}, {}},
+    {"interface_trap_yield", 0, false, "0", "interface traps built per rad, cm^-2 rad^-1", {}, {}, {}},
 }};
 
 constexpr std::array<KeyInfo, 4> thermal_contact_keys{{
