@@ -1,6 +1,8 @@
 #include "NiTCAD/render/scene.hpp"
 #include "NiTCAD/render/vectors.hpp"
 
+#include "vec.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -30,13 +32,11 @@ Float3 um(const Point& p) noexcept {
             static_cast<float>(p[2] * um_per_cm)};
 }
 
-Point sub(const Point& a, const Point& b) noexcept { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-Point add(const Point& a, const Point& b) noexcept { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
-Point scale(const Point& a, double s) noexcept { return {a[0] * s, a[1] * s, a[2] * s}; }
-double dot(const Point& a, const Point& b) noexcept { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-Point cross(const Point& a, const Point& b) noexcept {
-    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-}
+using vec::add;
+using vec::cross;
+using vec::dot;
+using vec::scale;
+using vec::sub;
 Point unit(const Point& a) noexcept {
     const double n = std::sqrt(dot(a, a));
     return n > 0.0 ? scale(a, 1.0 / n) : Point{0.0, 0.0, 1.0};

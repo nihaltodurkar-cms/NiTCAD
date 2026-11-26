@@ -1,6 +1,8 @@
 // Mesh quality (quality.hpp).
 #include "NiTCAD/render/quality.hpp"
 
+#include "vec.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -12,12 +14,10 @@ namespace NiTCAD::render {
 
 namespace {
 
-Point sub(const Point& a, const Point& b) noexcept { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-double dot(const Point& a, const Point& b) noexcept { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-Point cross(const Point& a, const Point& b) noexcept {
-    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-}
-double norm(const Point& a) noexcept { return std::sqrt(dot(a, a)); }
+using vec::cross;
+using vec::dot;
+using vec::norm;
+using vec::sub;
 
 // The angle between two vectors, radians, from its sine and cosine parts.
 double angle(const Point& u, const Point& v) noexcept { return std::atan2(norm(cross(u, v)), dot(u, v)); }
