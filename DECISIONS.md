@@ -5193,6 +5193,13 @@ Step 3, the HEMT and MAC10 (engineer's rulings, reported to the owner):
 MAC10 (Ambacher's n_s with this model's sigma, dEc, permittivities and GaN mass): 1D gated stack 1.037e13
 against 1.033e13 cm^-2 (+0.4 %); the library deck under the gate's middle 1.010e13 (-2.3 %). Owner test 11:
 zero current at zero bias and the terminal currents cancel to 1e-13 relative, under both transports.
+Owner 2026-11-27: lift Unit 48 ruling 4's refusal of a Schottky contact on a device with a thermionic interface.
+The refusal is removed (assembler and ARCHITECTURE 6.12; the Schottky node's rows are unchanged, a thermionic
+edge at it is an edge like any other). Checks: the 1D gated stack with its interface thermionic, the Schottky
+gate swept 0-0.6 V forward: no current at 0 V, the terminal currents cancel to 1e-8 of the largest at every
+bias; the library HEMT now declares its interface thermionic (ruling 7 as first written): I_D at V_G = 0,
+V_D = 0.1 V is 0.6297 A/cm against 0.6299 continuous (-0.03 %), currents conserved; MAC10 unchanged
+(equilibrium). The assembler test that asserted the refusal now asserts the device assembles.
 
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain

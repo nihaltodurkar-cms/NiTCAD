@@ -142,3 +142,50 @@ TEST_CASE("MAC10: the library HEMT's 2DEG under the gate against Ambacher", "[de
     std::printf("MAC10 2D HEMT: n_s %.4e cm^-2, Ambacher %.4e, off by %+.1f %%\n", ns, ref, 100.0 * (ns / ref - 1.0));
     CHECK(std::abs(ns / ref - 1.0) <= 0.10);
 }
+
+// Unit 68 slice 2 (owner 2026-11-27, lifting Unit 48 ruling 4's refusal): a Schottky contact on a device
+// with a thermionic heterointerface. Zero current at zero bias; the terminal currents cancel at every bias.
+TEST_CASE("Schottky contact with a thermionic AlGaN/GaN interface", "[deck][unit68][hemt]") {
+    const auto check = [](const std::string& text, const char* name) {
+        INFO(name);
+        const deck::Plan p = must(text);
+        const auto r = deck::run(p);
+        if (!r) FAIL(r.error().message);
+        REQUIRE(r->sweep.has_value());
+        REQUIRE_FALSE(r->sweep->stopped.has_value());
+        double scale = 0.0;
+        for (const auto& b : r->sweep->points) {
+            for (const double i : b.terminal_current) scale = std::max(scale, std::abs(i));
+        }
+        REQUIRE(scale > 0.0);
+        for (const auto& b : r->sweep->points) {
+            double sum = 0.0;
+            for (const double i : b.terminal_current) sum += i;
+            CHECK(std::abs(sum) < 1e-8 * scale);
+        }
+        return r->sweep->points;
+    };
+    // 1D: the gated stack, the Schottky gate swept forward.
+    const auto one = check(stack("kind = schottky\nbarrier = 0.83\n",
+                                 "\n[interface buffer barrier]\ntransport = thermionic\n\n[sweep]\ncontact top = 0 : 0.6 : 0.1\n"),
+                           "1d");
+    CHECK(std::abs(one.front().terminal_current[0]) < 1e-9 * std::abs(one.back().terminal_current[0]) + 1e-15);
+    std::printf("Schottky+thermionic 1D: I(0.6 V) %.4e A/cm^2\n", one.back().terminal_current[1]);
+
+    // 2D: the library HEMT (its interface thermionic) against the same with the continuous interface.
+    std::ifstream in(std::filesystem::path(NITCAD_EXAMPLES_DIR) / "devices" / "algan_gan_hemt_2d.deck");
+    std::stringstream s;
+    s << in.rdbuf();
+    const std::string deck = s.str();
+    const std::string sweep = "[sweep]\ncontact drain = 0.1\ncontact gate = -4 : 0 : 1\n";
+    const std::string head = deck.substr(0, deck.find("[sweep]"));
+    REQUIRE(head.find("transport = thermionic") != std::string::npos);
+    std::string continuous = head;
+    continuous.replace(continuous.find("transport = thermionic"), 22, "transport = drift_diffusion");
+    const auto dd = check(continuous + sweep, "hemt_dd");
+    const auto te = check(head + sweep, "hemt_te");
+    const double id_dd = dd.back().terminal_current[1], id_te = te.back().terminal_current[1];
+    std::printf("HEMT Id(Vg 0, Vd 0.1): continuous %.4e, thermionic %.4e A/cm (%+.2f %%)\n", id_dd, id_te,
+                100.0 * (id_te / id_dd - 1.0));
+    CHECK(std::abs(id_te / id_dd - 1.0) < 0.05);  // along the channel the interface carries little current
+}
