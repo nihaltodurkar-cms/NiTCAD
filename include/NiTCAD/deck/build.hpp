@@ -80,6 +80,8 @@
 //                     resistance
 //   [models]          each assemble::PhysicsModels switch by its name = on | off;
 //                     btbt_nonlocal = off | kane | direct_wkb; impact_current_resolution = <x>;
+//                     trap_assisted_tunnelling = off | hurkx  (Unit 67; opt-in, with srh);
+//                       tat_mass_n, tat_mass_p = <m / m0>  (defaults 0.25)
 //                     hole_mobility = automatic | caughey_thomas | masetti  (Units 34, 35;
 //                       automatic, the default: Masetti in silicon regions);
 //                     electron_mobility = caughey_thomas | masetti  (Unit 38; opt-in)
@@ -121,6 +123,12 @@
 //                     dt_*, output_times and every waveform time; a sine's frequency as below);
 //                     restart = <checkpoint file>  (a transient's own checkpoint: the run continues
 //                       after its last accepted step, bit for bit; Unit 61 RD4)
+//   [heavy_ion <name>] (Unit 65, HD9; physics/heavy_ion.hpp; repeatable; with [transient] only)
+//                     one heavy-ion track: start = <D lengths>, direction = <D numbers>, length,
+//                     let = <pC/um> or let_mev = <MeV cm^2/mg> (exactly one), t0 and sigma (times;
+//                     t0 at least 4 sigma); radius (2D, 3D), depth (2D: the depth the section stands
+//                     for), area (1D: cm^2, or with um2). No defaults. The transient table gains
+//                     '<contact> collected C' per contact and 'deposited C'.
 //   [small_signal]    (Unit 43; solve/small_signal.hpp) contact <name> = <series> and
 //                     thermal <name> = <series>, the operating points as in [sweep];
 //                     frequencies = <series> (required), field_frequencies = <series>; in Hz,

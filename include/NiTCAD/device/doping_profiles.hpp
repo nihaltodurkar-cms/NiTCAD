@@ -4,7 +4,9 @@
 //   N(x) = peak * depth(x_axis) * prod over the other axes b of window(x_b),
 // - depth: constant (1), Gaussian exp(-(d - center)^2 / (2 width^2)), or erfc
 //   0.5 erfc((d - center) / width) (a diffusion from a surface at `center`, decreasing in d);
-// - window along each other axis: [lo, hi] with an erfc fall-off of length `lateral` on both
+// - window along each other axis (a constant profile: along every axis, its depth axis included,
+//   Unit 67 TAC8: a constant has no depth shape, so its window is its whole extent; a 1D step is
+//   two constant profiles): [lo, hi] with an erfc fall-off of length `lateral` on both
 //   sides, 0.5 [erfc((lo - x) / lateral) - erfc((hi - x) / lateral)]; lateral = 0 is the box
 //   (1 inside, 0 outside, 1/2 on its faces). An axis whose window is unbounded is skipped.
 // Profiles of one species add. Sampling is point sampling at nodes, as the devices built by hand
@@ -34,7 +36,8 @@ struct DopingProfile {
     int axis = 0;            // the depth axis, 0..dimension-1
     double center = 0.0;     // [cm] the Gaussian's centre, or the erfc's 50 % point
     double width = 0.0;      // [cm] sigma or the erfc length; > 0 unless constant
-    // The lateral window per axis (the depth axis's entry is ignored), [cm].
+    // The window per axis, [cm]: the depth axis's entry bounds a constant profile and must be
+    // unbounded for a Gaussian or erfc (whose shape sets the depth; check_profile).
     std::array<double, 3> lo{-std::numeric_limits<double>::infinity(),
                              -std::numeric_limits<double>::infinity(),
                              -std::numeric_limits<double>::infinity()};
@@ -55,7 +58,8 @@ struct Doping {
 // The sum of the profiles at every node, per species; zero on nodes whose region is an insulator.
 // Errors (invalid_input, index = the profile, or the node for node_region): a peak not finite and
 // >= 0; an axis outside the mesh dimension; a width not finite and positive for a Gaussian or erfc;
-// a non-finite center or lateral, lateral < 0, or a window with lo > hi or a NaN bound;
+// a non-finite center or lateral, lateral < 0, or a window with lo > hi or a NaN bound; a bounded
+// window on the depth axis of a Gaussian or erfc;
 // node_region not one per node or a region out of range.
 [[nodiscard]] std::expected<Doping, base::Error> sample(std::span<const DopingProfile> profiles,
                                                         const mesh::Mesh& mesh,

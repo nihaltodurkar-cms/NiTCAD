@@ -21,6 +21,7 @@
 #include "NiTCAD/mesh/complex.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
+#include "NiTCAD/physics/heavy_ion.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/solve/adapt_adjoint.hpp"
 #include "NiTCAD/solve/adapt_derived.hpp"
@@ -224,6 +225,7 @@ private:
     std::expected<void, base::Error> solver(Plan& plan) const;
     std::expected<void, base::Error> analysis(Plan& plan) const;
     std::expected<void, base::Error> transient(const Section& s, Plan& plan) const;
+    std::expected<void, base::Error> heavy_ions(Plan& plan) const;  // Unit 65
     std::expected<void, base::Error> small_signal(const Section& s, Plan& plan) const;
     std::expected<void, base::Error> trace(const Section& s, Plan& plan) const;
     template <class Other>
@@ -256,7 +258,7 @@ std::expected<void, base::Error> Builder::check_sections() const {
                                                  "models",       "solver",    "equilibrium",
                                                  "sweep",        "transient", "small_signal",
                                                  "trace",        "output",    "adapt"};
-    static const std::set<std::string_view> many{"region", "contact", "interface",
+    static const std::set<std::string_view> many{"region", "contact", "interface", "heavy_ion",
                                                  "thermal_contact"};
     std::set<std::string> seen;
     for (const Section& s : d_.sections) {
@@ -1421,6 +1423,16 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
         if (const auto it = switches.find(e.key); it != switches.end()) {
             NITCAD_DECK_TRY(v, flag(e));
             m.*(it->second) = v;
+        } else if (e.key == "trap_assisted_tunnelling") {
+            if (e.value == "off") m.trap_assisted_tunnelling = assemble::TrapTunnelling::off;
+            else if (e.value == "hurkx") m.trap_assisted_tunnelling = assemble::TrapTunnelling::hurkx;
+            else return std::unexpected(at(e.line, "trap_assisted_tunnelling is off or hurkx"));
+        } else if (e.key == "tat_mass_n") {
+            NITCAD_DECK_TRY(v, num(e));
+            m.tat_mass_n = v;
+        } else if (e.key == "tat_mass_p") {
+            NITCAD_DECK_TRY(v, num(e));
+            m.tat_mass_p = v;
         } else if (e.key == "btbt_nonlocal") {
             if (e.value == "off") m.btbt_nonlocal = assemble::NonlocalTunnelling::off;
             else if (e.value == "kane") m.btbt_nonlocal = assemble::NonlocalTunnelling::kane;
@@ -1430,11 +1442,15 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
             if (e.value == "caughey_thomas") m.hole_mobility = assemble::HoleMobility::caughey_thomas;
             else if (e.value == "masetti") m.hole_mobility = assemble::HoleMobility::masetti;
             else if (e.value == "automatic") m.hole_mobility = assemble::HoleMobility::automatic;
-            else return std::unexpected(at(e.line, "hole_mobility is automatic, caughey_thomas or masetti"));
+            else if (e.value == "klaassen") m.hole_mobility = assemble::HoleMobility::klaassen;
+            else if (e.value == "klaassen_equilibrium") m.hole_mobility = assemble::HoleMobility::klaassen_equilibrium;
+            else return std::unexpected(at(e.line, "hole_mobility is automatic, caughey_thomas, masetti, klaassen or klaassen_equilibrium"));
         } else if (e.key == "electron_mobility") {
             if (e.value == "caughey_thomas") m.electron_mobility = assemble::ElectronMobility::caughey_thomas;
             else if (e.value == "masetti") m.electron_mobility = assemble::ElectronMobility::masetti;
-            else return std::unexpected(at(e.line, "electron_mobility is caughey_thomas or masetti"));
+            else if (e.value == "klaassen") m.electron_mobility = assemble::ElectronMobility::klaassen;
+            else if (e.value == "klaassen_equilibrium") m.electron_mobility = assemble::ElectronMobility::klaassen_equilibrium;
+            else return std::unexpected(at(e.line, "electron_mobility is caughey_thomas, masetti, klaassen or klaassen_equilibrium"));
         } else if (e.key == "surface_mobility") {
             if (e.value == "off") m.surface_mobility = assemble::SurfaceMobility::off;
             else if (e.value == "lombardi") m.surface_mobility = assemble::SurfaceMobility::lombardi;
@@ -1737,6 +1753,82 @@ std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan
     if (!t_end) return std::unexpected(at(s.line, "[transient] needs t_end"));
     NITCAD_DECK_CHECK(starts(initial, restart, plan));
     for (auto& f : waveforms) plan.waveforms.push_back(f ? std::move(*f) : solve::Waveform::constant(0.0));
+    return {};
+}
+
+// [heavy_ion <name>] sections (Unit 65, HD9): one track each, a [transient] option only. Lengths as
+// every deck length (cm, or with um or nm); `area` in cm^2 or with um2; `let` in pC/um, `let_mev`
+// in MeV cm^2/mg (exactly one); times with their units. No defaults (HQ4): start, direction,
+// length, let or let_mev, t0 and sigma always; radius in 2D and 3D; depth in 2D; area in 1D.
+std::expected<void, base::Error> Builder::heavy_ions(Plan& plan) const {
+    const int dim = plan.device.mesh().dimension();
+    for (const Section& s : d_.sections) {
+        if (s.kind != "heavy_ion") continue;
+        if (plan.analysis != Analysis::transient) {
+            return std::unexpected(at(s.line, "[heavy_ion " + s.name + "] needs a [transient] analysis"));
+        }
+        physics::HeavyIonTrack t;
+        std::set<std::string> given;
+        for (const Entry& e : s.entries) {
+            if (!given.insert(e.key).second) return std::unexpected(at(e.line, "a second '" + e.key + "'"));
+            if (e.key == "start") {
+                NITCAD_DECK_TRY(v, lengths(e, e.value, static_cast<std::size_t>(dim)));
+                for (std::size_t k = 0; k < v.size(); ++k) t.start_cm[k] = v[k];
+            } else if (e.key == "direction") {
+                std::vector<double> v;
+                for (const std::string_view item : items(e.value)) {
+                    for (const std::string_view w : tokens(item)) {
+                        NITCAD_DECK_TRY(x, lift(e.line, number(w)));
+                        v.push_back(x);
+                    }
+                }
+                if (v.size() != static_cast<std::size_t>(dim)) {
+                    return std::unexpected(at(e.line, "'direction' needs " + std::to_string(dim) + " components"));
+                }
+                for (std::size_t k = 0; k < v.size(); ++k) t.direction[k] = v[k];
+            } else if (e.key == "length" || e.key == "radius" || e.key == "depth") {
+                NITCAD_DECK_TRY(v, len(e));
+                (e.key == "length" ? t.length_cm : e.key == "radius" ? t.radius_cm : t.depth_cm) = v;
+            } else if (e.key == "area") {
+                std::string_view text = trimmed(e.value);
+                double scale = 1.0;
+                if (text.ends_with("um2")) {
+                    text.remove_suffix(3);
+                    scale = 1e-8;
+                }
+                NITCAD_DECK_TRY(v, lift(e.line, number(text)));
+                t.area_cm2 = v * scale;
+            } else if (e.key == "let") {
+                NITCAD_DECK_TRY(v, num(e));
+                t.let_C_per_cm = v * 1e-12 / 1e-4;  // pC/um to C/cm
+            } else if (e.key == "let_mev") {
+                NITCAD_DECK_TRY(v, num(e));
+                t.let_C_per_cm = physics::let_from_mev_cm2_mg(v);
+            } else if (e.key == "t0" || e.key == "sigma") {
+                NITCAD_DECK_TRY(v, lift(e.line, seconds(e.value)));
+                (e.key == "t0" ? t.t0_s : t.sigma_s) = v;
+            } else {
+                return std::unexpected(unknown(e, s));
+            }
+        }
+        if (given.contains("let") && given.contains("let_mev")) {
+            return std::unexpected(at(s.line, "[heavy_ion " + s.name + "] takes 'let' or 'let_mev', not both"));
+        }
+        std::vector<std::string> needed{"start", "direction", "length", "t0", "sigma"};
+        if (dim >= 2) needed.emplace_back("radius");
+        if (dim == 2) needed.emplace_back("depth");
+        if (dim == 1) needed.emplace_back("area");
+        for (const std::string& k : needed) {
+            if (!given.contains(k)) return std::unexpected(at(s.line, "[heavy_ion " + s.name + "] needs '" + k + "'"));
+        }
+        if (!given.contains("let") && !given.contains("let_mev")) {
+            return std::unexpected(at(s.line, "[heavy_ion " + s.name + "] needs 'let' (pC/um) or 'let_mev'"));
+        }
+        if (auto ok = physics::check_heavy_ion_track(t, dim); !ok) {
+            return std::unexpected(at(s.line, "[heavy_ion " + s.name + "]: " + ok.error().message));
+        }
+        plan.transient.heavy_ions.push_back(t);
+    }
     return {};
 }
 
@@ -2186,6 +2278,7 @@ std::expected<Plan, base::Error> Builder::run() {
     NITCAD_DECK_CHECK(models(plan.options.models));
     NITCAD_DECK_CHECK(solver(plan));
     NITCAD_DECK_CHECK(analysis(plan));
+    NITCAD_DECK_CHECK(heavy_ions(plan));
     NITCAD_DECK_CHECK(adapt(plan));
     NITCAD_DECK_CHECK(outputs(plan));
     return plan;
@@ -2249,7 +2342,7 @@ std::string profile_text(const device::DopingProfile& p) {
     if (p.shape != device::DepthShape::constant || p.axis != 0) out += std::string(" axis=") + axes[p.axis];
     if (p.shape != device::DepthShape::constant) out += std::format(" center={}cm width={}cm", p.center, p.width);
     for (int k = 0; k < 3; ++k) {
-        if (k == p.axis) continue;
+        if (k == p.axis && p.shape != device::DepthShape::constant) continue;
         const auto i = static_cast<std::size_t>(k);
         if (std::isinf(p.lo[i]) && std::isinf(p.hi[i])) continue;
         out += std::format(" {}={}cm:{}cm", axes[k], p.lo[i], p.hi[i]);

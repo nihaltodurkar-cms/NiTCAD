@@ -337,4 +337,28 @@ std::expected<Extraction, base::Error> turning_point(const Curve& curve) {
     return std::unexpected(invalid("the bias never turns back"));
 }
 
+std::expected<std::vector<double>, base::Error> collected_charge(const results::Transient& run,
+                                                                 std::size_t contact) {
+    if (run.points.empty()) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input, "the run has no time points", {}});
+    }
+    const double i0 = contact < run.points.front().terminal_current.size()
+                          ? run.points.front().terminal_current[contact]
+                          : 0.0;
+    for (const results::TimePoint& p : run.points) {
+        if (contact >= p.terminal_current.size()) {
+            return std::unexpected(base::Error{base::ErrorCode::invalid_input, "contact out of range",
+                                               base::ErrorContext{.index = contact, .value = std::nullopt}});
+        }
+    }
+    std::vector<double> q{0.0};
+    for (std::size_t k = 1; k < run.points.size(); ++k) {
+        const results::TimePoint& a = run.points[k - 1];
+        const results::TimePoint& b = run.points[k];
+        q.push_back(q.back() + 0.5 * (b.time_s - a.time_s) *
+                                   ((a.terminal_current[contact] - i0) + (b.terminal_current[contact] - i0)));
+    }
+    return q;
+}
+
 }  // namespace NiTCAD::analysis

@@ -24,6 +24,10 @@ struct EdgeFlux {
     // d flux / d delta alone, the driving term's own partial (Unit 62: density gradient's Lambda
     // enters delta only); set by SystemData::edge_fluxes with the model on, else 0.
     double d_delta = 0.0;
+    // d flux / d the other carrier's density at node 1 and node 2 (Unit 66: the carrier-dependent
+    // Klaassen mobility); set by SystemData::edge_fluxes with that model on, else 0.
+    double d_other1 = 0.0;
+    double d_other2 = 0.0;
 };
 
 [[nodiscard]] inline EdgeFlux sg_electron_flux(double a, double psi1, double psi2, double n1,

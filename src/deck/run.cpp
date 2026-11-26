@@ -10,6 +10,7 @@
 #include <system_error>
 #include <utility>
 
+#include "NiTCAD/analysis/dc.hpp"
 #include "NiTCAD/io/adapt_report.hpp"
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
@@ -158,11 +159,28 @@ std::expected<void, base::Error> write_transient_table(const std::filesystem::pa
     for (const char* what : {" V", " A", " conduction A", " displacement A"}) {
         for (const device::Contact& c : device.contacts()) text += "," + c.name + what;
     }
+    // Heavy-ion tracks (Unit 65, HD9): each contact's collected charge and the tracks' deposit so far.
+    const bool ions = !run.points.empty() && run.points.front().heavy_ion_charge.has_value();
+    std::vector<std::vector<double>> collected;
+    if (ions) {
+        for (std::size_t c = 0; c < device.contacts().size(); ++c) {
+            auto q = analysis::collected_charge(run, c);
+            if (!q) return std::unexpected(std::move(q.error()));
+            collected.push_back(std::move(*q));
+            text += "," + device.contacts()[c].name + " collected C";
+        }
+        text += ",deposited C";
+    }
     text += "\n";
-    for (const results::TimePoint& p : run.points) {
+    for (std::size_t k = 0; k < run.points.size(); ++k) {
+        const results::TimePoint& p = run.points[k];
         text += format(p.time_s) + "," + format(p.step_s) + "," + std::to_string(p.order);
         for (const auto* v : {&p.bias_V, &p.terminal_current, &p.conduction_current, &p.displacement_current}) {
             for (const double x : *v) text += "," + format(x);
+        }
+        if (ions) {
+            for (const auto& q : collected) text += "," + format(q[k]);
+            text += "," + format(p.heavy_ion_charge.value_or(0.0));
         }
         text += "\n";
     }

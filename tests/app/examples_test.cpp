@@ -20,14 +20,15 @@ const fs::path source_examples{NITCAD_EXAMPLES_DIR};
 
 }  // namespace
 
-TEST_CASE("app examples: the four decks, titled and described (WG8)", "[app]") {
+TEST_CASE("app examples: the five decks, titled and described (WG8; Unit 65 the fifth)", "[app]") {
     const auto examples = app::list_examples(source_examples);
-    REQUIRE(examples.size() == 4);
+    REQUIRE(examples.size() == 5);
     const std::vector<std::pair<std::string, std::string>> expected{{"moscap_cv.deck", "MOS capacitor"},
                                                                     {"mosfet_2d.deck", "2D MOSFET"},
                                                                     {"mosfet_3d.deck", "3D MOSFET"},
-                                                                    {"pn_diode_1d.deck", "1D pn diode"}};
-    for (std::size_t k = 0; k < 4; ++k) {
+                                                                    {"pn_diode_1d.deck", "1D pn diode"},
+                                                                    {"seu_diode_2d.deck", "2D single-event strike"}};
+    for (std::size_t k = 0; k < 5; ++k) {
         CAPTURE(k);
         CHECK(examples[k].path.filename() == expected[k].first);
         CHECK(examples[k].title == expected[k].second);
@@ -84,6 +85,11 @@ void runs_to_completion(const app::Example& e, const fs::path& dir) {
     CHECK_FALSE(rc.stopped_early());
     const auto& r = *rc.report();
     const std::size_t points = r.sweep ? r.sweep->points.size() : r.small_signal ? r.small_signal->points.size() : 0;
+    if (r.transient) {  // Unit 65: the single-event example is a transient
+        CHECK(r.transient->points.size() >= 5);
+        CHECK(r.written.size() >= 3);
+        return;
+    }
     CHECK(points == rc.plan()->points.size());
     CHECK(points >= 5);
     CHECK(r.written.size() >= 3);  // the result, the device, the table
@@ -101,7 +107,7 @@ TEST_CASE("app examples: every example deck runs to completion (WG8)", "[app]") 
         runs_to_completion(e, dir);
         ++ran;
     }
-    CHECK(ran == 3);
+    CHECK(ran == 4);
 }
 
 TEST_CASE("app examples: the 3D MOSFET example runs to completion (WG8)", "[.examples3d]") {

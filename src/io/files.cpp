@@ -297,6 +297,7 @@ constexpr std::uint16_t quantum_potential_n = 7, quantum_potential_p = 8;
 namespace rates_key {  // Unit 45
 constexpr std::uint16_t srh = 1, auger = 2, radiative = 3, impact = 4, interface_n = 5, interface_p = 6,
                         band_to_band_n = 7, band_to_band_p = 8, net_n = 9, net_p = 10;
+constexpr std::uint16_t heavy_ion = 11;  // Unit 65: absent without tracks
 }
 namespace bands_key {
 constexpr std::uint16_t conduction = 1, valence = 2, electron = 3, hole = 4;
@@ -366,6 +367,7 @@ namespace time_key {
 constexpr std::uint16_t time = 1, step = 2, order = 3, error_ratio = 4, bias = 5, current = 6,
                         conduction = 7, displacement = 8, contact_charge = 9, trap_charge = 10,
                         thermal_heat = 11, convergence = 12;
+constexpr std::uint16_t heavy_ion_charge = 13;  // Unit 65: absent without tracks
 }
 namespace snapshot_key {
 constexpr std::uint16_t time = 1, point = 2, fields = 3, bands = 4, edge_n = 5, edge_p = 6,
@@ -445,17 +447,18 @@ Writer write_rates(const results::RateFields& r) {
     w.f64s(k::band_to_band_p, r.band_to_band_p);
     w.f64s(k::net_n, r.net_n);
     w.f64s(k::net_p, r.net_p);
+    if (!r.heavy_ion.empty()) w.f64s(k::heavy_ion, r.heavy_ion);
     return w;
 }
 
 std::expected<results::RateFields, base::Error> read_rates(const Reader& r) {
     namespace k = rates_key;
     results::RateFields out;
-    const std::array<std::pair<std::uint16_t, std::vector<double>*>, 10> slots{
+    const std::array<std::pair<std::uint16_t, std::vector<double>*>, 11> slots{
         {{k::srh, &out.srh}, {k::auger, &out.auger}, {k::radiative, &out.radiative},
          {k::impact, &out.impact}, {k::interface_n, &out.interface_n}, {k::interface_p, &out.interface_p},
          {k::band_to_band_n, &out.band_to_band_n}, {k::band_to_band_p, &out.band_to_band_p},
-         {k::net_n, &out.net_n}, {k::net_p, &out.net_p}}};
+         {k::net_n, &out.net_n}, {k::net_p, &out.net_p}, {k::heavy_ion, &out.heavy_ion}}};
     for (const auto& [key, target] : slots) {
         NITCAD_IO_TRY(values, r.f64s_or_empty(key));
         *target = std::move(values);
@@ -859,6 +862,7 @@ Writer write_time_point(const results::TimePoint& p) {
     w.f64s(k::trap_charge, p.interface_trap_charge);
     w.f64s(k::thermal_heat, p.thermal_contact_heat);
     w.record(k::convergence, write_convergence(p.convergence));
+    if (p.heavy_ion_charge) w.f64(k::heavy_ion_charge, *p.heavy_ion_charge);
     return w;
 }
 
@@ -878,6 +882,11 @@ std::expected<results::TimePoint, base::Error> read_time_point(const Reader& r) 
     NITCAD_IO_TRY(thermal_heat, r.f64s_or_empty(k::thermal_heat));
     NITCAD_IO_TRY(c, r.record(k::convergence));
     NITCAD_IO_TRY(convergence, read_convergence(c));
+    std::optional<double> heavy_ion_charge;  // Unit 65
+    if (r.has(k::heavy_ion_charge)) {
+        NITCAD_IO_TRY(q, r.f64(k::heavy_ion_charge));
+        heavy_ion_charge = q;
+    }
     return results::TimePoint{.time_s = time,
                               .step_s = step,
                               .order = static_cast<int>(order),
@@ -889,7 +898,8 @@ std::expected<results::TimePoint, base::Error> read_time_point(const Reader& r) 
                               .contact_charge = std::move(contact_charge),
                               .interface_trap_charge = std::move(trap_charge),
                               .thermal_contact_heat = std::move(thermal_heat),
-                              .convergence = std::move(convergence)};
+                              .convergence = std::move(convergence),
+                              .heavy_ion_charge = heavy_ion_charge};
 }
 
 Writer write_snapshot(const results::TransientSnapshot& s) {
@@ -902,7 +912,7 @@ Writer write_snapshot(const results::TransientSnapshot& s) {
     w.f64s(k::edge_n, s.edge_current_n);
     w.f64s(k::edge_p, s.edge_current_p);
     w.f64s(k::occupancy, s.trap_occupancy);
-    if (!s.rates.net_n.empty()) w.record(k::rates, write_rates(s.rates));
+    if (!s.rates.net_n.empty() || !s.rates.heavy_ion.empty()) w.record(k::rates, write_rates(s.rates));
     return w;
 }
 

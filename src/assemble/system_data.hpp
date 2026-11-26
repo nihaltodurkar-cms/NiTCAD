@@ -38,6 +38,7 @@
 #include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/physics/impact_ionization.hpp"
 #include "NiTCAD/physics/ionization.hpp"
+#include "NiTCAD/physics/klaassen_mobility.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/surface_mobility.hpp"
@@ -271,6 +272,14 @@ struct SystemData {
         double t[3];
         double field;  // [V/cm] per unit (psi_b - psi_a)
     };
+    // Trap-assisted tunnelling (Unit 67, TAD3): per semiconductor node off the ohmic contacts with
+    // carrier edges, its edges (in field_edges_) and the pseudo-inverse of sum t t^T, as
+    // TunnelNode; trap_index_ maps a node to its entry (npos: plain SRH, Gamma = 0).
+    struct TrapNode {
+        std::size_t node;
+        std::size_t first, last;
+        double inverse[9];
+    };
 
     // Nonlocal tunnelling (Unit 20): per frozen path, the nodes whose psi its rows read (columns),
     // the nodes its electrons go to (deposit), the start's hole-row positions per column and the
@@ -359,6 +368,13 @@ struct SystemData {
     [[nodiscard]] std::pair<EdgeFlux, EdgeFlux> edge_fluxes(
         const EdgeTerm& e, std::span<const double> x, std::span<const NodeDegeneracy> g,
         SurfaceSlope* slope = nullptr) const;
+    // Unit 66 (KD5): edge_fluxes' factors with the carrier-dependent Klaassen mobility, from the
+    // unit-factor fluxes fn, fp: a = a0 mu(x) / mu0 with the ends' mobilities at the state's
+    // densities (the other carrier's partials in d_other1, d_other2). Not on thermionic edges.
+    [[nodiscard]] std::pair<EdgeFlux, EdgeFlux> klaassen_fluxes(const EdgeTerm& e,
+                                                                std::span<const double> x,
+                                                                double dpsi, EdgeFlux fn,
+                                                                EdgeFlux fp) const;
 
     // Electrothermal (Unit 23; electrothermal.cpp). Per node, constant: the material (index into
     // thermal_materials_, or -1 on an insulator), its thermal data, the impurity densities the
@@ -378,6 +394,8 @@ struct SystemData {
         // node of a gate with one (its electrode potential gains the node's own g(theta)), 2 on a
         // node of an electrode of one (it gains polysilicon's, silicon's -(Eg(T) - Eg(T0)) / k T0).
         std::int32_t ppoly;
+        // Unit 66: N_D, N_A for the Klaassen mobility (0 with doping_mobility off) [cm^-3].
+        double donors_mobility = 0.0, acceptors_mobility = 0.0;
     };
     // Per node at a state: theta and tau = theta - 1 (the unknown), n_ie / Ns, the mobilities
     // [cm^2/(V s)], g (the valence band's shift), kappa [W/(cm K)] and the Kirchhoff transform u,
@@ -473,6 +491,14 @@ struct SystemData {
     // Units 34, 35: per thermal material, whether its hole mobility is Masetti's.
     std::vector<char> masetti_holes_;
     bool masetti_electrons_ = false;  // Unit 38: the electron mobility is Masetti's
+    // Unit 66: the electron / hole mobility is Klaassen's at neutral equilibrium densities.
+    bool klaassen_electrons_ = false, klaassen_holes_ = false;
+    // Unit 66 (KD5): `klaassen` for either carrier; the carrier's prepared temperature parts
+    // (empty when it does not select `klaassen`), and N_D, N_A per node (0 with doping_mobility
+    // off). edge_fluxes then evaluates the ends' mobilities at the state's n, p.
+    bool klaassen_carriers_ = false;
+    std::optional<physics::KlaassenAtTemperature> klaassen_n_, klaassen_p_;
+    std::vector<double> klaassen_donors_, klaassen_acceptors_;
     bool sinks_complete_ = false;
     std::vector<char> reaches_sink_;  // per node (reaches_heat_sink)
     // One node's thermal state at tau (NaN entries unless tau is finite and theta positive).
@@ -515,6 +541,9 @@ struct SystemData {
     std::vector<ImpactEdge> impact_edges_;
     std::vector<TunnelNode> tunnel_nodes_;
     std::vector<FieldEdge> field_edges_;
+    std::vector<TrapNode> trap_nodes_;     // Unit 67; empty with the model off
+    std::vector<std::size_t> trap_index_;  // per node; empty with the model off
+    double tat_mass_n_ = 0.0, tat_mass_p_ = 0.0;
     // Nonlocal tunnelling: the model, the device's cells, per node the longest path that may start
     // there (0: none) [cm], the material's gap at T [eV] and tunnelling masses [kg] (direct_wkb),
     // and the Kane pair (kane). The frozen paths are SystemState's.
@@ -527,6 +556,11 @@ struct SystemData {
     int dimension_ = 1;
     double generation_scale_ = 0.0;        // 1 / R0: [cm^-3 s^-1] to the rows' scaled rate
     const ManufacturedSources* manufactured_ = nullptr;  // models.manufactured (TVQ3), not owned
+    // Heavy-ion tracks (Unit 65): the checked tracks and, per track, (LET / q) R at every node
+    // [cm^-3 per unit of T], 0 on insulator and ohmic contact nodes. Empty without tracks.
+    std::vector<physics::HeavyIonTrack> heavy_ion_tracks_;
+    std::vector<std::vector<double>> heavy_ion_pairs_;
+    std::vector<double> heavy_ion_deposits_;  // per track [C / cm^(3-D)] (HD7)
     double impact_resolution_ = 0.0;       // models.impact_current_resolution
     std::size_t contact_count_ = 0;
     double rate_scale_ = 0.0;             // Ns / R0: scaled SRH call to R / R0
