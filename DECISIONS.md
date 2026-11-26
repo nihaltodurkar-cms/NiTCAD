@@ -4942,7 +4942,7 @@ isotropic limitation.
 
 **Slice 0 as built (2026-11-26; commits 1cc8378, bded2ee, 60c8952 and the next, on main 5904b83).** Registry (MAD1),
 `[material]` and `.nitmat` (MAD4), `nitcad materials` (MAD12), nearest-name suggestions (MAC13), the run's material
-records and per-parameter citations (MAD3). Reading taken for MAC6, flagged for the owner (it meets MAC1, which as
+records and per-parameter citations (MAD3). MAC6 reading, ruled by the owner 2026-11-26 (it meets MAC1, which as
 written MAC6 would break): a run records a region's material only when the region names a `[material]` or a
 registry material Unit 68 adds (`MaterialEntry::recorded`); the nine earlier names, with or without composition,
 write no record, so every existing result file stays byte-identical. Decks differing only in x already differ in
