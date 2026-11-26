@@ -942,7 +942,7 @@ TEST_CASE("Gate tunnelling: a registry dielectric equals its values written out 
                              "[contact substrate]\nkind = ohmic\npatch = x_max\n[sweep]\ncontact gate = 0 : 1 : 1\n";
     const deck::Plan named = must(head + "material = hfo2\n" + tail);
     const deck::Plan written = must(head + "material = insulator\neps_r = 25\nelectron_affinity_eV = 2.65\nband_gap_eV = 5.8\n"
-                                           "tunnel_mass_n = 0.11\ntunnel_mass_p = 0.5\n" + tail);
+                                           "tunnel_mass_n = 0.11\ntunnel_mass_p = 0.6\n" + tail);
     const auto a = deck::run(named);
     const auto b = deck::run(written);
     if (!a) FAIL(a.error().message);

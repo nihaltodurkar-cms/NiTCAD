@@ -414,7 +414,7 @@ TEST_CASE("material registry: dielectrics with band data (MAD5, MAD13)", "[mater
         const auto p = std::get<InsulatorParameters>(*e->make({}));
         REQUIRE(has_band_data(p));
         REQUIRE(Insulator::create(p).has_value());
-        REQUIRE(p.tunnel_mass_p == 0.50);
+        REQUIRE(p.tunnel_mass_p > 0.0);
         for (const ParameterCitation& c : e->parameter_sources) {
             if (c.path == "tunnel_mass_p") REQUIRE(c.basis == "approximate");
         }
@@ -424,6 +424,8 @@ TEST_CASE("material registry: dielectrics with band data (MAD5, MAD13)", "[mater
     REQUIRE(hfo2.band_gap_eV == 5.8);
     REQUIRE(std::abs(hfo2.electron_affinity_eV - 2.65) < 1e-12);  // 4.05 - 1.4 (Robertson Table 2)
     REQUIRE(hfo2.tunnel_mass_n == 0.11);
+    REQUIRE(hfo2.tunnel_mass_p == 0.60);  // owner-supplied 2026-11-26
+    REQUIRE(std::get<InsulatorParameters>(*find_material("hbn")->make({})).tunnel_mass_n == 2.21);
     // SiON: linear in x between the SiO2 tunnelling set and si3n4.
     const MaterialEntry* sion = find_material("sion");
     const std::array<double, 1> zero{0.0}, one{1.0}, half{0.5}, bad{1.5};

@@ -5003,7 +5003,8 @@ listed in `docs/unit68-approximate-values.txt`. Eleven dielectrics with full ban
 mass from Salmani Table I, secondary), `zro2`, `tio2`, `ta2o5` (M5; electron mass approximate), `mgo` (Afanas'ev
 2010: gap 6.1 eV, offset 2.25 eV), `aln_dielectric` (arXiv:2407.17360), `sapphire` (al2o3's band values, its own
 eps_r along c), `hbn` (M16 gap); plus `sion <x>`, linear between sio2's Unit 51 tunnelling set and si3n4. The hole
-tunnelling mass is 0.50 m0 throughout (approximate, as SiO2 since 2026-10-28) and the thermal set is SiO2's
+tunnelling masses, and the electron masses no source gives, are the owner's values of 2026-11-26 (source not stated,
+cited approximate; e.g. hfo2 hole 0.60, al2o3 hole 1.30, hbn electron 2.21 m0), and the thermal set is SiO2's
 (approximate). Checks: `material = hfo2` tunnels exactly as an insulator region given the same values (gate current
 to 1e-12 relative at 1 V); every dielectric passes Insulator::create with band data. Searched and not usable for hole
 masses: Materials Project / Ricci 2017 (conductivity masses), Garcia 2004/2005 (band masses), arXiv:1204.2886 (ZrO2
