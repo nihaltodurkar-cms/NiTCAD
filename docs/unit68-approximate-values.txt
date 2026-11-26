@@ -27,8 +27,8 @@ Tunnelling masses (m0) supplied by the owner 2026-11-26 (source not stated; basi
 16  aln_dielectric    electron   0.33
 17  hbn               electron   2.21
 
-General approximate values (no source in hand; basis "approximate")
-------------------------------------------------------------------
+General approximate values (no source in hand; basis "approximate"; 18-22 confirmed by the owner 2026-11-26)
+-------------------------------------------------------------------------------------------------------
 18  mgo               eps_r                    9.8     Afanas'ev 2010 gives band alignment only
 19  aln_dielectric    eps_r                    8.5     arXiv:2407.17360 gives gap and affinity only
 20  sapphire          eps_r (along c)          11.6    no crystalline-sapphire source in hand
