@@ -20,7 +20,7 @@ namespace NiTCAD::deck::detail {
 inline std::expected<solve::Waveform, std::string> waveform(std::string_view s) {
     s = trimmed(s);
     const std::size_t open = s.find('(');
-    if (open == std::string_view::npos || !s.ends_with(")")) {
+    if (open == std::string_view::npos || !s.ends_with(')')) {
         return std::unexpected("'" + std::string(s) +
                                "' is not a waveform: constant(...), step(...), ramp(...), "
                                "pulse(...), pwl(...) or sine(...)");

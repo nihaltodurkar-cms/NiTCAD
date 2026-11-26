@@ -370,6 +370,7 @@ std::vector<Point> contact_seeds(const device::Device& d, const Locator& loc, st
     } else if (g.dimension() == 3) {
         for (const Polygon& f : g.boundary_faces()) {
             std::vector<NodeId> nodes;
+            nodes.reserve(f.vertices.size());
             for (const SurfaceVertex& v : f.vertices) nodes.push_back(v.at.nodes[0]);
             if (std::ranges::all_of(nodes, in_contact)) faces.push_back(std::move(nodes));
         }
@@ -543,6 +544,7 @@ std::vector<Arrow> surface_arrows(const Locator& loc, std::span<const Point> fie
 
 std::vector<Point> segment_seeds(const Point& a, const Point& b, std::size_t count) {
     std::vector<Point> out;
+    out.reserve(count);
     for (std::size_t i = 0; i < count; ++i) out.push_back(lerp(a, b, (static_cast<double>(i) + 0.5) / static_cast<double>(count)));
     return out;
 }

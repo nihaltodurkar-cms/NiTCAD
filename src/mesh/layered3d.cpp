@@ -51,7 +51,7 @@ using Idx = std::array<int, 3>;
 
 // The breakpoints of one axis: the domain's ends and every coordinate inside it, coordinates within `tol` of one
 // another one breakpoint (the first in order, so 20nm and 0.02um are one plane).
-std::vector<double> merged(std::vector<double> v, double lo, double hi, double tol) {
+std::vector<double> merged(const std::vector<double>& v, double lo, double hi, double tol) {
     std::vector<double> in{lo, hi};
     for (const double c : v) {
         if (c > lo + tol && c < hi - tol) in.push_back(c);
@@ -112,6 +112,7 @@ std::expected<PolyhedralGeometry, base::Error> slanted_partition(const LayeredGe
     std::map<std::pair<int, std::vector<std::pair<double, double>>>, std::size_t> entry_of;
     const auto add = [&](int solid, std::vector<Point> polygon, int k0, int k1) {
         std::vector<std::pair<double, double>> key;
+        key.reserve(polygon.size());
         for (const Point& p : polygon) key.emplace_back(p[0], p[1]);
         const auto [it, fresh] = entry_of.try_emplace({solid, std::move(key)}, entries.size());
         if (fresh) entries.push_back({std::move(polygon), solid, -1, 0, std::vector<char>(ns, 0)});
@@ -128,6 +129,7 @@ std::expected<PolyhedralGeometry, base::Error> slanted_partition(const LayeredGe
         if (v.axis == axis) {
             const int k0 = index_of(t, v.from), k1 = index_of(t, v.to);
             std::vector<Point> polygon;
+            polygon.reserve(v.polygon.size());
             for (const Point& p : v.polygon) polygon.push_back({p[0], p[1], 0.0});
             if (k0 < k1) add(si, std::move(polygon), k0, k1);
             continue;
@@ -365,7 +367,7 @@ std::expected<PolyhedralGeometry, base::Error> layered_partition3d(const Layered
         }
     }
     std::array<std::vector<double>, 3> bp;
-    for (std::size_t k = 0; k < 3; ++k) bp[k] = merged(std::move(coords[k]), g.lo[k], g.hi[k], tol);
+    for (std::size_t k = 0; k < 3; ++k) bp[k] = merged(coords[k], g.lo[k], g.hi[k], tol);
     if (slant_axis >= 0) return slanted_partition(g, slant_axis, bp[static_cast<std::size_t>(slant_axis)], tol);
     const int nx = static_cast<int>(bp[0].size()) - 1, ny = static_cast<int>(bp[1].size()) - 1, nz = static_cast<int>(bp[2].size()) - 1;
     // Rows: along x, at each (j, k), the runs of one region, resolved top solid first. A row asks each solid for the

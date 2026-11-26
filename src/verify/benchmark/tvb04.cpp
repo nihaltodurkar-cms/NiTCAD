@@ -162,6 +162,7 @@ std::vector<double> x_axis(int n_side) {
 
 std::vector<double> uniform(int nodes) {
     std::vector<double> v;
+    v.reserve(nodes);
     for (int k = 0; k < nodes; ++k) v.push_back(L * k / (nodes - 1));
     return v;
 }
@@ -445,6 +446,7 @@ void judge_family(BenchmarkResult& r, const Family& f, const Contacts& c, const 
     const auto name_of = [](Norm n) { return n == Norm::l2 ? " L2" : n == Norm::linf ? " Linf" : " H1"; };
     const auto study_of = [&](Norm norm) {
         std::vector<double> e;
+        e.reserve(levels.size());
         for (const auto& l : levels) e.push_back(norm == Norm::l2 ? l.l2 : norm == Norm::linf ? l.linf : l.h1);
         return study::order_study(hs, e, u);
     };

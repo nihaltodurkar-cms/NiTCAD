@@ -351,6 +351,7 @@ BenchmarkResult run_tvb15(Tier tier) {
             return r;
         }
         std::vector<double> v_k;
+        v_k.reserve(s->dn.size());
         for (std::size_t i = 0; i < s->dn.size(); ++i) v_k.push_back((s->dn[i] - G0 * fine.u_ref[i]) / (G0 * u1));
         max_ratio = std::max(max_ratio, s->max_dn / NA);
         a_iter = std::max(a_iter, s->u_iter);
@@ -361,6 +362,7 @@ BenchmarkResult run_tvb15(Tier tier) {
     std::vector<double> diff_norm;
     for (std::size_t k = 0; k + 1 < vs.size(); ++k) {
         std::vector<double> dk;
+        dk.reserve(vs[k].size());
         for (std::size_t i = 0; i < vs[k].size(); ++i) dk.push_back(vs[k + 1][i] - vs[k][i]);
         diff_norm.push_back(linf(dk));
     }
@@ -369,6 +371,7 @@ BenchmarkResult run_tvb15(Tier tier) {
     const double p_G = a_orders.front();
     std::vector<double> v0_minus_E;
     std::vector<double> vE;
+    vE.reserve(fine.dn.size());
     for (std::size_t i = 0; i < fine.dn.size(); ++i) vE.push_back((fine.dn[i] - gE * fine.u_ref[i]) / (gE * u1));
     for (std::size_t i = 0; i < vs[0].size(); ++i) {
         const double v0 = vs[0][i] - (vs[1][i] - vs[0][i]) / (std::pow(2.0, p_G) - 1.0);

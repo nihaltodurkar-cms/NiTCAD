@@ -355,6 +355,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
                 seeds = contact_seeds(device, locator, c, lines, currents);
             }
             std::vector<Streamline> traced;
+            traced.reserve(seeds.size());
             for (const Point& seed : seeds) traced.push_back(trace_streamline(locator, nodal, seed));
             if (colored_lines && scene->colorbar) {
                 add_streamlines(*scene, traced, *scene->colorbar);
@@ -435,7 +436,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
                 for (double& x : *v) if (std::isfinite(x) && x < o.film->floor) x = o.film->floor;
             }
             FieldOptions f;
-            f.view = view;
+            f.view = std::move(view);
             f.map = *colormap;
             f.contours = o.contours;
             f.title = std::string(field_info(*field).title);
@@ -506,7 +507,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
             if (k == b->device->contacts().size()) return std::unexpected(invalid("run B has no contact " + name));
             return k;
         };
-        const auto labelled = [&](std::string name, const char* run) { return b ? name + " (" + run + ")" : name; };
+        const auto labelled = [&](const std::string& name, const char* run) { return b ? name + " (" + run + ")" : name; };
         if (o.kind == ViewKind::iv) {
             if (!w.sweep) return std::unexpected(invalid("an I-V plot needs a sweep's results"));
             std::vector<std::vector<double>> biases;
@@ -590,7 +591,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         if (!q) return std::unexpected(std::move(q.error()));
         if (o.kind == ViewKind::quality_histogram) return wrap(quality_plot(*q, m.dimension()));
         FieldOptions f;
-        f.view = view;
+        f.view = std::move(view);
         f.map = *colormap;
         if (o.range) {
             auto s = ColorScale::create(ScaleKind::linear, o.range->first, o.range->second);
@@ -640,7 +641,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         const double gap = o.gap_um ? *o.gap_um * 1e-4 : default_gap(device, o.axis);
         if (!o.exploded_field) {
             FieldOptions f;
-            f.view = view;
+            f.view = std::move(view);
             return wrap(exploded_view(device, geometry, o.axis, gap, {}, f));
         }
         auto v = values_for();
@@ -875,6 +876,7 @@ std::vector<std::string> point_labels(const Workspace& w) {
     // The contacts whose bias varies, the swept one first.
     const auto contacts = w.device->contacts();
     std::vector<std::vector<double>> biases;
+    biases.reserve(w.points.size());
     for (const auto& p : w.points) biases.push_back(p.bias_V);
     std::vector<std::size_t> varying;
     for (std::size_t c = 0; c < contacts.size(); ++c) {

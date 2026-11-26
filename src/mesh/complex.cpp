@@ -617,6 +617,7 @@ std::expected<PolyhedralGeometry, base::Error> extrude(const ExtrudedGeometry& x
                     continue;
                 }
                 std::vector<std::size_t> verts;
+                verts.reserve(q.size());
                 for (const Point& p : q) verts.push_back(vertex(p, s));
                 const std::size_t f = facet(std::move(verts), vol);
                 station_facet.emplace(std::pair{c, s}, f);

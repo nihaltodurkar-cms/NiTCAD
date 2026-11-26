@@ -48,7 +48,7 @@ public:
 private:
     using Trampoline = void (*)(void*, std::size_t, std::size_t) noexcept;
     void run(std::size_t n, std::size_t chunk, void* body, Trampoline call);
-    void work(std::stop_token stop);
+    void work(const std::stop_token& stop);
     void run_chunks() noexcept;
 
     std::vector<std::jthread> workers_;

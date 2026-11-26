@@ -1029,7 +1029,7 @@ bool GeometryPage::commit(int c) {
                 sh.points = pts;
                 // Kept to the editing rules: a probe edit of its first vertex to itself checks them.
                 ok = set_vertex(next, s, 0, pts[0]);
-                if (!ok) sh = old;
+                if (!ok) sh = std::move(old);
             }
         }
     }
@@ -1268,8 +1268,8 @@ void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool doubl
                     copies.push_back({r, 0});
                 }
                 g_ = with;
-                g_start_ = with;
-                selection_ = copies;
+                g_start_ = std::move(with);
+                selection_ = std::move(copies);
             }
         }
         return;

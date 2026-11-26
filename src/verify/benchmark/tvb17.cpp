@@ -78,6 +78,7 @@ ReferenceInfo info() {
 
 std::vector<double> nodes(int N) {
     std::vector<double> x;
+    x.reserve(N);
     for (int k = 0; k < N; ++k) x.push_back(L * (2.0 * k - (N - 1)) / (N - 1));
     return x;
 }

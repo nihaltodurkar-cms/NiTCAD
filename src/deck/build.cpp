@@ -390,7 +390,7 @@ std::expected<std::vector<double>, base::Error> Builder::axis(int line, std::str
     };
     for (const std::string_view piece : pieces) {
         if (piece.starts_with("linspace(")) {
-            if (!piece.ends_with(")")) return std::unexpected(at(line, "linspace( without ')'"));
+            if (!piece.ends_with(')')) return std::unexpected(at(line, "linspace( without ')'"));
             const auto args = items(piece.substr(9, piece.size() - 10));
             if (args.size() != 3) return std::unexpected(at(line, "linspace takes (first, last, count)"));
             NITCAD_DECK_TRY(a, lift(line, length(args[0])));
@@ -1963,10 +1963,12 @@ std::expected<void, base::Error> Builder::operating_points(const Section& s, Pla
     const auto at_point = [](const std::vector<double>& v, std::size_t k) { return v.size() == 1 ? v[0] : v[k]; };
     for (std::size_t k = 0; k < n; ++k) {
         std::vector<double> p;
+        p.reserve(bias.size());
         for (const auto& v : bias) p.push_back(at_point(v, k));
         plan.points.push_back(std::move(p));
         if (any_thermal) {
             std::vector<double> t;
+            t.reserve(temperature.size());
             for (const auto& v : temperature) t.push_back(at_point(v, k));
             plan.options.thermal_bias_K.push_back(std::move(t));
         }

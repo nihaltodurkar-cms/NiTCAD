@@ -1232,6 +1232,7 @@ struct Generator {
             // Each column's node on the edge: the given point where there is one, the segment's ends
             // and patch ends (Unit 49 BD2), so the edge, a patch and the lattice share it.
             std::vector<Point> bottom;
+            bottom.reserve(L.along.size());
             for (const double t : L.along) bottom.push_back(corner(t, 0.0));
             bottom.front() = in.a;
             bottom.back() = in.b;

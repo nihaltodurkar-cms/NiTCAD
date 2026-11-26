@@ -158,17 +158,17 @@ SweepFigures sweep_figures(const SweepResults& s) {
 std::string figures_csv(const SweepResults& s, const SweepFigures& f) {
     std::string out = value_title(s);
     for (std::size_t j = 0; j < f.names.size(); ++j) {
-        out += ",";
+        out += ',';
         out += f.units[j].empty() ? f.names[j] : f.names[j] + " (" + f.units[j] + ")";
     }
-    out += "\n";
+    out += '\n';
     for (std::size_t i = 0; i < f.rows.size(); ++i) {
         out += std::format("{}", shown_value(s, s.runs[f.runs[i]]));
         for (const double v : f.rows[i]) {
-            out += ",";
+            out += ',';
             if (std::isfinite(v)) out += std::format("{}", v);
         }
-        out += "\n";
+        out += '\n';
     }
     return out;
 }

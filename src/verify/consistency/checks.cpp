@@ -893,6 +893,7 @@ CheckResult check_c9(const results::SmallSignal& run, std::size_t point, const D
         out.diagnostics.push_back({"Kramers-Kronig", std::nan(""), std::nan(""), "", "not estimated: " + kk_missing});
     } else {
         std::vector<double> w;
+        w.reserve(nonzero.size());
         for (const std::size_t k : nonzero) w.push_back(2.0 * std::numbers::pi * run.frequency_Hz[k]);
         for (std::size_t i = 0; i < nc; ++i) {
             std::vector<std::complex<double>> g;
@@ -1068,6 +1069,7 @@ std::string symmetry_failure(const results::BiasPoint& a, const mesh::Mesh& ma, 
         const ContactData& y = db.contacts[map.contact[c]];
         if (x.kind != y.kind) return "contact kind differs (" + x.name + ")";
         std::vector<mesh::NodeId> image;
+        image.reserve(x.nodes.size());
         for (const auto v : x.nodes) image.push_back(map.node[static_cast<std::size_t>(v)]);
         std::sort(image.begin(), image.end());
         std::vector<mesh::NodeId> own = y.nodes;

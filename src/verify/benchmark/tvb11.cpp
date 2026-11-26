@@ -48,6 +48,7 @@ ReferenceInfo info() {
 
 std::vector<double> uniform(double length, int nodes) {
     std::vector<double> v;
+    v.reserve(nodes);
     for (int i = 0; i < nodes; ++i) v.push_back(length * i / (nodes - 1));
     return v;
 }

@@ -62,7 +62,7 @@ void NewDeviceDialog::PanelHost::dimensions_edited(const std::string& text) {
 // A value the build refuses is not written: the build's message on the row.
 std::string NewDeviceDialog::PanelHost::dimensions_refuse(const std::string& text) { return devices::thumbnail(text).error; }
 
-NewDeviceDialog::NewDeviceDialog(HWND owner, Host& host, std::vector<devices::Family> families, fs::path folder, int dpi,
+NewDeviceDialog::NewDeviceDialog(HWND owner, Host& host, std::vector<devices::Family> families, const fs::path& folder, int dpi,
                                  HFONT font, HFONT bold)
     : owner_(owner), host_(host), families_(std::move(families)), dpi_(dpi), font_(font), bold_(bold) {
     win32::register_class(dialog_class, proc, GetSysColorBrush(COLOR_BTNFACE));

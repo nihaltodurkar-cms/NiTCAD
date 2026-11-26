@@ -1694,7 +1694,7 @@ void MainWindow::refresh() {
         for (const std::string& r : s.hidden) key += "|" + r;
         if (!s.film || key != film_key_) {
             auto film = film_scale(*workspace_, s);
-            s.film = film ? std::optional<Film>(std::move(*film)) : std::nullopt;
+            s.film = film ? std::optional<Film>(*film) : std::nullopt;
             film_key_ = std::move(key);
         }
     } else {
@@ -3447,6 +3447,7 @@ void MainWindow::cut_at(float x, float y) {
     }
     // To the nanometre, as typed.
     std::vector<double> at;
+    at.reserve(workspace_->device->mesh().dimension());
     for (int k = 0; k < workspace_->device->mesh().dimension(); ++k) {
         at.push_back(std::round((*p)[static_cast<std::size_t>(k)] * 1e3) / 1e3);
     }

@@ -131,7 +131,7 @@ std::expected<std::vector<Dimension>, std::string> read_dimensions(std::string_v
     for (const deck::Entry& e : s->entries) {
         for (; scanned < e.line - 1; ++scanned) {
             const std::string_view l = trim(lines[static_cast<std::size_t>(scanned)]);
-            if (l.starts_with("#")) {
+            if (l.starts_with('#')) {
                 const std::string_view c = trim(l.substr(1));
                 if (c.starts_with("group:")) group = std::string(trim(c.substr(6)));
             }
@@ -382,7 +382,7 @@ std::expected<std::string, std::string> substituted_text(std::string_view deck_t
         for (const deck::Entry& e : s.entries) {
             if (e.value.find('$') == std::string::npos) continue;
             const auto at = static_cast<std::size_t>(e.line - 1);
-            if (trim(lines[at]).ends_with("\\")) return std::unexpected("line " + std::to_string(e.line) + ": a continued line with references");
+            if (trim(lines[at]).ends_with('\\')) return std::unexpected("line " + std::to_string(e.line) + ": a continued line with references");
             const auto v = deck::substitute(e.value, *params);
             if (!v) return std::unexpected("line " + std::to_string(e.line) + ": " + v.error());
             edited[at] = with_value(lines[at], *v);

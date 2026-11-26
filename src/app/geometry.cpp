@@ -1333,7 +1333,7 @@ Problem locate_problem(const Geometry& g, std::string_view text, int line, std::
                         if (static_cast<int>(k) != out.markers[m].contact && overlapping(p, g.contacts[k])) add_contact(static_cast<int>(k));
                     }
                 }
-            } else if (out.message.find("(") == std::string::npos) {
+            } else if (out.message.find('(') == std::string::npos) {
                 out.markers.push_back({Marker::Kind::domain, {}, -1, {}});
             }
         }

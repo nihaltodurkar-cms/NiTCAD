@@ -484,6 +484,7 @@ void AmgBackend::set_scales(std::span<const double> rows, std::span<const double
 
 std::vector<std::size_t> AmgBackend::level_sizes() const {
     std::vector<std::size_t> sizes;
+    sizes.reserve(levels_.size());
     for (const Level& level : levels_) sizes.push_back(level.a.rows);
     return sizes;
 }

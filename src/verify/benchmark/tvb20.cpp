@@ -193,6 +193,7 @@ std::expected<Values, std::string> solve_level(double L, int m, double tol) {
     for (std::size_t k = 0; k < std::size(drains); ++k) {
         const std::vector<double> gates = sweep_gates(k);
         std::vector<std::vector<double>> points;
+        points.reserve(gates.size());
         for (const double vg : gates) points.push_back({0.0, drains[k], 0.0, vg});
         const auto s = solve::sweep_bias(d, points, options(tol));
         const std::string at = "L = " + shortest(L) + " cm, refinement " + std::to_string(m) + ", V_D " +

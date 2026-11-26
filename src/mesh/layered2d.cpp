@@ -406,6 +406,7 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
     };
     const auto points_of = [&](const std::vector<std::size_t>& loop) {
         std::vector<Point> p;
+        p.reserve(loop.size());
         for (const std::size_t h : loop) p.push_back(pts[from(h)]);
         return p;
     };
@@ -480,6 +481,7 @@ std::expected<Geometry2D, base::Error> general_partition(const LayeredGeometry2D
             // Bridge ends: the hole's corners, and the corners of the part's other loops (with their loop: both
             // bridges reach one loop, so the two divide the part).
             std::vector<std::vector<Point>> part_pts;
+            part_pts.reserve(part.size());
             for (const std::size_t k : part) part_pts.push_back(points_of(mine[k]));
             std::vector<std::size_t> starts;
             std::vector<std::pair<std::size_t, std::size_t>> ends;  // vertex, loop (its index in `part`)

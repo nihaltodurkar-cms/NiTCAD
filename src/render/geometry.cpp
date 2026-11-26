@@ -390,7 +390,7 @@ std::vector<std::vector<Point>> outside_box(std::span<const Point> polygon, cons
 std::vector<Polygon> Geometry::clipped_surface(const Box& box) const {
     std::vector<Polygon> out;
     if (dimension() != 3 || element_count() == 0) return out;
-    const auto with_interpolants = [&](std::vector<Point> pts, std::size_t element) {
+    const auto with_interpolants = [&](const std::vector<Point>& pts, std::size_t element) {
         Polygon p;
         p.element = element;
         for (const Point& x : pts) p.vertices.push_back({x, interpolant(element, x)});
@@ -399,8 +399,9 @@ std::vector<Polygon> Geometry::clipped_surface(const Box& box) const {
     // The boundary's parts outside the box.
     for (const Polygon& f : boundary_faces()) {
         std::vector<Point> pts;
+        pts.reserve(f.vertices.size());
         for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
-        for (auto& part : outside_box(pts, box)) out.push_back(with_interpolants(std::move(part), f.element));
+        for (auto& part : outside_box(pts, box)) out.push_back(with_interpolants(part, f.element));
     }
     // The cut faces: on each box face strictly inside the mesh's bounding box.
     const auto points = mesh_->points();
@@ -419,6 +420,7 @@ std::vector<Polygon> Geometry::clipped_surface(const Box& box) const {
             plane.offset = upper ? -at : at;
             for (const Polygon& s : slice(plane)) {
                 std::vector<Point> pts;
+                pts.reserve(s.vertices.size());
                 for (const SurfaceVertex& v : s.vertices) pts.push_back(v.position);
                 const double whole = measure(pts);
                 for (std::size_t b = 0; b < 3 && pts.size() >= 3; ++b) {
@@ -426,7 +428,7 @@ std::vector<Polygon> Geometry::clipped_surface(const Box& box) const {
                     pts = clip(pts, [&](const Point& p) { return p[b] - box.lo[b]; }, mix);
                     pts = clip(pts, [&](const Point& p) { return box.hi[b] - p[b]; }, mix);
                 }
-                if (pts.size() >= 3 && measure(pts) > 1e-12 * whole) out.push_back(with_interpolants(std::move(pts), s.element));
+                if (pts.size() >= 3 && measure(pts) > 1e-12 * whole) out.push_back(with_interpolants(pts, s.element));
             }
         }
     }
@@ -474,6 +476,7 @@ std::vector<std::vector<Geometry::RegionFace>> Geometry::region_surfaces(
 std::vector<OwnedPolygon> Geometry::owner_pieces(const Polygon& polygon) const {
     std::vector<OwnedPolygon> out;
     std::vector<Point> pts;
+    pts.reserve(polygon.vertices.size());
     for (const SurfaceVertex& s : polygon.vertices) pts.push_back(s.position);
     const double whole = measure(pts);
     if (whole == 0.0) return out;
@@ -528,6 +531,7 @@ std::vector<OwnedPolygon> Geometry::owner_pieces(const Polygon& polygon) const {
         Bary l;
     };
     std::vector<BV> start;
+    start.reserve(pts.size());
     for (const Point& x : pts) start.push_back({x, bary(x)});
     const auto bmix = [](const BV& a, const BV& b, double t) {
         BV r{lerp(a.x, b.x, t), {}};
@@ -541,6 +545,7 @@ std::vector<OwnedPolygon> Geometry::owner_pieces(const Polygon& polygon) const {
             piece = clip(piece, [&](const BV& b) { return b.l[q] - b.l[j]; }, bmix);
         }
         std::vector<Point> xs;
+        xs.reserve(piece.size());
         for (const BV& b : piece) xs.push_back(b.x);
         if (xs.size() >= 2 && measure(xs) > tiny) out.push_back({std::move(xs), v[q]});
     }

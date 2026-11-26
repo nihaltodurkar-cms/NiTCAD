@@ -95,6 +95,7 @@ ReferenceInfo info() {
 std::vector<double> graded(int N) {
     std::vector<double> x;
     const double scale = depth_cm / std::expm1(grading);
+    x.reserve(N);
     for (int k = 0; k < N; ++k) x.push_back(k == N - 1 ? depth_cm : scale * std::expm1(grading * k / (N - 1)));
     return x;
 }

@@ -49,12 +49,14 @@ std::vector<std::int64_t> ints(std::initializer_list<std::uint64_t> v) {
 
 std::vector<std::int64_t> ints(const std::vector<std::uint64_t>& v) {
     std::vector<std::int64_t> out;
+    out.reserve(v.size());
     for (const std::uint64_t x : v) out.push_back(static_cast<std::int64_t>(x));
     return out;
 }
 
 std::vector<std::uint64_t> unsigned_of(const std::vector<std::int64_t>& v) {
     std::vector<std::uint64_t> out;
+    out.reserve(v.size());
     for (const std::int64_t x : v) out.push_back(static_cast<std::uint64_t>(x));
     return out;
 }

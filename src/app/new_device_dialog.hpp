@@ -27,7 +27,7 @@ public:
         ~Host() = default;
     };
 
-    NewDeviceDialog(HWND owner, Host& host, std::vector<devices::Family> families, std::filesystem::path folder, int dpi,
+    NewDeviceDialog(HWND owner, Host& host, std::vector<devices::Family> families, const std::filesystem::path& folder, int dpi,
                     HFONT font, HFONT bold);
     ~NewDeviceDialog();
     NewDeviceDialog(const NewDeviceDialog&) = delete;
