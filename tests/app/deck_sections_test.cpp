@@ -24,14 +24,14 @@ std::string fingerprint(const deck::Plan& p) {
     const auto& l = p.options.linear;
     const auto& t = p.transient;
     return std::format(
-        "T {} mesh {:x} | models {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} | newton {} {} {} {} {} {} {} {} | "
+        "T {} mesh {:x} | models {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} | newton {} {} {} {} {} {} {} {} | "
         "steps {} {} {} | linear {} {} {} {} {} {} {} {} {} {} {} | pc {} {} {} {} {} | "
         "eq {} w {} r {} | tr {} {} {} {} {}",
         p.device.temperature_K(), mesh::graph_digest(p.device.mesh()), m.doping_mobility,
         static_cast<int>(m.hole_mobility), static_cast<int>(m.electron_mobility), m.srh, m.auger, m.bgn,
         m.field_mobility, m.fermi_dirac, m.radiative, m.incomplete_ionization, static_cast<int>(m.ionization_levels),
         m.impact_ionization, m.impact_current_resolution, m.btbt_local, static_cast<int>(m.btbt_nonlocal),
-        m.electrothermal, n.max_iterations, n.tol_update, n.max_update, n.line_search.enabled,
+        static_cast<int>(m.trap_assisted_tunnelling), m.tat_mass_n, m.tat_mass_p, m.electrothermal, n.max_iterations, n.tol_update, n.max_update, n.line_search.enabled,
         n.line_search.max_backtracks, n.line_search.sufficient_decrease, static_cast<int>(n.line_search.test),
         static_cast<int>(n.line_search.norm),
         s.max_cuts, s.growth, s.max_iterations, static_cast<int>(l.backend), l.threads, l.equilibrate,

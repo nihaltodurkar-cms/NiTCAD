@@ -8,11 +8,13 @@
 // A window from_V to to_V holds the points curve.hpp slice would take; they must be consecutive.
 #pragma once
 
+#include <cstddef>
 #include <expected>
 #include <vector>
 
 #include "NiTCAD/analysis/curve.hpp"
 #include "NiTCAD/base/error.hpp"
+#include "NiTCAD/results/transient.hpp"
 
 namespace NiTCAD::analysis {
 
@@ -103,5 +105,12 @@ struct SeriesResistanceFit {
 // through the extreme point and its neighbours when ln |I| rises (or falls) strictly through them
 // and the vertex lies between them; else the extreme point itself. Errors: the bias never turns.
 [[nodiscard]] std::expected<Extraction, base::Error> turning_point(const Curve& curve);
+
+// The charge collected by contact `contact` over a transient run (Unit 65, HD8; the single-event
+// figure of merit): the integral of I_c(t) - I_c(0) over the accepted points by the trapezoid rule,
+// in C / cm^(3-D) (terminal currents include the displacement current). One value per point, the
+// first 0. Errors: no points; the contact out of range.
+[[nodiscard]] std::expected<std::vector<double>, base::Error> collected_charge(const results::Transient& run,
+                                                                              std::size_t contact);
 
 }  // namespace NiTCAD::analysis

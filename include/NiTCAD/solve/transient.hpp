@@ -42,6 +42,7 @@
 
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
+#include "NiTCAD/physics/heavy_ion.hpp"
 #include "NiTCAD/results/run.hpp"
 #include "NiTCAD/results/solution.hpp"
 #include "NiTCAD/results/transient.hpp"
@@ -69,6 +70,11 @@ struct TransientOptions {
     // them. With fields_every_step, every accepted step keeps one.
     std::vector<double> output_times_s;
     bool fields_every_step = false;
+    // Heavy-ion tracks (Unit 65; DECISIONS.md HD1-HD10; physics/heavy_ion.hpp): pair generation
+    // along each track. Steps land on t0 - 4 sigma, t0 and t0 + 4 sigma of every track and restart
+    // there, and no step inside [t0 - 4 sigma, t0 + 4 sigma] exceeds sigma / 4 (HD5). Empty (the
+    // default): every result and run identity is that of a build without them.
+    std::vector<physics::HeavyIonTrack> heavy_ions;
 };
 
 // Errors, before anything is solved (invalid_input unless noted): waveforms not one per contact; a

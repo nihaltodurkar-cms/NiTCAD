@@ -79,6 +79,7 @@ TEST_CASE("doping profiles: refusals", "[device][doping]") {
     CHECK(code({.peak_cm3 = 1, .axis = 1}) == ErrorCode::invalid_input);  // a 1D mesh has only x
     CHECK(code({.peak_cm3 = 1, .shape = DepthShape::gaussian, .width = 0}) == ErrorCode::invalid_input);
     CHECK(code({.peak_cm3 = 1, .lateral = -1}) == ErrorCode::invalid_input);
+// Unit 67 TAC8: a Gaussian or erfc window on its own depth axis is refused, no longer dropped.    DopingProfile gw{.peak_cm3 = 1, .shape = DepthShape::gaussian, .width = 1e-6};    gw.lo[0] = 0.0;    CHECK(code(gw) == ErrorCode::invalid_input);    gw.shape = DepthShape::constant;    CHECK(code(gw) == ErrorCode::cancelled);  // a constant's window on any axis is accepted
     DopingProfile w{.peak_cm3 = 1};
     w.lo[0] = 2;
     w.hi[0] = 1;
@@ -86,4 +87,30 @@ TEST_CASE("doping profiles: refusals", "[device][doping]") {
     const std::vector<DopingProfile> ok{{.peak_cm3 = 1}};
     CHECK_FALSE(sample(ok, m, std::vector<RegionId>{0}, regions).has_value());
     CHECK_FALSE(sample(ok, m, std::vector<RegionId>{0, 5}, regions).has_value());
+}
+
+TEST_CASE("doping profiles: a constant is bounded on its depth axis too, a 1D step (Unit 67 TAC8)",
+          "[device][doping]") {
+    // Two constants windowed on x, the default depth axis: the 1D abrupt junction. Before Unit 67
+    // the depth axis's window was dropped and both covered the whole line (a compensated resistor).
+    const std::vector<double> x{0.0, 0.5e-4, 1e-4, 1.5e-4, 2e-4};
+    const auto m = *NiTCAD::mesh::make_tensor_grid(x);
+    const std::vector<Region> regions{{"silicon", NiTCAD::physics::silicon()}};
+    const std::vector<RegionId> nodes(x.size(), 0);
+    DopingProfile a{.dopant = Dopant::acceptor, .peak_cm3 = 1e17};
+    a.lo[0] = -1.0;
+    a.hi[0] = 1e-4;
+    DopingProfile d{.dopant = Dopant::donor, .peak_cm3 = 1e17};
+    d.lo[0] = 1e-4;
+    d.hi[0] = 3e-4;
+    const std::vector<DopingProfile> v{a, d};
+    const auto s = sample(v, m, nodes, regions);
+    REQUIRE(s.has_value());
+    CHECK(s->acceptors == std::vector<double>{1e17, 1e17, 0.5e17, 0.0, 0.0});
+    CHECK(s->donors == std::vector<double>{0.0, 0.0, 0.5e17, 1e17, 1e17});
+    // A Gaussian keeps its window on the other axes only (unchanged).
+    DopingProfile g{.peak_cm3 = 1e18, .shape = DepthShape::gaussian, .axis = 1, .center = 0.0, .width = 1e-5};
+    g.hi[0] = 1e-4;
+    CHECK(evaluate(g, {2e-4, 0, 0}) == 0.0);
+    CHECK(evaluate(g, {0.5e-4, 0, 0}) == 1e18);
 }

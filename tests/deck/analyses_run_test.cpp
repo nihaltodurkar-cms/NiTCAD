@@ -25,6 +25,7 @@
 
 using namespace NiTCAD;
 using deck_test::diode_device;
+using deck_test::compensated_device;
 using deck_test::hand_diode;
 using deck_test::must;
 using deck_test::scratch;
@@ -191,7 +192,7 @@ table = ac.csv
 TEST_CASE("deck run: a [trace] deck equals trace_bias; its files and table", "[deck]") {
     const fs::path dir = scratch("run_trace");
     // A solver option too, so the trace is seen to run with the plan's options as its steady ones.
-    const deck::Plan plan = must(diode_device + R"(
+    const deck::Plan plan = must(compensated_device + R"(
 [solver]
 tol_update = 1e-12
 [trace]
@@ -218,7 +219,7 @@ table = tr.csv
     o.step_V = 0.05;
     o.max_step_V = 0.1;
     o.steady.newton.tol_update = 1e-12;
-    const auto hand = solve::trace_bias(hand_diode(), o);
+    const auto hand = solve::trace_bias(hand_diode(true), o);
     REQUIRE(hand.has_value());
     CHECK(s.run.input_identity == hand->run.input_identity);
     REQUIRE(s.points.size() == hand->points.size());

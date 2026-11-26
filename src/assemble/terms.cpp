@@ -298,6 +298,96 @@ public:
     }
 };
 
+// SRH with Hurkx trap-assisted tunnelling (Unit 67, TAD4): in place of Srh with the model on.
+// Each lifetime over 1 + Gamma_c(F), F = |E| of the node's field by least squares from its edges
+// (as LocalTunnelling), a_n = ln(Nc / n_ie), a_p = ln(Nv / n_ie):
+//     R = (n p - E) / [tau_p'(n + n_ie) + tau_n'(p + n_ie)],   tau_c' = tau_c / (1 + Gamma_c),
+//     dR/dGamma_n = R tau_n (p + n_ie) / ((1 + Gamma_n)^2 den), likewise for holes,
+// and dR/dpsi through dGamma/dF E_r / F and the edges' psi. Nodes off the table (contacts, no
+// carrier edges) and zero-field nodes are plain SRH.
+class SystemData::Terms::TrapTunnellingSrh final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"SRH recombination (trap-assisted tunnelling)", TermDomain::global, densities,
+                all3, false};
+    }
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
+        const std::size_t m = s.m_;
+        const std::span<const double> x = ev.x;
+        const int D = s.dimension_;
+        const double T = s.temperature_K_;
+        for (std::size_t i = 0; i < s.node_count(); ++i) {
+            if (!semiconductor(s, i)) continue;
+            const double n = x[m * i + 1], p = x[m * i + 2];
+            const double k = s.volume_[i] * s.rate_scale_;
+            const std::size_t t = s.trap_index_[i];
+            const TrapNode* node = t < s.trap_nodes_.size() ? &s.trap_nodes_[t] : nullptr;
+            double E[3] = {}, F = 0.0;
+            if (node != nullptr) {
+                for (std::size_t q = node->first; q < node->last; ++q) {
+                    const FieldEdge& fe = s.field_edges_[q];
+                    const EdgeTerm& e = s.edges_[fe.edge];
+                    const double Ek = -fe.field * (x[m * e.b] - x[m * e.a]);
+                    for (int r = 0; r < D; ++r) {
+                        double w = 0.0;  // (P t_k)_r
+                        for (int c = 0; c < D; ++c) w += node->inverse[r * D + c] * fe.t[c];
+                        E[r] += w * Ek;
+                    }
+                }
+                double F2 = 0.0;
+                for (int r = 0; r < D; ++r) F2 += E[r] * E[r];
+                F = std::sqrt(F2);
+            }
+            physics::TrapTunnellingFactor gn{0.0, 0.0}, gp{0.0, 0.0};
+            if (F > 0.0) {
+                if (s.log_dos_n_[i] > 0.0) {
+                    gn = physics::hurkx_enhancement(s.log_dos_n_[i], s.tat_mass_n_, T, F);
+                }
+                if (s.log_dos_p_[i] > 0.0) {
+                    gp = physics::hurkx_enhancement(s.log_dos_p_[i], s.tat_mass_p_, T, F);
+                }
+            }
+            const double tn = s.tau_n_[i] / (1.0 + gn.gamma);
+            const double tp = s.tau_p_[i] / (1.0 + gp.gamma);
+            const physics::RecombinationRate r =
+                physics::srh_recombination(n, p, product(s, ev, i), s.n_ie_[i], tn, tp);
+            ev.f[m * i + 1] -= k * r.rate;
+            ev.f[m * i + 2] += k * r.rate;
+            if (!ev.jacobian()) continue;
+            at(s, ev, i, 1, 1) -= k * r.d_dn;
+            at(s, ev, i, 1, 2) -= k * r.d_dp;
+            at(s, ev, i, 2, 1) += k * r.d_dn;
+            at(s, ev, i, 2, 2) += k * r.d_dp;
+            if (node == nullptr || F == 0.0 || (gn.d_dF == 0.0 && gp.d_dF == 0.0)) continue;
+            const double ni = s.n_ie_[i];
+            const double den = tp * (n + ni) + tn * (p + ni);
+            const double dR_dF =
+                r.rate / den *
+                (tn * (p + ni) / (1.0 + gn.gamma) * gn.d_dF +
+                 tp * (n + ni) / (1.0 + gp.gamma) * gp.d_dF);
+            const std::span<double> values = ev.values;
+            for (std::size_t q = node->first; q < node->last; ++q) {
+                const FieldEdge& fe = s.field_edges_[q];
+                const EdgeTerm& e = s.edges_[fe.edge];
+                double dEk = 0.0;  // dR / dE_k
+                for (int r2 = 0; r2 < D; ++r2) {
+                    double w = 0.0;
+                    for (int c = 0; c < D; ++c) w += node->inverse[r2 * D + c] * fe.t[c];
+                    dEk += w * dR_dF * E[r2] / F;
+                }
+                const double d_b = -dEk * fe.field;  // dR / dpsi_b; dR / dpsi_a = -d_b
+                const bool i_is_a = e.a == i;
+                const std::size_t* pos = i_is_a ? e.ab : e.ba;  // row i, the other end's psi column
+                const double own = i_is_a ? -d_b : d_b, other = i_is_a ? d_b : -d_b;
+                values[s.block_[m * m * i + m]] -= k * own;      // (n, psi) of i
+                values[s.block_[m * m * i + 2 * m]] += k * own;  // (p, psi) of i
+                values[pos[1]] -= k * other;                     // (n, psi) of the other end
+                values[pos[3]] += k * other;                     // (p, psi) of the other end
+            }
+        }
+    }
+};
+
 // Auger recombination (physical densities, add_physical).
 class SystemData::Terms::Auger final : public Term {
 public:
@@ -421,6 +511,41 @@ public:
                 ev.f[m * i + 1] += V * ((w * ms.electron_generation[i]) * to_rate);
             }
             if (!ms.hole_generation.empty()) ev.f[m * i + 2] -= V * ((w * ms.hole_generation[i]) * to_rate);
+        }
+    }
+};
+
+// Heavy-ion pair generation (Unit 65; DECISIONS.md HD2, HD3): +V G/R0 in the electron row and
+// -V G/R0 in the hole row of every semiconductor node off the ohmic contacts, G the sum over the
+// tracks of their pairs at the node times the step average of their time profile over
+// [start_time_s, time_s], so the charge each track puts in over a run is its exact integral
+// whatever the steps. Only in time steps; independent of the state: no Jacobian entries.
+class SystemData::Terms::HeavyIons final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"heavy-ion generation", TermDomain::nodes, densities, {}, false};  // no partials
+    }
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
+        if (ev.step == nullptr) return;
+        const double h = ev.step->time_s - ev.step->start_time_s;
+        if (!(h > 0.0)) return;
+        std::vector<double> average;  // per track [1/s]
+        bool any = false;
+        for (const physics::HeavyIonTrack& t : s.heavy_ion_tracks_) {
+            average.push_back(physics::heavy_ion_time_fraction(t, ev.step->start_time_s, ev.step->time_s) / h);
+            any = any || average.back() != 0.0;
+        }
+        if (!any) return;
+        const std::size_t m = s.m_;
+        const double to_rate = s.rate_scale_ / s.Ns_;  // 1 / R0
+        for (std::size_t i = 0; i < s.node_count(); ++i) {
+            if (!semiconductor(s, i)) continue;
+            double G = 0.0;
+            for (std::size_t k = 0; k < average.size(); ++k) G += s.heavy_ion_pairs_[k][i] * average[k];
+            if (G == 0.0) continue;
+            const double V = s.volume_[i];
+            ev.f[m * i + 1] += V * (G * to_rate);
+            ev.f[m * i + 2] -= V * (G * to_rate);
         }
     }
 };
@@ -616,11 +741,24 @@ public:
     }
     // Lombardi (Unit 46): the continuity rows of both ends with the psi columns of the edge's
     // E_perp stencil; none without the model.
+    // Unit 66 (KD5): with the carrier-dependent Klaassen mobility, each end's continuity rows with
+    // the other end's other-carrier column (electron row - p, hole row - n).
     void pattern(const SystemData& s, const SystemState&,
                  std::vector<linalg::Triplet>& t) const override {
         surface_pattern(s, t, 2);
+        if (!s.klaassen_carriers_) return;
+        const std::size_t m = s.m_;
+        for (const EdgeTerm& e : s.edges_) {
+            if (e.charged || !e.carriers || e.thermionic) continue;
+            for (const auto [r, c] : {std::pair{e.a, e.b}, std::pair{e.b, e.a}}) {
+                t.push_back({static_cast<linalg::Index>(m * r + 1),
+                             static_cast<linalg::Index>(m * c + 2), 0.0});
+                t.push_back({static_cast<linalg::Index>(m * r + 2),
+                             static_cast<linalg::Index>(m * c + 1), 0.0});
+            }
+        }
     }
-    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
@@ -642,6 +780,24 @@ public:
                         values[j.pos[1][0]] -= slope.n * w;
                         values[j.pos[1][1]] -= slope.p * w;
                     }
+                }
+            }
+            if (jacobian && s.klaassen_carriers_ && !e.thermionic) {
+                // Unit 66: the other carrier's partials (+ at a, - at b).
+                const auto cross = [&](std::size_t row, std::size_t col) -> double& {
+                    return values[detail::position(st.pattern_, row, col)];
+                };
+                if (s.contact_[a] < 0) {
+                    at(s, ev, a, 1, 2) += fn.d_other1;
+                    cross(m * a + 1, m * b + 2) += fn.d_other2;
+                    at(s, ev, a, 2, 1) += fp.d_other1;
+                    cross(m * a + 2, m * b + 1) += fp.d_other2;
+                }
+                if (s.contact_[b] < 0) {
+                    cross(m * b + 1, m * a + 2) -= fn.d_other1;
+                    at(s, ev, b, 1, 2) -= fn.d_other2;
+                    cross(m * b + 2, m * a + 1) -= fp.d_other1;
+                    at(s, ev, b, 2, 1) -= fp.d_other2;
                 }
             }
             if (s.contact_[a] < 0) {
@@ -1090,8 +1246,16 @@ std::span<const CompositionEntry> SystemData::Terms::isothermal_table() {
          [](const SystemData&, const SystemState&, M m) { return m.incomplete_ionization; },
          &make_term<Ionization>},
         {+E::gate, gated, &make_term<Gate>},
-        {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.srh; },
+        {+E::continuity,
+         [](const SystemData&, const SystemState&, M m) {
+             return m.srh && m.trap_assisted_tunnelling == TrapTunnelling::off;
+         },
          &make_term<Srh>},
+        {+E::continuity,
+         [](const SystemData&, const SystemState&, M m) {
+             return m.srh && m.trap_assisted_tunnelling != TrapTunnelling::off;
+         },
+         &make_term<TrapTunnellingSrh>},
         {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.auger; },
          &make_term<Auger>},
         {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.radiative; },
@@ -1100,6 +1264,11 @@ std::span<const CompositionEntry> SystemData::Terms::isothermal_table() {
         {E::poisson | E::continuity,
          [](const SystemData&, const SystemState&, M m) { return m.manufactured != nullptr; },
          &make_term<Manufactured>},
+        {+E::continuity,
+         [](const SystemData&, const SystemState&, M m) {
+             return m.heavy_ions != nullptr && !m.heavy_ions->empty();
+         },
+         &make_term<HeavyIons>},
         {+E::energy, [](const SystemData&, const SystemState&, M m) { return m.energy_balance; },
          &energy_rows},
         {+E::interfaces, interfaces, &make_term<Interfaces>},

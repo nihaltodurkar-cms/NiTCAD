@@ -709,6 +709,8 @@ std::vector<std::string> available_fields(const Workspace& w) {
                 !field_values(*w.device, *last, f).has_value()) {
                 continue;
             }
+            // Unit 65: the heavy-ion generation only in a transient with tracks.
+            if (f == Field::heavy_ion_generation && !field_values(*w.device, *last, f).has_value()) continue;
         }
         out.emplace_back(field_info(f).key);
     }

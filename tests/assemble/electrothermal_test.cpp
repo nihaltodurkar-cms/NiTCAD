@@ -71,14 +71,20 @@ struct Options {
     bool interface = false;   // with oxide: silicon-oxide fixed charge and surface recombination
     bool traps = false;       // with interface: an interface trap level too (refused, T8)
     bool ionization = false;  // incomplete ionization (the models)
+    bool klaassen = false;    // Unit 66: klaassen_equilibrium for both carriers (the models)
 };
 
 // The models of the fixture's options, with or without the electrothermal model.
 assemble::PhysicsModels models(const Options& o, bool thermal = true) {
-    return {.field_mobility = o.field,
-            .fermi_dirac = o.fermi,
-            .incomplete_ionization = o.ionization,
-            .electrothermal = thermal};
+    assemble::PhysicsModels m{.field_mobility = o.field,
+                              .fermi_dirac = o.fermi,
+                              .incomplete_ionization = o.ionization,
+                              .electrothermal = thermal};
+    if (o.klaassen) {
+        m.hole_mobility = assemble::HoleMobility::klaassen_equilibrium;
+        m.electron_mobility = assemble::ElectronMobility::klaassen_equilibrium;
+    }
+    return m;
 }
 
 // The biases of the fixture's contacts: anode, cathode, and the gate or electrode.
@@ -333,7 +339,9 @@ TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate") {
          "2D p-polysilicon electrode"},
         {{.D = 2, .nodes = 9, .oxide = true, .interface = true}, "2D interface"},
         {{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true},
-         "2D interface, Fermi-Dirac"}};
+         "2D interface, Fermi-Dirac"},
+        {{.D = 1, .ionization = false, .klaassen = true}, "1D Klaassen (Unit 66, KC6)"},
+        {{.D = 2, .nodes = 9, .field = true, .klaassen = true}, "2D Klaassen, field mobility"}};
     for (const Case& c : cases) {
         const device::Device d = diode(c.o);
         const auto s = *assemble::make_scaling(d);

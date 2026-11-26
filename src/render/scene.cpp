@@ -588,6 +588,7 @@ FieldInfo field_info(Field f) noexcept {
         case Field::quantum_potential_p: return {"Lp", "\xCE\x9Bp (eV)", ScaleKind::linear};
         case Field::effective_conduction_band: return {"Ec_eff", "Ec + \xCE\x9Bn (eV)", ScaleKind::linear};
         case Field::effective_valence_band: return {"Ev_eff", "Ev \xE2\x88\x92 \xCE\x9Bp (eV)", ScaleKind::linear};
+        case Field::heavy_ion_generation: return {"Gion", "G heavy ion (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::log10};
     }
     return {"?", "?", ScaleKind::linear};
 }
@@ -688,6 +689,17 @@ std::expected<std::vector<double>, base::Error> field_values(const device::Devic
             if (l.size() != n) return take(l);
             for (std::size_t i = 0; i < n; ++i) (*band)[i] += electrons ? l[i] : -l[i];
             return band;
+        }
+        case Field::heavy_ion_generation: {  // Unit 65: stored as a rate (-G)
+            const std::vector<double>& r = point.rates.heavy_ion;
+            if (r.empty()) {
+                return std::unexpected(invalid("the result holds no Gion (a transient snapshot with "
+                                               "[heavy_ion] tracks)"));
+            }
+            auto g = take(r);
+            if (!g) return g;
+            for (double& v : *g) v = v == 0.0 ? 0.0 : -v;
+            return g;
         }
     }
     return std::unexpected(invalid("unknown field"));

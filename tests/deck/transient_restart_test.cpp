@@ -28,6 +28,7 @@
 
 using namespace NiTCAD;
 using deck_test::diode_device;
+using deck_test::compensated_device;
 using deck_test::must;
 using deck_test::scratch;
 namespace fs = std::filesystem;
@@ -291,17 +292,17 @@ TEST_CASE("deck trace restart: a stopped trace continued equals the uninterrupte
 TEST_CASE("deck small-signal restart: the remaining points equal the uninterrupted run's (RG6)", "[deck][restart]") {
     const fs::path dir = scratch("small_signal_restart");
     const std::string ac = "[small_signal]\ncontact anode = 0 : 0.4 : 0.1\nfrequencies = 1MHz, 1GHz\n";
-    const auto full = deck::run(must(diode_device + ac, dir));
+    const auto full = deck::run(must(compensated_device + ac, dir));
     if (!full) FAIL(full.error().message);
     const auto& f = *full->small_signal;
     REQUIRE(f.points.size() == 5);
     const auto close = [](double a, double b) { return std::abs(a - b) <= 1e-9 * std::max(std::abs(a), std::abs(b)) + 1e-30; };
-    REQUIRE(deck::run(must(diode_device + "[sweep]\ncontact anode = 0 : 0.2 : 0.1\n[output]\ncheckpoint = sweep.nitckpt\n", dir)));
-    REQUIRE(deck::run(must(diode_device + "[small_signal]\ncontact anode = 0 : 0.2 : 0.1\nfrequencies = 1MHz\n"
+    REQUIRE(deck::run(must(compensated_device + "[sweep]\ncontact anode = 0 : 0.2 : 0.1\n[output]\ncheckpoint = sweep.nitckpt\n", dir)));
+    REQUIRE(deck::run(must(compensated_device + "[small_signal]\ncontact anode = 0 : 0.2 : 0.1\nfrequencies = 1MHz\n"
                            "[output]\ncheckpoint = ac.nitckpt\n", dir)));
     for (const std::string checkpoint : {"sweep.nitckpt", "ac.nitckpt"}) {
         INFO(checkpoint);
-        const auto rest = deck::run(must(diode_device + ac + "restart = " + checkpoint + "\n", dir));
+        const auto rest = deck::run(must(compensated_device + ac + "restart = " + checkpoint + "\n", dir));
         if (!rest) FAIL(rest.error().message);
         CHECK(rest->skipped_points == 3);
         const auto& r = *rest->small_signal;
@@ -323,11 +324,11 @@ TEST_CASE("deck small-signal restart: the remaining points equal the uninterrupt
             }
         }
     }
-    REQUIRE(deck::run(must(diode_device + "[sweep]\ncontact anode = 0 : 0.4 : 0.1\n[output]\ncheckpoint = last.nitckpt\n", dir)));
-    REQUIRE(deck::run(must(diode_device + "[sweep]\ncontact anode = 0.05\n[output]\ncheckpoint = off.nitckpt\n", dir)));
-    REQUIRE(deck::run(must(diode_device + body + "[output]\ncheckpoint = tran.nitckpt\n", dir)));
+    REQUIRE(deck::run(must(compensated_device + "[sweep]\ncontact anode = 0 : 0.4 : 0.1\n[output]\ncheckpoint = last.nitckpt\n", dir)));
+    REQUIRE(deck::run(must(compensated_device + "[sweep]\ncontact anode = 0.05\n[output]\ncheckpoint = off.nitckpt\n", dir)));
+    REQUIRE(deck::run(must(compensated_device + body + "[output]\ncheckpoint = tran.nitckpt\n", dir)));
     const auto refused = [&](const std::string& file, const std::string& what) {
-        const auto r = deck::run(must(diode_device + ac + "restart = " + file + "\n", dir));
+        const auto r = deck::run(must(compensated_device + ac + "restart = " + file + "\n", dir));
         REQUIRE_FALSE(r.has_value());
         INFO(r.error().message);
         CHECK(r.error().message.find(what) != std::string::npos);
