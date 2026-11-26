@@ -1,4 +1,4 @@
-# SOI MOSFET (2D)
+# SOI MOSFET (FD-SOI, 2D)
 # A fully depleted silicon-on-insulator n-MOSFET in cross-section: the transfer curve Id-Vg at 50 mV.
 #
 # A thin p-type silicon film on a buried oxide, under a thin gate oxide; n+ source and drain (Gaussians from the

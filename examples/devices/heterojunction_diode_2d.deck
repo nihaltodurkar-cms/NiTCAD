@@ -1,0 +1,58 @@
+# Heterojunction diode (2D)
+# A p-AlGaAs / n-GaAs heterojunction diode in cross-section: forward I-V across a band-offset junction.
+#
+# A p-type Al(x)Ga(1-x)As layer on an n-type GaAs layer, the junction at the material interface. The wider AlGaAs
+# gap gives conduction- and valence-band offsets there, so holes are injected into the GaAs far more easily than
+# electrons into the AlGaAs: the injection efficiency of heterojunction bipolar transistors and lasers. Carriers
+# cross the interface by thermionic emission. Change a dimension in the Geometry tab's panel; run it (F5), then
+# look at the band diagram (Bands) and the I-V curve (Curves).
+
+[parameters]
+# group: Main
+Lp = 0.5um  # p-AlGaAs thickness
+Ln = 1um  # n-GaAs thickness
+W = 1um  # Width
+Na = 1e18  # AlGaAs acceptors (cm^-3)
+Nd = 1e17  # GaAs donors (cm^-3)
+# group: Positions (derived)
+L = $Ln + $Lp  # Depth
+
+[mesh]
+type = tensor
+x = linspace(0, $W, 11)
+y = linspace(0, $Ln, 61) + linspace($Ln, $L, 41)
+straddle y = $Ln 0.2nm
+
+[region gaas]
+material = gaas
+
+[region algaas]
+material = algaas 0.3
+box = 0 $W  $Ln $L
+
+[interface gaas algaas]
+transport = thermionic
+
+[doping]
+profile = donor constant $Nd y=0:$Ln
+profile = acceptor constant $Na y=$Ln:$L
+
+[contact cathode]
+kind = ohmic
+patch = y_min
+
+[contact anode]
+kind = ohmic
+patch = y_max
+
+[solver]
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact anode = 0 : 1.5 : 0.05
+
+[output]
+sweep = heterojunction_diode_2d.nitsweep
+device = heterojunction_diode_2d.nitdev
+table = heterojunction_diode_2d.csv

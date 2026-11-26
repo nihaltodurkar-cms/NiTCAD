@@ -1,0 +1,56 @@
+# PIN diode (1D)
+# A silicon p-i-n diode: a wide lightly doped intrinsic layer between p+ and n+ ends; forward I-V.
+#
+# A p+ anode end, an intrinsic region (lightly n-type) and an n+ cathode end, with abrupt junctions graded over a
+# few nanometres. Under forward bias the intrinsic region floods with electrons and holes (high injection), which
+# is what makes PIN diodes useful as RF switches and power rectifiers. Change a dimension in the Geometry tab's
+# panel; run it (F5), then look at the carrier densities and the I-V curve (Curves).
+
+[parameters]
+# group: Main
+Lp = 0.5um  # p+ side length
+Li = 2um  # Intrinsic region length
+Ln = 0.5um  # n+ side length
+Na = 1e19  # p+ acceptors (cm^-3)
+Nd = 1e19  # n+ donors (cm^-3)
+Ni = 1e14  # Intrinsic region donors (cm^-3)
+# group: Junctions
+wj = 20nm  # Junction grading width
+# group: Positions (derived)
+x_pi = $Lp  # p-i junction
+x_in = $Lp + $Li  # i-n junction
+L = $Lp + $Li + $Ln  # Device length
+x_lo = 0 - $L  # p+ window start (past the end)
+x_hi = $L + $L  # n+ window end (past the end)
+
+[mesh]
+type = tensor
+x = linspace(0, $x_pi, 81) + linspace($x_pi, $x_in, 161) + linspace($x_in, $L, 81)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant $Ni
+profile = acceptor constant $Na x=$x_lo:$x_pi lateral=$wj
+profile = donor constant $Nd x=$x_in:$x_hi lateral=$wj
+
+[contact anode]
+kind = ohmic
+patch = x_min
+
+[contact cathode]
+kind = ohmic
+patch = x_max
+
+[solver]
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact anode = 0 : 1.0 : 0.05
+
+[output]
+sweep = pin_diode_1d.nitsweep
+device = pin_diode_1d.nitdev
+table = pin_diode_1d.csv

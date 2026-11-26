@@ -1,0 +1,58 @@
+# Back-to-back diodes (2D)
+# Two silicon pn junctions sharing a floating p region (n+/p/n+) in cross-section: blocking in both directions
+# until the p region punches through.
+#
+# Two n+ terminals at the left and right ends with a lightly doped p region between them and no contact on it.
+# Whichever way the bias goes, one junction is reverse biased and blocks, so only leakage flows; as the bias
+# grows the reverse junction's depletion region spreads across the p region until it reaches the other junction
+# (punch-through) and the current rises steeply. A narrower or lighter p region punches through sooner. Change a
+# dimension in the Geometry tab's panel; run it (F5), then look at the I-V and the potential (Curves).
+
+[parameters]
+# group: Main
+Ln = 0.5um  # n+ terminal length (each)
+Lp = 0.6um  # p region length
+D = 0.5um  # Depth
+Nd = 1e19  # n+ donors (cm^-3)
+Na = 1e16  # p region acceptors (cm^-3)
+# group: Junctions
+wj = 10nm  # Junction grading width
+# group: Positions (derived)
+x_1 = $Ln  # Left junction
+x_2 = $Ln + $Lp  # Right junction
+L = $Ln + $Lp + $Ln  # Device length
+x_lo = 0 - $L  # Left window start (past the end)
+x_hi = $L + $L  # Right window end (past the end)
+
+[mesh]
+type = tensor
+x = linspace(0, $x_1, 21) + linspace($x_1, $x_2, 61) + linspace($x_2, $L, 21)
+y = linspace(0, $D, 11)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant $Na
+profile = donor constant $Nd x=$x_lo:$x_1 lateral=$wj
+profile = donor constant $Nd x=$x_2:$x_hi lateral=$wj
+
+[contact t1]
+kind = ohmic
+patch = x_min
+
+[contact t2]
+kind = ohmic
+patch = x_max
+
+[solver]
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact t1 = 0 : 6 : 0.2
+
+[output]
+sweep = back_to_back_diodes_2d.nitsweep
+device = back_to_back_diodes_2d.nitdev
+table = back_to_back_diodes_2d.csv

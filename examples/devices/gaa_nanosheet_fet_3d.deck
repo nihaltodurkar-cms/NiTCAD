@@ -1,0 +1,143 @@
+# GAA nanosheet FET (3D)
+# A gate-all-around n-FET with two stacked silicon nanosheets, the gate wrapped round each: Id-Vg at 50 mV.
+#
+# Two wide, thin silicon sheets stacked one above the other, each lightly p-type with n+ source and drain ends and
+# wrapped in a gate oxide; the gate metal fills the space round and between the sheets over the channel and is
+# driven from all four outer faces (swept together); spacers beside the gate. Stacking sheets gives more drive
+# current per footprint than one nanowire with the same all-round control. The metal is modelled as an insulator of
+# very high permittivity (equipotential). Change a dimension in the Geometry tab's panel; run it (F5), then look at
+# the transfer curve and slice the electron density across both sheets.
+
+[parameters]
+# group: Main
+Lg = 15nm  # Gate length
+Tsh = 5nm  # Sheet thickness
+Wsh = 20nm  # Sheet width
+Tsp = 8nm  # Vertical space between the sheets
+tox = 1nm  # Gate oxide thickness
+Nsd = 1e20  # Source/drain donors (cm^-3)
+# group: Body, metal and source/drain
+Na = 1e15  # Sheet acceptors (cm^-3)
+tm = 2nm  # Gate metal outside the oxide
+Lsd = 15nm  # Source/drain length
+lat = 1nm  # Lateral spread of the source/drain
+gs = 0.1nm  # Side gates' gap from the top and bottom gates
+# group: Positions (derived)
+x_g1 = $Lsd + $Lg  # Gate end
+L = $Lsd + $Lg + $Lsd  # Sheet length
+x_lo = 0 - $L  # Source window start (past the end)
+x_hi = $L + $L  # Drain window end (past the end)
+a0 = $tm  # Lower oxide bottom
+a1 = $tm + $tox  # Lower sheet bottom
+a2 = $a1 + $Tsh  # Lower sheet top
+a3 = $a2 + $tox  # Lower oxide top
+b0 = $a2 + $Tsp - $tox  # Upper oxide bottom
+b1 = $a2 + $Tsp  # Upper sheet bottom
+b2 = $b1 + $Tsh  # Upper sheet top
+b3 = $b2 + $tox  # Upper oxide top
+H = $b3 + $tm  # Stack height
+z0 = $tm  # Oxide left face
+z1 = $tm + $tox  # Sheet left face
+z2 = $z1 + $Wsh  # Sheet right face
+z3 = $z2 + $tox  # Oxide right face
+W = $z3 + $tm  # Domain width
+y_s0 = $gs  # Side gates' bottom
+y_s1 = $H - $gs  # Side gates' top
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, $Lsd, 5) + linspace($Lsd, $x_g1, 11) + linspace($x_g1, $L, 5)
+y = linspace(0, $a0, 2) + linspace($a0, $a1, 2) + linspace($a1, $a2, 6) + linspace($a2, $a3, 2) + linspace($a3, $b0, 3) + linspace($b0, $b1, 2) + linspace($b1, $b2, 6) + linspace($b2, $b3, 2) + linspace($b3, $H, 2)
+z = linspace(0, $z0, 2) + linspace($z0, $z1, 2) + linspace($z1, $z2, 11) + linspace($z2, $z3, 2) + linspace($z3, $W, 2)
+straddle x = $Lsd 0.2nm
+straddle x = $x_g1 0.2nm
+
+[region spacer]
+material = insulator
+eps_r = 7.5
+
+[region gate_metal]
+material = insulator
+eps_r = 1e4
+box = $Lsd $x_g1  0 $H  0 $W
+
+[region lower_oxide]
+material = sio2
+box = $Lsd $x_g1  $a0 $a3  $z0 $z3
+
+[region upper_oxide]
+material = sio2
+box = $Lsd $x_g1  $b0 $b3  $z0 $z3
+
+[region lower_sheet]
+material = silicon
+box = 0 $L  $a1 $a2  $z1 $z2
+
+[region upper_sheet]
+material = silicon
+box = 0 $L  $b1 $b2  $z1 $z2
+
+[doping]
+profile = acceptor constant $Na
+profile = donor constant $Nsd x=$x_lo:$Lsd lateral=$lat
+profile = donor constant $Nsd x=$x_g1:$x_hi lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = x_min
+
+[contact drain]
+kind = ohmic
+patch = x_max
+
+[contact gate_top]
+kind = electrode
+patch = y_max
+box = $Lsd $x_g1  $H $H  0 $W
+electrode = metal
+work_function = 4.5
+
+[contact gate_bottom]
+kind = electrode
+patch = y_min
+box = $Lsd $x_g1  0 0  0 $W
+electrode = metal
+work_function = 4.5
+
+[contact gate_left]
+kind = electrode
+patch = z_min
+box = $Lsd $x_g1  $y_s0 $y_s1  0 0
+electrode = metal
+work_function = 4.5
+
+[contact gate_right]
+kind = electrode
+patch = z_max
+box = $Lsd $x_g1  $y_s0 $y_s1  $W $W
+electrode = metal
+work_function = 4.5
+
+[models]
+fermi_dirac = on
+field_mobility = on
+
+[solver]
+backend = gmres_ilut
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate_top = 0 : 0.8 : 0.05
+contact gate_bottom = 0 : 0.8 : 0.05
+contact gate_left = 0 : 0.8 : 0.05
+contact gate_right = 0 : 0.8 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = gaa_nanosheet_fet_3d.nitsweep
+device = gaa_nanosheet_fet_3d.nitdev
+table = gaa_nanosheet_fet_3d.csv

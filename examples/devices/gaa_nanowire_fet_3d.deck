@@ -1,0 +1,119 @@
+# Gate-all-around nanowire FET (3D)
+# A silicon nanowire n-FET with the gate wrapped all the way round it: the transfer curve Id-Vg at 50 mV.
+#
+# A square silicon nanowire, lightly p-type, with n+ source and drain ends, wrapped in a gate oxide; the gate is a
+# metal on all four sides of the oxide over the channel (four faces swept together), the rest of the wire held by
+# spacers. With the channel surrounded, the gate controls it best of all the FET shapes: the subthreshold slope
+# stays near 60 mV/dec at short gate lengths. The cross-section is square (the mesh is a tensor grid). Change a
+# dimension in the Geometry tab's panel; run it (F5), then look at the transfer curve and the electron density.
+
+[parameters]
+# group: Main
+Lg = 20nm  # Gate length
+Wnw = 8nm  # Nanowire side
+tox = 1nm  # Gate oxide thickness
+Na = 1e15  # Channel acceptors (cm^-3)
+Nsd = 1e20  # Source/drain donors (cm^-3)
+# group: Source, drain and spacers
+Lsd = 15nm  # Source/drain length
+lat = 1nm  # Lateral spread of the source/drain
+gs = 0.1nm  # Side gates' gap from the top and bottom gates
+# group: Positions (derived)
+x_g1 = $Lsd + $Lg  # Gate end
+L = $Lsd + $Lg + $Lsd  # Wire length
+w0 = $tox  # Wire low face
+w1 = $tox + $Wnw  # Wire high face
+S = $tox + $Wnw + $tox  # Cross-section side
+x_lo = 0 - $L  # Source window start (past the end)
+x_hi = $L + $L  # Drain window end (past the end)
+y_s0 = $gs  # Side gates' bottom
+y_s1 = $S - $gs  # Side gates' top
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, $Lsd, 6) + linspace($Lsd, $x_g1, 16) + linspace($x_g1, $L, 6)
+y = linspace(0, $w0, 3) + linspace($w0, $w1, 11) + linspace($w1, $S, 3)
+z = linspace(0, $w0, 3) + linspace($w0, $w1, 11) + linspace($w1, $S, 3)
+straddle x = $Lsd 0.2nm
+straddle x = $x_g1 0.2nm
+straddle y = $w0 0.1nm
+straddle y = $w1 0.1nm
+straddle z = $w0 0.1nm
+straddle z = $w1 0.1nm
+
+[region spacer]
+material = insulator
+eps_r = 7.5
+
+[region oxide]
+material = sio2
+box = $Lsd $x_g1  0 $S  0 $S
+
+[region silicon]
+material = silicon
+box = 0 $L  $w0 $w1  $w0 $w1
+
+[doping]
+profile = acceptor constant $Na
+profile = donor constant $Nsd x=$x_lo:$Lsd lateral=$lat
+profile = donor constant $Nsd x=$x_g1:$x_hi lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = x_min
+
+[contact drain]
+kind = ohmic
+patch = x_max
+
+[contact gate_top]
+kind = electrode
+patch = y_max
+box = $Lsd $x_g1  $S $S  0 $S
+electrode = metal
+work_function = 4.5
+
+[contact gate_bottom]
+kind = electrode
+patch = y_min
+box = $Lsd $x_g1  0 0  0 $S
+electrode = metal
+work_function = 4.5
+
+[contact gate_left]
+kind = electrode
+patch = z_min
+box = $Lsd $x_g1  $y_s0 $y_s1  0 0
+electrode = metal
+work_function = 4.5
+
+[contact gate_right]
+kind = electrode
+patch = z_max
+box = $Lsd $x_g1  $y_s0 $y_s1  $S $S
+electrode = metal
+work_function = 4.5
+
+[models]
+fermi_dirac = on
+field_mobility = on
+
+[solver]
+backend = gmres_ilut
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate_top = 0 : 0.8 : 0.05
+contact gate_bottom = 0 : 0.8 : 0.05
+contact gate_left = 0 : 0.8 : 0.05
+contact gate_right = 0 : 0.8 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = gaa_nanowire_fet_3d.nitsweep
+device = gaa_nanowire_fet_3d.nitdev
+table = gaa_nanowire_fet_3d.csv

@@ -1,0 +1,90 @@
+# Dual-gate MOSFET (2D)
+# A double-gate n-MOSFET in cross-section: a thin silicon film between two gates tied together, Id-Vg at 50 mV.
+#
+# A thin, lightly doped p-type film between a top and a bottom gate oxide, each under a metal gate over the
+# channel; n+ source and drain at the ends of the film. Both gates are swept together, so the channel is controlled
+# from both sides: better electrostatic control and a steeper subthreshold slope than a single gate at the same
+# length, the idea behind FinFETs and gate-all-around devices. Change a dimension in the Geometry tab's panel; run
+# it (F5), then look at the transfer curve (Curves) and the electron density across the film.
+
+[parameters]
+# group: Main
+Lg = 30nm  # Gate length
+tsi = 10nm  # Silicon film thickness
+tox = 1nm  # Gate oxide thickness (each)
+Na = 1e15  # Film acceptors (cm^-3)
+Nsd = 1e20  # Source/drain donors (cm^-3)
+# group: Source and drain
+Lsd = 30nm  # Source/drain length
+lat = 2nm  # Lateral spread of the source/drain
+# group: Positions (derived)
+x_gate = $Lsd + $Lg  # Gate end
+L = $Lsd + $Lg + $Lsd  # Device length
+x_lo = 0 - $L  # Source window start (past the end)
+x_hi = $L + $L  # Drain window end (past the end)
+y_si = $tox + $tsi  # Film top
+y_ox = $tox + $tsi + $tox  # Top oxide top
+
+[mesh]
+type = tensor
+x = linspace(0, $Lsd, 11) + linspace($Lsd, $x_gate, 31) + linspace($x_gate, $L, 11)
+y = linspace(0, $tox, 4) + linspace($tox, $y_si, 21) + linspace($y_si, $y_ox, 4)
+straddle y = $tox 0.1nm
+straddle y = $y_si 0.1nm
+
+[region silicon]
+material = silicon
+
+[region bottom_oxide]
+material = sio2
+box = 0 $L  0 $tox
+
+[region top_oxide]
+material = sio2
+box = 0 $L  $y_si $y_ox
+
+[doping]
+profile = acceptor constant $Na
+profile = donor constant $Nsd x=$x_lo:$Lsd lateral=$lat
+profile = donor constant $Nsd x=$x_gate:$x_hi lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  $tox $y_si
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = $L $L  $tox $y_si
+
+[contact gate_top]
+kind = electrode
+patch = y_max
+box = $Lsd $x_gate  $y_ox $y_ox
+electrode = metal
+work_function = 4.5
+
+[contact gate_bottom]
+kind = electrode
+patch = y_min
+box = $Lsd $x_gate  0 0
+electrode = metal
+work_function = 4.5
+
+[models]
+field_mobility = on
+
+[solver]
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate_top = 0 : 1 : 0.05
+contact gate_bottom = 0 : 1 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = dual_gate_mosfet_2d.nitsweep
+device = dual_gate_mosfet_2d.nitdev
+table = dual_gate_mosfet_2d.csv
