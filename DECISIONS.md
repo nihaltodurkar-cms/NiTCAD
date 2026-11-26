@@ -2830,6 +2830,13 @@ tab, as on every view (the window test returns to the View tab); the cut line is
 surfaces. Deferred: playback over the run's points (BSD8 keeps the call point-indexed for it); BSC8 (FinFET) waits
 for the solved file.
 
+**Docs record (2026-11-26; owner: "The closing docs commit (BSD10) go ahead").** ARCHITECTURE 6.14 gains the
+"As built, Unit 26o" block and the 11.3 visualization row its entry; the README (the user guide) gains a Band surface
+section with its options and `docs/images/mosfet_2d_band_surface.png` (`nitcad plot examples\mosfet_2d.deck --view
+band-surface --size 1200x800`, the last point, VG = 1.5 V). Its two example commands were run on the
+Release build (the 3D one on `examples/mosfet_3d.deck`, plane z = 0.5 µm). Not done: the FinFET section image BSD10
+names, which waits with BSC8 for a solved FinFET run. No code changed; no tests run.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays
