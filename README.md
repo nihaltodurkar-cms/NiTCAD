@@ -170,6 +170,16 @@ device. Band offsets at heterojunctions are drawn as walls at the region boundar
 The 2D MOSFET (`examples/mosfet_2d.deck`) at V<sub>G</sub> = 1.5 V, V<sub>D</sub> = 0.1 V, Ec above Ev, coloured by
 energy. The n+ source and drain sit lower than the p-type body between them.
 
+| FinFET, source to drain through the fin centre | FinFET, Ec across the fin under the gate |
+|---|---|
+| ![FinFET band surface along the channel at VG = 0.1 V](docs/images/finfet_band_surface.png) | ![FinFET conduction band across the fin at VG = 0.1 V](docs/images/finfet_ec_across_fin.png) |
+
+The tri-gate FinFET (`decks/finfet_3d.deck`) at V<sub>G</sub> = 0.1 V, V<sub>D</sub> = 50 mV. Left: the plane
+z = 7 nm (`--plane z=0.007`); the source–channel barrier under the gate is what the gate lowers. Right: Ec alone on
+the plane x = 42.5 nm (`--plane x=0.0425 --band-levels Ec --fit-point`); in this lightly doped 10 nm fin the
+conduction band is lowest at the fin centre and about 20 meV higher at the corners, so the subthreshold current
+flows through the middle of the fin, not along its corners.
+
 ```bat
 nitcad plot examples\mosfet_2d.deck --view band-surface --out bands.png
 nitcad plot examples\mosfet_3d.deck --view band-surface --plane z=0.5 --band-levels Ec,Ev,EFn --out bands3d.png
@@ -178,7 +188,8 @@ nitcad plot examples\mosfet_3d.deck --view band-surface --plane z=0.5 --band-lev
 Options: `--band-levels` (default `Ec,Ev`), `--exaggeration 0.1..10` (height scale), `--opacity 0.2..1`,
 `--by-level` (one colour per level instead of colour by energy), `--range <lo>,<hi>` (eV), `--point <k>` (bias
 point; the energy range stays the run's unless `--fit-point`), `--cut` (a line in the plane, drawn on the surfaces).
-In the application choose **Band surface** in the view list; the same settings are in the inspector, hovering a
+In the application choose **Band surface** in the view list; Play (Ctrl+Shift+Space) steps through the run's bias
+points on one energy scale. The same settings are in the inspector, hovering a
 surface reads the energy there, and a 3D device shows the plane in a corner inset.
 
 ## Repository layout

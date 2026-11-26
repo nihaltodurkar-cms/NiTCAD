@@ -2842,6 +2842,52 @@ names, which waits with BSC8 for a solved FinFET run. No code changed; no tests 
 "SLICE AND CLIP" as before (`main_window.cpp`). The 26o window test checks both labels on the band surface and back
 on the Slice view. Tests run (Release, 3 cores): the 14 tests of `build\rt2.cmd`, all pass; no full suite, no Debug.
 
+**Slice 3 — playback and the FinFET check (proposed 2026-11-26; owner: "playback and the FinFET check go ahead,
+check research paper find a legit FinFET computation check on it"; recommended options taken, standing rule).**
+Criteria fixed here, before code and before the FinFET is solved.
+
+| # | Change | Notes |
+|---|---|---|
+| BSD11 | **Playback.** The band surface plays any run with two or more points (a DC sweep's bias points, a trace's, a transient's snapshots) with 26c's controls (YD5): the slider, Play/Pause, the step keys, `playback_fps`. The label is the snapshot's time on a transient, else the point's bias label from `point_labels`, with "(k of n)". Frames use the run's energy range (BSD8) unless Fit this point; the plane, camera and levels are kept. | `takes_band_playback(w, s)` in `app` (pure), `can_play` takes either. Field playback unchanged. |
+| BSD12 | **FinFET check, a hidden test.** `[.finfet]` in `app.view_settings`, run on a solved `decks/finfet_3d.deck` named by `NITCAD_FINFET_DECK`; not in any suite (the solve takes 30+ min). It checks BSC14 and BSC15 and prints the numbers for the record. | The solved file stays git-ignored. |
+
+| # | Criterion |
+|---|---|
+| BSC13 | **Playback (window test, 2D MOSFET sweep):** the controls are shown on the band surface and not on its Solid view; the step keys land on the point asked for, the label reading "(1 of n)" on the first; Play from the first reaches the last in order, no point before its time (as YD5), each shown point's scene the same as `build_scene` for that point, the message loop under `wg1_limit_ms`; Pause holds. The transient field playback test passes unchanged. |
+| BSC14 | **FinFET planes (completes BSC8):** the deck solved on this branch's code. On z = 7 nm (lines along x at y = 25, 32, 40, 48 nm) and on x = 42.5 nm (lines along z at the same y), `band_energy_at` agrees with `cut_band_plot` within 1e-9 eV at every sample in a silicon-only element, all four levels, at the first and last points. Both images saved for the record and the user guide; the FinFET plane's build time recorded (BSC9). |
+| BSC15 | **Physics check against published theory.** In subthreshold, the drain current of a MOSFET is thermionic emission over the source–channel barrier, I_D ∝ exp(−E_b/kT) (the top-of-the-barrier model: Lundstrom and Guo, *Nanoscale Transistors*, Springer 2006; Taur and Ning, *Fundamentals of Modern VLSI Devices*, the subthreshold current), so the barrier falls with gate bias at dE_b/dV_G = −kT ln 10 / S, S the subthreshold swing. Sellier et al. (Appl. Phys. Lett. 90, 073502, 2007) measured this gate coupling, α = 0.68, on tri-gate SOI FinFETs (1.4 nm SiO₂, 1e18 cm⁻³). Here E_b is read from the band surface's data: for each mesh plane x = const under the gate, the lowest Ec over the fin's silicon nodes; E_b is the highest of those (the top of the lowest path). S comes from the run's own I_D. **Pass:** for every gate step whose both ends have I_D < 1e-7 A, \|α / (kT ln 10 / S) − 1\| ≤ 0.10, with α = −ΔE_b/ΔV_G and S = ΔV_G / Δlog₁₀ I_D. Recorded beside it: α against Sellier's 0.68, and Ec at the top corner against the fin centre on x = 42.5 nm at V_G = 0.1 V (the corner effect, which they observed; report only, no pass/fail). |
+
+**Slice 3 record (2026-11-26; owner: "use 6 cores" during the slice).** Playback: `app::takes_band_playback` and
+`app::playback_label` (`view_settings`), `MainWindow::can_play` takes either view, the status says "Playing the bias
+points." on a sweep. FinFET: `decks/finfet_3d.deck` solved on this branch's build (PARDISO 2026.2, 6 threads, 510 s,
+17/17 points; the 20 Nov results no longer matched the mesh the deck builds now, so they were not used), outside
+the repository. Tests run (Release, 6 cores): the 14 tests of `build\rt2.cmd`, all pass (a first run, alongside the
+FinFET solve, failed 26h's JG8 smooth-move frame at 81 ms; it passed once the solve had ended); the hidden
+`[.finfet]` case passes (5,415 assertions). No full suite, no Debug, no mutants this slice.
+- **BSC13 met:** the new window test (2D MOSFET sweep, 16 points) plays every point in order, none early, each scene
+  vertex-identical to `build_scene`'s, the message loop under the WG1 limit; Pause holds; the transient playback test
+  passes unchanged.
+- **BSC14 met:** 1,096 level samples along x on z = 7 nm and 240 across on x = 42.5 nm, at points 0 and 16, all
+  within 1e-9 eV of `cut_band_plot`. Scene builds: 36.7 ms (z = 7 nm), 9.2 ms (x = 42.5 nm). Images:
+  `docs/images/finfet_band_surface.png` (z = 7 nm, V_G = 0.1 V) and `finfet_ec_across_fin.png` (Ec, fitted to the
+  point); BSD10's FinFET image is the first.
+- **BSC15 met:** subthreshold steps (I_D < 1e-7 A at both ends):
+
+  | V_G (V) | S (mV/dec) | α = −ΔE_b/ΔV_G | α / (kT ln 10 / S) |
+  |---|---|---|---|
+  | 0.00–0.05 | 65.0 | 0.8996 | 0.9819 |
+  | 0.05–0.10 | 65.2 | 0.8967 | 0.9818 |
+  | 0.10–0.15 | 65.7 | 0.8836 | 0.9758 |
+
+  The barrier top lies at x = 41–42.5 nm (the gate spans 30–55 nm). Above threshold the relation stops holding, as
+  it should: at 0.25–0.30 V the ratio is 1.49 and the barrier top moves toward the source; from 0.55 V the highest
+  lowest-Ec plane is the source contact's (x = 0), no barrier left. α ≈ 0.90 against Sellier et al.'s measured 0.68:
+  stronger gate control from the 0.77 nm EOT and the 1e16 fin (their 1.4 nm SiO₂, 1e18), as expected.
+  Corner effect at x = 42.5 nm, V_G = 0.1 V: Ec 0.2458 eV at the top corner, 0.2423 top centre, 0.2372 side middle,
+  0.2252 fin centre: the corner is 20.7 meV *above* the centre, so subthreshold conduction is in the fin's middle
+  (volume inversion), not along its edges. Sellier et al. saw edge channels in a heavily doped (1e18) fin and
+  advised lower doping against them; this fin is 1e16.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays

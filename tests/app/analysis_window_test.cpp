@@ -2128,3 +2128,100 @@ TEST_CASE("app window 26o: the band surface in the inspector, stepped, hovered; 
         CHECK(w->settings().band_plane->at_um == 0.5);
     }
 }
+
+TEST_CASE("app window 26o: the band surface plays a sweep's bias points (BSD11, BSC13)", "[app]") {
+    using app::ViewKind;
+    const fs::path dir = app_test::scratch("window_band_playback");
+    const fs::path deck = app_test::write(dir, "mosfet.deck", app_test::mosfet2d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    const std::size_t n = w->workspace()->points.size();
+    REQUIRE(n >= 3);
+    // A sweep's solid view does not play; its band surface does.
+    choose(*w, MainWindow::id_view, L"solid");
+    CHECK_FALSE(shown(*w, MainWindow::id_play));
+    CHECK(grayed(*w, Command::play_pause));
+    choose(*w, MainWindow::id_view, L"band-surface");
+    REQUIRE(w->settings().kind == ViewKind::band_surface);
+    CHECK(shown(*w, MainWindow::id_time));
+    CHECK(shown(*w, MainWindow::id_play));
+    CHECK_FALSE(grayed(*w, Command::play_pause));
+    // Each shown point's scene is build_scene's for that point.
+    const auto same_scene = [&] {
+        REQUIRE(w->scene() != nullptr);
+        const auto& f = std::get<render::FieldScene>(*w->scene());
+        auto expected = app::build_scene(*w->workspace(), w->settings());
+        REQUIRE(expected);
+        const auto& e = std::get<render::FieldScene>(*expected);
+        REQUIRE(f.triangles.size() == e.triangles.size());
+        for (std::size_t t = 0; t < f.triangles.size(); ++t) {
+            REQUIRE(f.triangles[t].vertices.size() == e.triangles[t].vertices.size());
+            for (std::size_t i = 0; i < f.triangles[t].vertices.size(); ++i) {
+                if (f.triangles[t].vertices[i].position != e.triangles[t].vertices[i].position) {
+                    FAIL("a vertex differs from build_scene's");
+                }
+            }
+        }
+    };
+    // The step keys land on the point asked for; the label reads "(k of n)".
+    w->execute(Command::snapshot_first);
+    CHECK(w->settings().point == 0u);
+    CHECK(position(*w, MainWindow::id_time) == 0);
+    CHECK(text_of(*w, MainWindow::id_time_text).ends_with(std::format("(1 of {})", n)));
+    CHECK(text_of(*w, MainWindow::id_time_text) == app::playback_label(*w->workspace(), 0));
+    same_scene();
+    w->execute(Command::snapshot_next);
+    w->execute(Command::snapshot_next);
+    CHECK(w->settings().point == 2u);
+    CHECK(SendMessageW(w->child(MainWindow::id_point), CB_GETCURSEL, 0, 0) == 2);
+    same_scene();
+    w->execute(Command::snapshot_last);
+    CHECK(w->settings().point == n - 1);
+
+    // Play from the first: every point in order, none before its time, each its own scene; the loop never held long.
+    w->execute(Command::snapshot_first);
+    const auto start = std::chrono::steady_clock::now();
+    w->execute(Command::play_pause);
+    CHECK(w->playing());
+    CHECK(text_of(*w, MainWindow::id_play) == "Pa&use");
+    std::vector<std::size_t> seen{0};
+    double longest_ms = 0.0;
+    MSG m;
+    while (w->playing() && std::chrono::steady_clock::now() - start < std::chrono::seconds(30)) {
+        if (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            const auto t0 = std::chrono::steady_clock::now();
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+            longest_ms = std::max(longest_ms,
+                                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        } else {
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+        }
+        const std::size_t k = *w->settings().point;
+        if (k != seen.back()) {
+            const double at = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            CHECK(at >= static_cast<double>(k) / app::playback_fps - 0.05);
+            seen.push_back(k);
+            same_scene();
+        }
+    }
+    CAPTURE(seen, longest_ms);
+    CHECK_FALSE(w->playing());
+    CHECK(seen.back() == n - 1);
+    CHECK(std::ranges::is_sorted(seen));
+    CHECK(longest_ms < app_test::wg1_limit_ms());
+    CHECK(text_of(*w, MainWindow::id_play) == "Pla&y");
+    // Pause holds the point shown.
+    w->execute(Command::snapshot_first);
+    w->execute(Command::play_pause);
+    CHECK(w->playing());
+    w->execute(Command::play_pause);
+    CHECK_FALSE(w->playing());
+    const auto held = w->settings().point;
+    (void)pump_until([] { return false; }, 0.5);
+    CHECK(w->settings().point == held);
+}

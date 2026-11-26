@@ -4,10 +4,13 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -16,7 +19,9 @@
 #include "NiTCAD/app/run_controller.hpp"
 #include "NiTCAD/app/view_settings.hpp"
 #include "NiTCAD/render/band_surface.hpp"
+#include "NiTCAD/render/cut_line.hpp"
 #include "NiTCAD/render/image.hpp"
+#include "NiTCAD/render/scene.hpp"
 #include "fixtures.hpp"
 
 using namespace NiTCAD;
@@ -1690,4 +1695,199 @@ TEST_CASE("app views 26o: one energy range over the run; a cut line on the surfa
         REQUIRE(d);
         CHECK(d->max_channel == 0);
     }
+}
+
+TEST_CASE("app views 26o: the band surface plays a sweep's points (BSD11)", "[app]") {
+    const app::Workspace& w = mosfet().workspace;
+    REQUIRE(w.points.size() >= 3);
+    REQUIRE_FALSE(w.transient);
+    ViewSettings s;
+    s.kind = ViewKind::band_surface;
+    CHECK(app::takes_band_playback(w, s));
+    for (const ViewKind k : {ViewKind::solid, ViewKind::field, ViewKind::slice}) {
+        s.kind = k;
+        CHECK_FALSE(app::takes_band_playback(w, s));
+        CHECK_FALSE(app::takes_film(w, s));  // a sweep's field view still does not play
+    }
+    // One point is nothing to play.
+    app::Workspace one;
+    one.device = std::make_unique<device::Device>(*w.device);
+    one.geometry = std::make_unique<render::Geometry>(*w.geometry);
+    one.points = {w.points.front()};
+    s.kind = ViewKind::band_surface;
+    CHECK_FALSE(app::takes_band_playback(one, s));
+    // The label: the point's biases without its index, then "(k of n)".
+    const auto labels = app::point_labels(w);
+    const std::size_t n = w.points.size();
+    for (const std::size_t k : {std::size_t{0}, n - 1}) {
+        const std::string label = app::playback_label(w, k);
+        CAPTURE(label, labels[k]);
+        CHECK(label.ends_with(std::format("({} of {})", k + 1, n)));
+        const std::size_t dot = labels[k].find(" \xC2\xB7 ");
+        REQUIRE(dot != std::string::npos);
+        CHECK(label.starts_with(labels[k].substr(dot + 4)));
+    }
+    CHECK(app::playback_label(w, n + 5).ends_with(std::format("({} of {})", n, n)));
+}
+
+namespace {
+
+std::string env(const char* name) {
+    char* value = nullptr;
+    std::size_t length = 0;
+    const bool given = _dupenv_s(&value, &length, name) == 0 && value != nullptr;
+    const std::string out = given ? value : "";
+    std::free(value);
+    return out;
+}
+
+// BSC14: on each line (cm) every sample in a silicon-only element: band_energy_at equals the cut band plot's value
+// within 1e-9 eV, all four levels. Returns the level samples checked.
+std::size_t agree_on_lines(const device::Device& d, const render::Geometry& g, const results::BandDiagram& b,
+                           const std::vector<std::pair<render::Point, render::Point>>& lines) {
+    const auto keys = render::band_material_keys(d);
+    std::size_t checked = 0;
+    for (const auto& [a, z] : lines) {
+        const auto cut = render::cut_line(g, a, z);
+        REQUIRE(cut.has_value());
+        REQUIRE_FALSE(cut->samples.empty());
+        const auto plot = render::cut_band_plot(d.mesh(), *cut, b);
+        REQUIRE(plot.has_value());
+        for (std::size_t i = 0; i < cut->samples.size(); ++i) {
+            const render::CutSample& s = cut->samples[i];
+            const auto nodes = g.element(s.element);
+            const std::int32_t key = keys[static_cast<std::size_t>(nodes[0])];
+            if (key < 0 || !std::ranges::all_of(nodes, [&](mesh::NodeId v) { return keys[static_cast<std::size_t>(v)] == key; })) {
+                continue;
+            }
+            render::Point x{};
+            for (std::size_t k = 0; k < 4; ++k) {
+                if (s.at.weights[k] == 0.0) continue;
+                const auto& p = d.mesh().points()[static_cast<std::size_t>(s.at.nodes[k])];
+                for (std::size_t c = 0; c < 3; ++c) x[c] += s.at.weights[k] * p[c];
+            }
+            for (std::size_t lv = 0; lv < 4; ++lv) {
+                const auto e = render::band_energy_at(d, g, b, static_cast<render::BandLevel>(lv), s.element, x);
+                REQUIRE(e.has_value());
+                CHECK(std::abs(*e - plot->series[lv].y[i]) < 1e-9);
+                ++checked;
+            }
+        }
+    }
+    return checked;
+}
+
+}  // namespace
+
+// BSD12: the FinFET check (BSC14, BSC15), on a solved decks/finfet_3d.deck named by NITCAD_FINFET_DECK. Hidden:
+// the solve takes 30+ minutes. Prints the numbers for the record.
+TEST_CASE("app views 26o: the solved FinFET on the band surface (BSC14, BSC15)", "[.finfet][app]") {
+    const std::string deck = env("NITCAD_FINFET_DECK");
+    if (deck.empty()) SKIP("NITCAD_FINFET_DECK names no solved FinFET deck");
+    const auto loaded = app::workspace_from_deck(deck);
+    REQUIRE(loaded.has_value());
+    const app::Workspace& w = *loaded;
+    REQUIRE(w.points.size() == 17);
+    const device::Device& d = *w.device;
+    const render::Geometry& g = *w.geometry;
+    constexpr double nm = 1e-7;  // cm
+
+    // BSC14: the two planes' lines, at the first and the last point.
+    std::vector<std::pair<render::Point, render::Point>> along_x, across;
+    for (const double y : {25.0, 32.0, 40.0, 48.0}) {
+        along_x.push_back({{0.0, y * nm, 7.0 * nm}, {85.0 * nm, y * nm, 7.0 * nm}});
+        across.push_back({{42.5 * nm, y * nm, 0.0}, {42.5 * nm, y * nm, 14.0 * nm}});
+    }
+    for (const std::size_t k : {std::size_t{0}, w.points.size() - 1}) {
+        CAPTURE(k);
+        const std::size_t a = agree_on_lines(d, g, w.points[k].bands, along_x);
+        const std::size_t c = agree_on_lines(d, g, w.points[k].bands, across);
+        CHECK(a > 0);
+        CHECK(c > 0);
+        std::printf("BSC14 point %zu: %zu level samples along x (z = 7 nm), %zu across (x = 42.5 nm) checked\n", k, a, c);
+    }
+    // BSC9 (recorded): each plane's scene build time, median of 5, at the last point.
+    for (const auto& [name, plane] : {std::pair{"z = 7 nm", render::Plane{{0.0, 0.0, 1.0}, 7.0 * nm}},
+                                      std::pair{"x = 42.5 nm", render::Plane{{1.0, 0.0, 0.0}, 42.5 * nm}}}) {
+        render::BandSurfaceOptions o;
+        o.plane = plane;
+        std::vector<double> ms;
+        for (int r = 0; r < 5; ++r) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto s = render::band_surface_view(d, g, w.points.back().bands, o);
+            ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            REQUIRE(s.has_value());
+        }
+        std::ranges::sort(ms);
+        std::printf("BSC9 FinFET plane %s: scene build median %.1f ms\n", name, ms[2]);
+    }
+
+    // BSC15: the barrier top E_b at each point: per mesh plane x = const, the lowest Ec over the semiconductor
+    // nodes; E_b the highest of those.
+    const auto& pts = d.mesh().points();
+    const auto barrier = [&](const results::BandDiagram& b) {
+        std::map<double, double> lowest;  // x -> min Ec
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            const double ec = b.conduction_eV[i];
+            if (!std::isfinite(ec)) continue;
+            auto [it, fresh] = lowest.try_emplace(pts[i][0], ec);
+            if (!fresh) it->second = std::min(it->second, ec);
+        }
+        double top = -1e300, at = 0.0;
+        for (const auto& [x, e] : lowest) {
+            if (e > top) top = e, at = x;
+        }
+        return std::pair{top, at};
+    };
+    std::size_t drain = d.contacts().size();
+    std::size_t gate = d.contacts().size();
+    for (std::size_t c = 0; c < d.contacts().size(); ++c) {
+        if (d.contacts()[c].name == "drain") drain = c;
+        if (d.contacts()[c].name == "gate_top") gate = c;
+    }
+    REQUIRE(drain < d.contacts().size());
+    REQUIRE(gate < d.contacts().size());
+    constexpr double kT_ln10 = 8.617333262e-5 * 300.0 * 2.302585092994046;  // eV
+    std::vector<std::pair<double, double>> eb;
+    for (const auto& p : w.points) eb.push_back(barrier(p.bands));
+    std::size_t steps = 0;
+    for (std::size_t k = 0; k + 1 < w.points.size(); ++k) {
+        const double v0 = w.points[k].bias_V[gate], v1 = w.points[k + 1].bias_V[gate];
+        const double i0 = std::abs(w.points[k].terminal_current[drain]);
+        const double i1 = std::abs(w.points[k + 1].terminal_current[drain]);
+        const double alpha = -(eb[k + 1].first - eb[k].first) / (v1 - v0);
+        const double swing = (v1 - v0) / (std::log10(i1) - std::log10(i0));  // V/dec
+        const double ratio = alpha / (kT_ln10 / swing);
+        const bool sub = i0 < 1e-7 && i1 < 1e-7;
+        std::printf("BSC15 VG %.2f-%.2f V: Id %.3e-%.3e A, E_b %.4f-%.4f eV (top at x = %.1f nm), alpha %.4f, "
+                    "S %.1f mV/dec, alpha/(kT ln10/S) %.4f%s\n",
+                    v0, v1, i0, i1, eb[k].first, eb[k + 1].first, eb[k + 1].second / nm, alpha, swing * 1e3, ratio,
+                    sub ? "  [subthreshold]" : "");
+        if (sub) {
+            CAPTURE(k, alpha, swing, ratio);
+            CHECK(std::abs(ratio - 1.0) <= 0.10);
+            ++steps;
+        }
+    }
+    CHECK(steps >= 2);
+    // Recorded: the corner against the fin centre on x = 42.5 nm (the gate's middle plane) at VG = 0.1 V.
+    REQUIRE(std::abs(w.points[2].bias_V[gate] - 0.1) < 1e-12);
+    const auto& ec = w.points[2].bands.conduction_eV;
+    const auto nearest = [&](double x, double y, double z) {
+        std::size_t best = 0;
+        double dist = 1e300;
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            if (!std::isfinite(ec[i])) continue;
+            const double q = std::hypot(pts[i][0] - x, pts[i][1] - y, pts[i][2] - z);
+            if (q < dist) dist = q, best = i;
+        }
+        return best;
+    };
+    const std::size_t corner = nearest(42.5 * nm, 50.0 * nm, 2.0 * nm);
+    const std::size_t top = nearest(42.5 * nm, 50.0 * nm, 7.0 * nm);
+    const std::size_t side = nearest(42.5 * nm, 35.0 * nm, 2.0 * nm);
+    const std::size_t centre = nearest(42.5 * nm, 35.0 * nm, 7.0 * nm);
+    std::printf("BSC15 corner effect, x = 42.5 nm, VG = 0.1 V: Ec corner %.4f, top centre %.4f, side middle %.4f, "
+                "fin centre %.4f eV (corner - centre %.1f meV)\n",
+                ec[corner], ec[top], ec[side], ec[centre], (ec[corner] - ec[centre]) * 1e3);
 }

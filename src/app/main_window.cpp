@@ -1992,15 +1992,15 @@ void MainWindow::sync_playback() {
     const std::size_t k = n == 0 ? 0 : std::min(s.point.value_or(n - 1), n - 1);
     SendMessageW(child(id_time), TBM_SETRANGE, FALSE, MAKELPARAM(0, n == 0 ? 0 : n - 1));
     SendMessageW(child(id_time), TBM_SETPOS, TRUE, static_cast<LPARAM>(k));
-    win32::set_text(child(id_time_text), can_play() ? render::time_label(workspace_->transient->snapshots[k].time_s) +
-                                                          std::format(" ({} of {})", k + 1, n)
-                                                    : std::string());
+    win32::set_text(child(id_time_text), can_play() ? playback_label(*workspace_, k) : std::string());
     win32::set_text(child(id_play), playing_ ? "Pa&use" : "Pla&y");
     SendMessageW(child(id_point), CB_SETCURSEL, static_cast<WPARAM>(k), 0);
 }
 
 bool MainWindow::can_play() const {
-    return workspace_ && takes_film(*workspace_, device_view_) && workspace_->points.size() >= 2;
+    // A transient's field view (YD5), or the band surface over any run's points (Unit 26o, BSD11).
+    return workspace_ && (takes_film(*workspace_, device_view_) || takes_band_playback(*workspace_, device_view_)) &&
+           workspace_->points.size() >= 2;
 }
 
 void MainWindow::play(bool on) {
@@ -2015,7 +2015,7 @@ void MainWindow::play(bool on) {
         playing_ = true;
         show_snapshot(play_from_);
         SetTimer(hwnd_, playback_timer, playback_tick_ms, nullptr);
-        set_status(status_state, "Playing the snapshots.");
+        set_status(status_state, workspace_->transient ? "Playing the snapshots." : "Playing the bias points.");
     } else if (playing_) {
         KillTimer(hwnd_, playback_timer);
         playing_ = false;

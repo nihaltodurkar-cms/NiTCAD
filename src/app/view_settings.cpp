@@ -848,6 +848,25 @@ bool takes_film(const Workspace& w, const ViewSettings& s) noexcept {
            !w.points.empty() && w.transient->snapshots.size() == w.points.size();
 }
 
+bool takes_band_playback(const Workspace& w, const ViewSettings& s) noexcept {
+    return s.kind == ViewKind::band_surface && w.device && w.geometry && w.device->mesh().dimension() >= 2 &&
+           w.points.size() >= 2;
+}
+
+std::string playback_label(const Workspace& w, std::size_t k) {
+    const std::size_t n = w.points.size();
+    if (n == 0) return {};
+    k = std::min(k, n - 1);
+    const std::string count = std::format("({} of {})", k + 1, n);
+    if (w.transient && k < w.transient->snapshots.size()) {
+        return render::time_label(w.transient->snapshots[k].time_s) + " " + count;
+    }
+    const std::string label = point_labels(w)[k];
+    constexpr std::string_view dot = " \xC2\xB7 ";  // "k · " before the biases
+    const std::size_t at = label.find(dot);
+    return at == std::string::npos ? count : label.substr(at + dot.size()) + " " + count;
+}
+
 std::expected<Film, base::Error> film_scale(const Workspace& w, const ViewSettings& s) {
     if (!takes_film(w, s)) return std::unexpected(invalid("playback needs a transient run's field view of a 2D or 3D device"));
     const device::Device& device = *w.device;

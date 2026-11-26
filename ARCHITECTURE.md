@@ -3300,10 +3300,20 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   (`band_energy_range`), so stepping points does not rescale; Fit this point (`--fit-point`) uses the shown point's.
   A set range wins, then Fit this point, then the run's. A 26b cut line lying in the plane is drawn on each surface
   at its band heights, on top.
-- **Measured (BSC9, Release):** build median 7.3 ms for the 2D MOSFET, 9.6 ms for a 3D plane (limits 150 / 400 ms).
-- **Not done:** playback over the run's points (the call is point-indexed for it); the FinFET section check and its
-  image (BSC8, waiting for a solved FinFET run); hidden regions are checked but not hidden; the enhanced look's
-  feature edges draw stray lines on steep junction slopes (shared `set_look` code).
+- **Playback (BSD11):** the band surface plays any run with two or more points with 26c's controls (slider,
+  Play/Pause, step keys, `playback_fps`), labelled by `app::playback_label` (the point's biases, or a transient's
+  time, and "(k of n)"); `app::takes_band_playback` beside `takes_film`. Frames keep the run's energy range.
+- **Measured (BSC9, Release):** build median 7.3 ms for the 2D MOSFET, 9.6 ms for a 3D plane (limits 150 / 400 ms);
+  the FinFET (45,375 nodes) 36.7 ms on z = 7 nm and 9.2 ms on x = 42.5 nm.
+- **FinFET check (BSC14, BSC15; hidden test `[.finfet]`, `NITCAD_FINFET_DECK`):** on `decks/finfet_3d.deck` solved
+  on this code (PARDISO, 6 threads, 510 s) the surface agrees with the cut-line band plot within 1e-9 eV on both
+  planes. Against the top-of-the-barrier relation dE_b/dV_G = −kT ln 10 / S (Lundstrom and Guo; Taur and Ning), the
+  barrier read from the bands falls at 0.976–0.982 of the rate the run's own swing (65.0–65.7 mV/dec) implies, on
+  every subthreshold step (bound 10%). The gate coupling α ≈ 0.90 (Sellier et al., APL 90, 073502, measured 0.68 on
+  a 1.4 nm-oxide, 1e18 cm⁻³ tri-gate). Across the fin at V_G = 0.1 V, Ec is lowest at the fin centre and 20.7 meV
+  higher at the top corner: no corner effect in this lightly doped (1e16) fin.
+- **Not done:** hidden regions are checked but not hidden; the enhanced look's feature edges draw stray lines on
+  steep junction slopes (shared `set_look` code).
 
 ## 7. Language placement (D6: C and Fortran deferred)
 

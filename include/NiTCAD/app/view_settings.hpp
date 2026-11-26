@@ -189,6 +189,12 @@ using Scene = std::variant<render::FieldScene, render::PlotScene>;
 // Playback (Unit 26c, YD5). Whether the settings' view plays the workspace's snapshots: the field view of a
 // transient run of a 2D or 3D device.
 [[nodiscard]] bool takes_film(const Workspace& w, const ViewSettings& s) noexcept;
+// Unit 26o (BSD11): whether the band surface plays the workspace's points: two or more, of a 2D or 3D device
+// (a sweep's or trace's bias points, a transient's snapshots).
+[[nodiscard]] bool takes_band_playback(const Workspace& w, const ViewSettings& s) noexcept;
+// The playback label of point k of n: "<time> (k+1 of n)" for a transient's snapshot, else the point's
+// point_labels entry without its index, "<contact> = <V> V (k+1 of n)" ("(k+1 of n)" alone when nothing varies).
+[[nodiscard]] std::string playback_label(const Workspace& w, std::size_t k);
 // One scale over every snapshot's field as `nitcad plot --view filmstrip --every 1` fits it (DC4): the
 // range if given, over the shown regions' nodes, a vector magnitude on a log scale floored ten decades
 // below its largest value over all. Errors (invalid_input): not takes_film; build_scene's for the field.
