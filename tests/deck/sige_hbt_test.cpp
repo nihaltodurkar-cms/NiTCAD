@@ -34,6 +34,8 @@ double collector_current(const std::string& text, const std::string& name) {
     REQUIRE_FALSE(r->sweep->stopped.has_value());
     const auto& last = r->sweep->points.back();
     REQUIRE(std::abs(last.bias_V[1] - 0.7) < 1e-12);
+    std::printf("MAC9 %s: Ic %.4e Ib %.4e A/cm, beta %.1f\n", name.c_str(), last.terminal_current[0],
+                last.terminal_current[1], last.terminal_current[0] / last.terminal_current[1]);
     return last.terminal_current[0];
 }
 

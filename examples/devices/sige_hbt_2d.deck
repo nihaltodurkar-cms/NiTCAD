@@ -2,11 +2,12 @@
 # An npn silicon bipolar transistor with a strained SiGe base: the Gummel plot at V_CB = 0.
 #
 # An n+ silicon emitter over a thin p-type Si(1-x)Ge(x) base, pseudomorphic on silicon, over an n silicon
-# collector; the base contacted at its side. The base's narrower gap raises its intrinsic density, so the
-# collector current at a given V_BE grows by about exp(dEg / kT) over an all-silicon base (Unit 68, MAC9); less
-# here, since the SiGe base's lower emitter-base built-in voltage leaves it a wider neutral base.
-# Set xge = 0 for the silicon reference. Change a dimension in the Geometry tab's panel; run it (F5), then
-# look at the band diagram (Bands) and the Gummel plot (Curves).
+# collector. The base is reached from the top through a p+ extrinsic base beside the emitter, an oxide
+# spacer between them. The base's narrower gap raises its intrinsic density, so the collector current at a
+# given V_BE grows by about exp(dEg / kT) over an all-silicon base (Unit 68, MAC9); less here, since the SiGe
+# base's lower emitter-base built-in voltage leaves it a wider neutral base. Set xge = 0 for the silicon
+# reference. Change a dimension in the Geometry tab's panel; run it (F5), then look at the band diagram
+# (Bands) and the Gummel plot (Curves).
 
 [parameters]
 # group: Main
@@ -15,19 +16,21 @@ Wc = 0.3um  # collector thickness
 Wb = 50nm  # base thickness
 We = 50nm  # emitter thickness
 W = 0.5um  # width
+Wx = 0.125um  # extrinsic base (base contact) width
+Ws = 0.1um  # oxide spacer between extrinsic base and emitter
 Nc = 1e17  # collector donors (cm^-3)
 Nb = 2e18  # base acceptors (cm^-3)
+Nx = 1e19  # extrinsic base acceptors (cm^-3)
 Ne = 1e20  # emitter donors (cm^-3)
 # group: Positions (derived)
 b0 = $Wc + 1nm  # base bottom, between node lines
 b1 = $Wc + $Wb - 1nm  # base top, between node lines
 L = $Wc + $Wb + $We  # depth
-c0 = $Wc + 20nm  # base contact bottom (clear of both depletion regions)
-c1 = $Wc + 30nm  # base contact top
+xe = $Wx + $Ws  # emitter's left edge
 
 [mesh]
 type = tensor
-x = linspace(0, $W, 11)
+x = linspace(0, $W, 26)
 y = linspace(0, $Wc, 61) + linspace($Wc, $Wc + $Wb, 26) + linspace($Wc + $Wb, $L, 26)
 
 [region silicon]
@@ -37,10 +40,15 @@ material = silicon
 material = sige_strained $xge
 box = 0 $W  $b0 $b1
 
+[region spacer]
+material = sio2
+box = $Wx $xe  $b1 $L
+
 [doping]
 profile = donor constant $Nc y=0:$b0
 profile = acceptor constant $Nb y=$b0:$b1
-profile = donor constant $Ne y=$b1:$L
+profile = acceptor constant $Nx x=0:$Wx y=$b1:$L
+profile = donor constant $Ne x=$xe:$W y=$b1:$L
 
 [contact collector]
 kind = ohmic
@@ -48,12 +56,13 @@ patch = y_min
 
 [contact base]
 kind = ohmic
-patch = x_min
-box = 0 0  $c0 $c1
+patch = y_max
+box = 0 $Wx  $L $L
 
 [contact emitter]
 kind = ohmic
 patch = y_max
+box = $xe $W  $L $L
 
 [sweep]
 contact collector = 0.7

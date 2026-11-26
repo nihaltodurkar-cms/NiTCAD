@@ -5070,6 +5070,11 @@ The same check found a deck flaw, now fixed: the base contact had covered the wh
 lay 2 nm from each junction, inside the depletion regions, and drew a base current ten times the collector
 current (beta 0.1). The contact is now inset to the base's middle 10 nm, which cuts the base current about
 30-fold and leaves the ratio unchanged.
+The deck was then rebuilt as a real HBT cross-section: the base is reached from the top through a p+ (1e19)
+extrinsic base beside the emitter, with an SiO2 spacer between them. At V_BE = 0.7 V, beta is 9100 (SiGe) and
+41 (silicon), against 5 before. MAC9's ratio is 279 (-16.7 %). A doped silicon spacer was tried first and gave
+264 (-21.3 %, a MAC9 failure): electrons injected through the emitter's side wall cross silicon, not SiGe, and
+dilute the ratio. The oxide spacer removes that path.
 
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
