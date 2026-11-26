@@ -3,7 +3,8 @@
 #
 # An n+ silicon emitter over a thin p-type Si(1-x)Ge(x) base, pseudomorphic on silicon, over an n silicon
 # collector; the base contacted at its side. The base's narrower gap raises its intrinsic density, so the
-# collector current at a given V_BE grows by about exp(dEg / kT) over an all-silicon base (Unit 68, MAC9).
+# collector current at a given V_BE grows by about exp(dEg / kT) over an all-silicon base (Unit 68, MAC9); less
+# here, since the SiGe base's lower emitter-base built-in voltage leaves it a wider neutral base.
 # Set xge = 0 for the silicon reference. Change a dimension in the Geometry tab's panel; run it (F5), then
 # look at the band diagram (Bands) and the Gummel plot (Curves).
 
@@ -21,6 +22,8 @@ Ne = 1e20  # emitter donors (cm^-3)
 b0 = $Wc + 1nm  # base bottom, between node lines
 b1 = $Wc + $Wb - 1nm  # base top, between node lines
 L = $Wc + $Wb + $We  # depth
+c0 = $Wc + 20nm  # base contact bottom (clear of both depletion regions)
+c1 = $Wc + 30nm  # base contact top
 
 [mesh]
 type = tensor
@@ -46,7 +49,7 @@ patch = y_min
 [contact base]
 kind = ohmic
 patch = x_min
-box = 0 0  $b0 $b1
+box = 0 0  $c0 $c1
 
 [contact emitter]
 kind = ohmic

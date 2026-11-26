@@ -5058,6 +5058,17 @@ factor. Library deck `examples/devices/sige_hbt_2d.deck` is an npn with a 50 nm 
 2e18 cm^-3, contacted at its side, swept along the Gummel line at V_CB = 0. At V_BE = 0.7 V its collector
 current is 281 times the all-silicon base's (`xge = 0`). The textbook factor, mu_n ni_eff^2 of the base at
 2e18 cm^-3, is 335; exp(-dEg/kT) alone would be 697. The ratio is 16 % low, inside MAC9's 20 %.
+Why it is 16 % low (checked 2026-11-26), in two parts. About 9 % does not depend on bias: from 0.25 V to 0.45 V
+the ratio stays at 303-307. The SiGe base's emitter-base built-in voltage is lower, by roughly its valence
+offset, so its depletion reaches less far into the base; its neutral base is wider and its Gummel number higher,
+while the textbook factor assumes equal neutral bases. A 200 nm base confirms this: the ratio is 331 at 0.4 V
+(-1.5 %). The other 7 % comes in above 0.6 V (296 at 0.6 V, 282 at 0.7 V; 321 at 0.7 V with the 200 nm base).
+It tracks the SiGe device's base current, which is 190 times larger, and matches the series drop through the
+side-contacted base; it is not high injection (electrons in the base stay near 1e16 against 2e18 cm^-3).
+The same check found a deck flaw, now fixed: the base contact had covered the whole base edge, so its end nodes
+lay 2 nm from each junction, inside the depletion regions, and drew a base current ten times the collector
+current (beta 0.1). The contact is now inset to the base's middle 10 nm, which cuts the base current about
+30-fold and leaves the ratio unchanged.
 
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
