@@ -65,7 +65,7 @@ double segment_distance_2d(const Point& a, const Point& b, const Point& q) {
 // boundary facets are found again.
 using FacetKey = std::vector<std::array<double, 3>>;
 
-FacetKey facet_key(std::vector<Point> pts) {
+FacetKey facet_key(const std::vector<Point>& pts) {
     FacetKey k;
     for (const Point& p : pts) k.push_back({p[0], p[1], p[2]});
     std::ranges::sort(k);
@@ -159,7 +159,7 @@ std::expected<GeneratedMesh, base::Error> generate_swept(const ExtrudedGeometry&
         if (cx.facets()[f].kind != FacetKind::boundary) continue;
         std::vector<Point> pts;
         for (const std::size_t v : g.facets[f].vertices) pts.push_back(g.vertices[v]);
-        facet_patch_of.emplace(facet_key(std::move(pts)), cx.facets()[f].patch);
+        facet_patch_of.emplace(facet_key(pts), cx.facets()[f].patch);
     }
     std::vector<std::vector<Point>> poly(cells);
     for (std::size_t c = 0; c < cells; ++c) {
@@ -184,7 +184,7 @@ std::expected<GeneratedMesh, base::Error> generate_swept(const ExtrudedGeometry&
         for (const std::size_t s : {std::size_t{0}, t.size() - 1}) {
             std::vector<Point> pts;
             for (const Point& q : poly[c]) pts.push_back(lift(q, t[s]));
-            const auto it = facet_patch_of.find(facet_key(std::move(pts)));
+            const auto it = facet_patch_of.find(facet_key(pts));
             if (it == facet_patch_of.end()) return std::unexpected(degenerate("an end facet of the extrusion was not found"));
             end_patch[c][s == 0 ? 0 : 1] = it->second;
         }

@@ -232,6 +232,7 @@ mesh::Point xyz(double x, double y, double z = 0.0) { return {x, y, z}; }
 
 std::vector<double> uniform(int nodes) {
     std::vector<double> v;
+    v.reserve(nodes);
     for (int k = 0; k < nodes; ++k) v.push_back(k == nodes - 1 ? L : L * k / (nodes - 1));
     return v;
 }
@@ -512,6 +513,7 @@ void judge_family(BenchmarkResult& r, const Family& f, const Contacts& c, const 
         return;
     }
     std::vector<double> hs;
+    hs.reserve(levels.size());
     for (const auto& l : levels) hs.push_back(l.h);
     enum class Norm { l2, linf, h1 };
     const auto name_of = [](Norm n) { return n == Norm::l2 ? " L2" : n == Norm::linf ? " Linf" : " H1"; };

@@ -283,7 +283,7 @@ std::expected<Model, std::string> read_model(std::string_view text) {
         m.contacts.clear();
         return m;
     };
-    const auto at_line = [](const deck::Entry& e, std::string what) { return "line " + std::to_string(e.line) + ": " + what; };
+    const auto at_line = [](const deck::Entry& e, const std::string& what) { return "line " + std::to_string(e.line) + ": " + what; };
     if (!mesh) return refuse("the deck has no [mesh] section");
     // Unit 26m MT8: the parameters, each kept with its expression as written.
     const auto resolved_params = deck::parameters(*d);
@@ -1822,6 +1822,7 @@ std::vector<Tie> ties(Model& m) {
 // Every parameter resolved again from its expression, then every tied coordinate; the solids and domain checked.
 std::expected<void, std::string> resolve_all(Model& m) {
     std::vector<deck::Entry> entries;
+    entries.reserve(m.parameters.size());
     for (std::size_t k = 0; k < m.parameters.size(); ++k) entries.push_back({m.parameters[k].name, m.parameters[k].expr, static_cast<int>(k) + 1});
     const auto r = deck::resolve_parameters(entries, "[parameters]");
     if (!r) return std::unexpected(r.error().message);

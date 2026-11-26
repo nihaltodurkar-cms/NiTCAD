@@ -22,8 +22,8 @@ public:
     };
 
     // `deck` the text swept, saved at `path` (the folder named beside it); `name` and `label` the row's.
-    SweepDialog(HWND owner, Host& host, std::string deck, std::filesystem::path path, std::string name, std::string label,
-                std::string current, int dpi, HFONT font, HFONT bold);
+    SweepDialog(HWND owner, Host& host, std::string deck, std::filesystem::path path, std::string name, const std::string& label,
+                const std::string& current, int dpi, HFONT font, HFONT bold);
     ~SweepDialog();
     SweepDialog(const SweepDialog&) = delete;
     SweepDialog& operator=(const SweepDialog&) = delete;

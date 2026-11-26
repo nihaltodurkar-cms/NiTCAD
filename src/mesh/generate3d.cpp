@@ -177,6 +177,7 @@ struct Generator3D {
     }
     [[nodiscard]] std::vector<int> slab_of(const Point& x) const {
         std::vector<int> key;
+        key.reserve(planes.size());
         for (const Plane& q : planes) key.push_back(predicates::orient3d(q.p[0], q.p[1], q.p[2], x));
         return key;
     }
@@ -358,6 +359,7 @@ struct Generator3D {
                     if (q == v3[(k + 1) % v3.size()]) return invalid("patch polygon has a repeated consecutive vertex", fi);
                 }
                 std::vector<Point> loc;
+                loc.reserve(v3.size());
                 for (const Point& q : v3) loc.push_back(face.to_local(q));
                 double area = shoelace(loc);
                 double extent = 0.0;

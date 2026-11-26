@@ -145,7 +145,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
             system->small_signal_matrix(x, s, a);
             const auto factored = solver->factorize(a);
             if (!factored) {
-                base::Error e = std::move(factored.error());
+                base::Error e = factored.error();
                 e.message = "small-signal system at bias point " + std::to_string(p) + ", " +
                             std::to_string(frequencies[k]) + " Hz: " + e.message;
                 run.stopped = std::move(e);
@@ -156,7 +156,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
             for (std::size_t j = 0; j < contacts; ++j) {
                 const auto solved = solver->solve(forcing[j], response[j]);
                 if (!solved) {
-                    base::Error e = std::move(solved.error());
+                    base::Error e = solved.error();
                     e.message = "small-signal solve at bias point " + std::to_string(p) + ", " +
                                 std::to_string(frequencies[k]) + " Hz, contact '" +
                                 device.contacts()[j].name + "': " + e.message;

@@ -505,6 +505,7 @@ std::optional<std::string> suggestion(std::string_view text, const Diagnostic& d
         const auto kind = first_word(line.substr(1, close == std::string_view::npos ? std::string_view::npos : close - 1));
         if (find_section_info(kind)) return std::nullopt;
         std::vector<std::string_view> kinds;
+        kinds.reserve(sections.size());
         for (const SectionInfo& s : sections) kinds.push_back(s.kind);
         if (auto n = nearest(kind, kinds)) return did_you_mean(*n);
         return std::nullopt;
@@ -558,8 +559,8 @@ std::optional<Completion> complete(std::string_view text, int line, std::size_t 
         for (const SectionInfo& s : sections) {
             if (!starts_with(s.kind, typed)) continue;
             std::string insert(s.kind);
-            if (s.names > 0) insert += " ";
-            else if (!closed) insert += "]";
+            if (s.names > 0) insert += ' ';
+            else if (!closed) insert += ']';
             c.items.push_back({std::string(s.kind), std::move(insert), std::string(s.help)});
         }
         return c;
@@ -599,7 +600,7 @@ std::optional<Completion> complete(std::string_view text, int line, std::size_t 
     for (const std::string_view choice : choices) {
         if (!starts_with(choice, typed)) continue;
         std::string insert(choice);
-        if (k->choices.data() == waveforms.data()) insert += "(";
+        if (k->choices.data() == waveforms.data()) insert += '(';
         c.items.push_back({std::string(choice), std::move(insert), std::string(k->help)});
     }
     return c;

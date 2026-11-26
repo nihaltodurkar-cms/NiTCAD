@@ -82,7 +82,7 @@ std::expected<Axis, std::string> read_axis(const deck::Entry& e, const Params& p
     std::vector<Word> ends;  // each piece's first and last
     Axis a;
     for (const std::string_view piece : pieces) {
-        if (piece.starts_with("linspace(") && piece.ends_with(")")) {
+        if (piece.starts_with("linspace(") && piece.ends_with(')')) {
             const std::string_view inside = piece.substr(9, piece.size() - 10);
             std::vector<std::string_view> args;
             std::size_t from = 0;

@@ -20,7 +20,7 @@ std::string read_file(const fs::path& p) {
     return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
 }
 
-std::string trim(std::string s) {
+std::string trim(const std::string& s) {
     const auto b = s.find_first_not_of(" \t\r\n");
     if (b == std::string::npos) return {};
     return s.substr(b, s.find_last_not_of(" \t\r\n") - b + 1);

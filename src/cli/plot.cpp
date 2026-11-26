@@ -953,7 +953,7 @@ int plot(int argc, char** argv) {
             if (k == device_b->contacts().size()) return std::nullopt;
             return k;
         };
-        const auto labelled = [&](std::string name, const char* run) { return with_b ? name + " (" + run + ")" : name; };
+        const auto labelled = [&](const std::string& name, const char* run) { return with_b ? name + " (" + run + ")" : name; };
         if (o.view == "iv") {
             if (!l.sweep) return fail("an I-V plot needs a sweep's results");
             std::vector<std::vector<double>> biases;
@@ -1193,6 +1193,7 @@ int plot(int argc, char** argv) {
             seeds = contact_seeds(*device, locator, c, o.lines, currents);
         }
         std::vector<Streamline> lines;
+        lines.reserve(seeds.size());
         for (const Point& seed : seeds) lines.push_back(trace_streamline(locator, nodal, seed));
         if (m.dimension() == 3 && o.view == "field" && o.field == o.streamlines && field_scene->colorbar) {
             add_streamlines(*field_scene, lines, *field_scene->colorbar);

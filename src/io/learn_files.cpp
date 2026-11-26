@@ -412,6 +412,7 @@ std::expected<results::TrainingSet, base::Error> build_training_set(const result
     for (std::size_t dv = 0; dv < histories.size(); ++dv) {
         const results::AdaptHistory& h = histories[dv];
         std::vector<double> remap;
+        remap.reserve(h.materials.size());
         for (const std::string& key : h.materials) {
             remap.push_back(static_cast<double>(std::ranges::lower_bound(t.materials, key) - t.materials.begin()));
         }

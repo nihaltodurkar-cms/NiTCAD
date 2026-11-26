@@ -137,6 +137,7 @@ struct Piece {
     // the polygon's boundary inside the hull). A hull with no interior is not judged (false).
     [[nodiscard]] bool hull_inside(const std::vector<Point>& V, const std::vector<Point>& poly) const {
         std::vector<Point> q;
+        q.reserve(V.size());
         for (const Point& x : V) q.push_back(detail::project(x, axis));
         return hull_inside_2d(std::move(q), poly);
     }
@@ -315,6 +316,7 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
                     if (std::abs(normal[static_cast<std::size_t>(c)]) > std::abs(normal[static_cast<std::size_t>(drop)])) drop = c;
                 }
                 std::vector<Point> q;
+                q.reserve(p.v.size());
                 for (const Point& a : p.v) q.push_back(detail::project(a, drop));
                 std::optional<std::vector<std::array<std::size_t, 3>>> ears;
                 if (detail::simple_2d(q)) ears = detail::ear_clip(q, detail::polygon_turn(q));

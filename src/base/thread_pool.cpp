@@ -20,7 +20,7 @@ ThreadPool::ThreadPool(int threads) {
     NITCAD_EXPECTS(threads >= 1);
     workers_.reserve(static_cast<std::size_t>(threads - 1));
     for (int i = 1; i < threads; ++i) {
-        workers_.emplace_back([this](std::stop_token stop) { work(stop); });
+        workers_.emplace_back([this](const std::stop_token& stop) { work(stop); });
     }
 }
 
@@ -71,7 +71,7 @@ void ThreadPool::run(std::size_t n, std::size_t chunk, void* body, Trampoline ca
     while (busy_.load(std::memory_order_acquire) != 0) _mm_pause();
 }
 
-void ThreadPool::work(std::stop_token stop) {
+void ThreadPool::work(const std::stop_token& stop) {
     std::uint64_t seen = 0;
     for (;;) {
         // Spin for the next job, then sleep.

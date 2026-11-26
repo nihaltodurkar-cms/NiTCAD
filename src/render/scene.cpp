@@ -364,6 +364,7 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
         }
         for (const Polygon& f : faces) {
             std::vector<Point> base;
+            base.reserve(f.vertices.size());
             for (const SurfaceVertex& v : f.vertices) base.push_back(add(v.position, off));
             const Point n = unit(polygon_normal(base));
             std::vector<std::array<std::size_t, 2>> sides;
@@ -410,6 +411,7 @@ TriangleBatch outline_shell(const device::Device& d, const Geometry& g, const Sh
     const Rgba color{0.82f, 0.85f, 0.88f, 0.12f};
     for (const Polygon& f : g.boundary_faces()) {
         std::vector<Point> pts;
+        pts.reserve(f.vertices.size());
         for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
         if (!shown.any()) {
             fan(shell, pts, {}, color, polygon_normal(pts));
@@ -450,6 +452,7 @@ void shown_pieces(TriangleBatch& batch, const Geometry& g, const Polygon& p, std
     for (const OwnedPolygon& piece : g.owner_pieces(p)) {
         if (!shown.node(piece.owner)) continue;
         std::vector<float> vals;
+        vals.reserve(piece.points.size());
         for (const Point& x : piece.points) vals.push_back(position_at(g, p.element, x, values, scale_));
         fan(batch, piece.points, vals, {}, normal);
     }
@@ -494,6 +497,7 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
     // With a clipping box (Unit 25c), the surface of what is left: cut faces drawn like the boundary.
     for (const Polygon& face : o.clip ? g.clipped_surface(*o.clip) : g.boundary_faces()) {
         std::vector<Point> pts;
+        pts.reserve(face.vertices.size());
         for (const SurfaceVertex& v : face.vertices) pts.push_back(v.position);
         const Point n = polygon_normal(pts);
         for (const OwnedPolygon& piece : g.owner_pieces(face)) {
@@ -501,6 +505,7 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
             const Material m = material_class(d, piece.owner, o.palette);
             if (field_scale && (!is_insulator(piece.owner) || !o.transparent_insulators)) {
                 std::vector<float> vals;
+                vals.reserve(piece.points.size());
                 for (const Point& x : piece.points) vals.push_back(position_at(g, face.element, x, values, *field_scale));
                 fan(field_batch, piece.points, vals, {}, n);
             } else {
@@ -516,6 +521,7 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
         for (const std::vector<Point>& part : parts) {
             if (field_scale && (!is_insulator(f.owner) || !o.transparent_insulators)) {
                 std::vector<float> vals;
+                vals.reserve(part.size());
                 for (const Point& x : part) vals.push_back(position_at(g, f.element, x, values, *field_scale));
                 fan(field_batch, part, vals, {}, f.normal);
             } else {
@@ -540,6 +546,7 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
             for (const std::vector<Point>& part : parts) {
                 if (field_scale) {
                     std::vector<float> vals;
+                    vals.reserve(part.size());
                     for (const Point& x : part) vals.push_back(position_at(g, p.element, x, values, *field_scale));
                     fan(field_batch, part, vals, {}, n);
                 } else {
@@ -1185,6 +1192,7 @@ std::expected<FieldScene, base::Error> quality_view(const device::Device& d, con
             return;
         }
         std::vector<Point> pts;
+        pts.reserve(p.vertices.size());
         for (const SurfaceVertex& v : p.vertices) pts.push_back(v.position);
         fan(batch, pts, std::vector<float>(pts.size(), at), {}, normal);
     };
@@ -1203,6 +1211,7 @@ std::expected<FieldScene, base::Error> quality_view(const device::Device& d, con
         TriangleBatch field{"quality", Shading::field, true, false, {}};
         for (const Polygon& f : g.boundary_faces()) {
             std::vector<Point> pts;
+            pts.reserve(f.vertices.size());
             for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
             add(field, f, polygon_normal(pts));
         }
@@ -1334,10 +1343,12 @@ std::expected<FieldScene, base::Error> exploded_view(const device::Device& d, co
         if (std::ranges::find(view.hidden_regions, static_cast<std::int32_t>(r)) != view.hidden_regions.end()) continue;
         for (const Geometry::RegionFace& f : surfaces[r]) {
             std::vector<Point> pts;
+            pts.reserve(f.points.size());
             for (const Point& x : f.points) pts.push_back(add(x, offset[r]));
             const Point n = polygon_normal(f.points);
             if (bar && !d.is_insulator(f.owner)) {
                 std::vector<float> vals;
+                vals.reserve(f.points.size());
                 for (const Point& x : f.points) vals.push_back(position_at(g, f.element, x, values, bar->scale));
                 fan(field_batch, pts, vals, {}, n);
             } else {

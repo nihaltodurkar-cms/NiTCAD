@@ -322,7 +322,7 @@ bool SolidPage::apply_parameters(const std::string& lines) {
     for (std::string line; std::getline(in, line);) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         const auto eq = line.find('=');
-        const auto trim = [](std::string s) {
+        const auto trim = [](const std::string& s) {
             const auto a = s.find_first_not_of(" \t"), b = s.find_last_not_of(" \t");
             return a == std::string::npos ? std::string{} : s.substr(a, b - a + 1);
         };
@@ -1080,6 +1080,7 @@ void SolidPage::finish_height() {
         r = add_box(next, b, material_);
     } else {
         std::vector<Pt> uv;
+        uv.reserve(polygon_.size());
         for (const P3& p : polygon_) uv.push_back(uv_of(n, p));
         r = add_prism(next, n, lo, hi, uv, material_);
     }
@@ -1695,7 +1696,7 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
                     copies.push_back({r, 0});
                 }
                 m_ = with;
-                m_start_ = with;
+                m_start_ = std::move(with);
                 sel_ = {copies, -1};
             }
             return;
@@ -1786,6 +1787,7 @@ void SolidPage::on_down(double x, double y, bool shift, bool ctrl, bool double_c
 void SolidPage::close_polygon() {
     if (polygon_.size() < 3) return;
     std::vector<Pt> uv;
+    uv.reserve(polygon_.size());
     for (const P3& p : polygon_) uv.push_back(uv_of(v_.plane.normal, p));
     if (!prism_ok(uv)) {
         host_.solid_status("A prism's polygon is simple, of non-zero area, with three vertices or more.");
@@ -1969,6 +1971,7 @@ void SolidPage::on_move(double x, double y, bool shift, bool ctrl) {
             preview_.solids = {Solid{SolidKind::box, b, 2, 0, 0, {}}};
         } else {
             std::vector<Pt> uv;
+            uv.reserve(polygon_.size());
             for (const P3& p : polygon_) uv.push_back(uv_of(n, p));
             preview_.solids = {Solid{SolidKind::prism, {}, n, lo, hi, uv}};
         }

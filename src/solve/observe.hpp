@@ -57,6 +57,7 @@ inline void observe(const results::BandDiagram& b) {
 inline void observe(const results::RunRecord& r) {
     observe("result.identity", std::bit_cast<double>(r.input_identity));
     std::vector<double> v;
+    v.reserve(r.settings.size());
     for (const auto& s : r.settings) v.push_back(s.second);
     observe("result.settings", v);
 }

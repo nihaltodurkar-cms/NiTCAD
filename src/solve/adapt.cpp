@@ -2010,7 +2010,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         if (c.window_moved) c.status = CertificateStatus::not_certified;
         result.certificates.push_back(c);
     }
-    result.points = at;
+    result.points = std::move(at);
     result.policy = o.policy;
     result.mesh = std::move(*built);
     return result;

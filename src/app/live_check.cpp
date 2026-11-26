@@ -28,7 +28,7 @@ struct LiveChecker::Shared {
 
 LiveChecker::LiveChecker(Wake wake, Check check) : shared_(std::make_shared<Shared>()) {
     if (!check) check = [](const std::string& text, const std::filesystem::path& path) { return check_deck(text, path); };
-    worker_ = std::jthread([s = shared_, wake = std::move(wake), check = std::move(check)](std::stop_token stop) {
+    worker_ = std::jthread([s = shared_, wake = std::move(wake), check = std::move(check)](const std::stop_token& stop) {
         for (;;) {
             Shared::Job job;
             {

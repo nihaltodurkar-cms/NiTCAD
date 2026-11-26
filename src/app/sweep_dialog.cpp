@@ -29,7 +29,7 @@ HWND child(HWND parent, const wchar_t* cls, const wchar_t* text, DWORD style, DW
 }  // namespace
 
 SweepDialog::SweepDialog(HWND owner, Host& host, std::string deck, std::filesystem::path path, std::string name,
-                         std::string label, std::string current, int dpi, HFONT font, HFONT bold)
+                         const std::string& label, const std::string& current, int dpi, HFONT font, HFONT bold)
     : owner_(owner), host_(host), deck_(std::move(deck)), path_(std::move(path)), name_(std::move(name)), dpi_(dpi),
       font_(font), bold_(bold) {
     win32::register_class(dialog_class, proc, GetSysColorBrush(COLOR_BTNFACE));

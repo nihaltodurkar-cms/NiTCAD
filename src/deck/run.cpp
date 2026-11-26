@@ -101,7 +101,7 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
                     "," + name + " allowed " + unit + "," + name + " order";
         }
     }
-    text += "\n";
+    text += '\n';
     for (std::size_t k = 0; k < sweep.points.size(); ++k) {
         const results::BiasPoint& p = sweep.points[k];
         text += std::to_string(k);
@@ -129,7 +129,7 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
                 }
             }
         }
-        text += "\n";
+        text += '\n';
     }
     return write_text(path, text);
 }
@@ -171,7 +171,7 @@ std::expected<void, base::Error> write_transient_table(const std::filesystem::pa
         }
         text += ",deposited C";
     }
-    text += "\n";
+    text += '\n';
     for (std::size_t k = 0; k < run.points.size(); ++k) {
         const results::TimePoint& p = run.points[k];
         text += format(p.time_s) + "," + format(p.step_s) + "," + std::to_string(p.order);
@@ -182,7 +182,7 @@ std::expected<void, base::Error> write_transient_table(const std::filesystem::pa
             for (const auto& q : collected) text += "," + format(q[k]);
             text += "," + format(p.heavy_ion_charge.value_or(0.0));
         }
-        text += "\n";
+        text += '\n';
     }
     return write_text(path, text);
 }
@@ -200,7 +200,7 @@ std::expected<void, base::Error> write_small_signal_table(const std::filesystem:
             }
         }
     }
-    text += "\n";
+    text += '\n';
     for (std::size_t k = 0; k < run.points.size(); ++k) {
         for (std::size_t f = 0; f < run.frequency_Hz.size(); ++f) {
             text += std::to_string(k) + "," + format(run.frequency_Hz[f]);
@@ -211,7 +211,7 @@ std::expected<void, base::Error> write_small_signal_table(const std::filesystem:
             for (std::size_t i = 0; i < run.contacts; ++i) {
                 for (std::size_t j = 0; j < run.contacts; ++j) text += "," + format(run.capacitance(k, f, i, j));
             }
-            text += "\n";
+            text += '\n';
         }
     }
     return write_text(path, text);

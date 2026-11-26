@@ -226,6 +226,7 @@ BenchmarkResult run_tvb31_25(Tier tier) {
     bs.push_back({"kinked", {{0.8, 0.3, 1.0e-7, 0.4}}});
     for (const TestBarrier& b : bs) {
         std::vector<mt::Segment> seg;
+        seg.reserve(b.segments.size());
         for (const auto& s : b.segments) seg.push_back({DD(s.W0_eV), DD(s.W1_eV), DD(s.length_cm), DD(s.mass_m0)});
         for (const double T : {300.0, 400.0}) {
             if (tier == Tier::fast && T != 300.0) continue;  // MI-Q9 (15.20): 300 K only in fast

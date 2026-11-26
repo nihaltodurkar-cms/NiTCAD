@@ -76,6 +76,7 @@ Stack stack(int dimension, int N, const physics::Insulator& hk) {
     for (int i = 0; i < N; ++i) x[static_cast<std::size_t>(i)] = h * i;
     const double t1 = 0.5 * (x[static_cast<std::size_t>(k)] + x[static_cast<std::size_t>(k + 1)]);
     std::vector<double> y;
+    y.reserve(N);
     for (int j = 0; j < N; ++j) y.push_back(width_cm * j / (N - 1));
     mesh::Mesh m = dimension == 1 ? *mesh::make_tensor_grid(x) : *mesh::make_tensor_grid(x, y);
     const std::size_t n = m.node_count();

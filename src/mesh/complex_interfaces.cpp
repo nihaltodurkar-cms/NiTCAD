@@ -515,6 +515,7 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
         };
         const auto to_frame = [&](const std::vector<Point>& c) {
             std::vector<Point> l;
+            l.reserve(c.size());
             for (const Point& x : c) l.push_back(pc.to_local(x));
             return l;
         };
@@ -690,6 +691,7 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
             const Point nf = cross(sub(pl[1], pl[0]), sub(pl[2], pl[0]));
             const Point q = add(P[x], unit(nf));
             std::vector<Point> rays;
+            rays.reserve(arms.size());
             for (const Arm& r : arms) rays.push_back(P[r.to]);
             sort_about_point(P[x], q, rays);
             for (std::size_t j = 0; j < rays.size(); ++j) {

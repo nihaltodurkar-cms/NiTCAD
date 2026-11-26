@@ -427,7 +427,7 @@ std::string console_rtf(const std::deque<LogLine>& lines, std::size_t from, LogF
             }
         }
     }
-    out += "}";
+    out += '}';
     return out;
 }
 

@@ -130,7 +130,7 @@ inline std::expected<double, std::string> quantity(std::string_view s, Dimension
     std::string_view mantissa = text;
     if (e != std::string_view::npos) {
         std::string_view digits = text.substr(e + 1);
-        if (digits.starts_with("+")) digits.remove_prefix(1);
+        if (digits.starts_with('+')) digits.remove_prefix(1);
         const auto own_exponent = integer(digits);
         if (!own_exponent) return std::unexpected("'" + std::string(s) + "' is not a number");
         exponent += *own_exponent;
@@ -180,7 +180,7 @@ inline std::expected<bool, std::string> boolean(std::string_view s) {
 // positive; each bound read by `read`.
 template <class Read>
 std::expected<std::vector<double>, std::string> logspace(std::string_view s, Read&& read) {
-    if (!s.ends_with(")")) return std::unexpected("logspace( without ')'");
+    if (!s.ends_with(')')) return std::unexpected("logspace( without ')'");
     const auto args = items(s.substr(9, s.size() - 10));
     if (args.size() != 3) return std::unexpected("logspace takes (first, last, count)");
     auto a = read(args[0]);

@@ -64,6 +64,7 @@ ReferenceInfo info() {
 
 std::vector<double> nodes(int N) {  // x_k = L (2k - (N - 1)) / (N - 1): antisymmetric, 0 at the middle edge's midpoint
     std::vector<double> x;
+    x.reserve(N);
     for (int k = 0; k < N; ++k) x.push_back(L * (2.0 * k - (N - 1)) / (N - 1));
     return x;
 }

@@ -144,7 +144,7 @@ void RunController::start(bool run, std::string text, std::filesystem::path path
     sweep_ = sweep;
     started_ = finished_ = std::chrono::steady_clock::now();
     worker_ = std::jthread([shared = shared_, wake = wake_, run, text = std::move(text), path = std::move(path),
-                            sweep = std::move(sweep)](std::stop_token stop) mutable {
+                            sweep = std::move(sweep)](const std::stop_token& stop) mutable {
         const auto post = [&](Event e) {
             bool was_empty = false;
             {
