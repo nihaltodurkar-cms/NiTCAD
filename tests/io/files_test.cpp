@@ -362,3 +362,20 @@ TEST_CASE("files: a sweep written before Unit 30 (no step fractions) loads with 
     CHECK(back->points[0].bias_substeps == 0);  // also absent: the Unit 28 default
     CHECK(back->points[0].weighted_current.empty());  // and the Unit 32 fields
 }
+
+// Unit 68 (MAD3, MAC6): a run's material records round-trip, and a run without them writes none.
+TEST_CASE("files: a run's material records round-trip; none are written without them", "[unit68]") {
+    const fs::path dir = scratch("material_records");
+    results::Sweep s = full_sweep();
+    REQUIRE(s.run.materials.empty());
+    REQUIRE(io::save_sweep(dir / "plain.ntc", s).has_value());
+    s.run.materials = {{"base", "sige_user", {0.3}, 0x0123456789abcdefull}, {"ox", "hk", {}, 42}};
+    REQUIRE(io::save_sweep(dir / "recorded.ntc", s).has_value());
+    const auto back = io::load_sweep(dir / "recorded.ntc");
+    REQUIRE(back.has_value());
+    CHECK(back->run.materials == s.run.materials);
+    const auto plain = io::load_sweep(dir / "plain.ntc");
+    REQUIRE(plain.has_value());
+    CHECK(plain->run.materials.empty());
+    CHECK(fs::file_size(dir / "recorded.ntc") > fs::file_size(dir / "plain.ntc"));
+}

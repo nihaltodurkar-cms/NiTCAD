@@ -1,6 +1,9 @@
 #include "NiTCAD/physics/materials.hpp"
 
+#include <algorithm>
 #include <array>
+#include <bit>
+#include <cstdint>
 
 namespace NiTCAD::physics {
 namespace {
@@ -131,6 +134,59 @@ std::vector<std::pair<std::string_view, double>> parameter_values(const Material
     }
 #undef NITCAD_X
     return out;
+}
+
+std::string_view nearest_name(std::string_view word, std::span<const std::string_view> names) {
+    const auto distance = [](std::string_view a, std::string_view b) {
+        std::vector<std::size_t> row(b.size() + 1);
+        for (std::size_t j = 0; j <= b.size(); ++j) row[j] = j;
+        for (std::size_t i = 1; i <= a.size(); ++i) {
+            std::size_t diagonal = row[0];
+            row[0] = i;
+            for (std::size_t j = 1; j <= b.size(); ++j) {
+                const std::size_t up = row[j];
+                row[j] = std::min({row[j] + 1, row[j - 1] + 1, diagonal + (a[i - 1] == b[j - 1] ? 0u : 1u)});
+                diagonal = up;
+            }
+        }
+        return row[b.size()];
+    };
+    const std::size_t limit = std::max<std::size_t>(1, word.size() / 3);
+    std::string_view best;
+    std::size_t best_distance = limit + 1;
+    for (const std::string_view n : names) {
+        const std::size_t d = distance(word, n);
+        if (d < best_distance) {
+            best = n;
+            best_distance = d;
+        }
+    }
+    return best;
+}
+
+std::uint64_t parameter_hash(const MaterialParameters& m) {
+    std::uint64_t h = 14695981039346656037ull;
+    const auto bytes = [&h](const void* data, std::size_t n) {
+        const auto* b = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
+    };
+    const auto value = [&bytes](double v) {
+        const auto bits = std::bit_cast<std::uint64_t>(v);
+        bytes(&bits, sizeof bits);
+    };
+    const unsigned char kind = m.index() == 0 ? 0 : 1;
+    bytes(&kind, 1);
+    for (const auto& [path, v] : parameter_values(m)) {
+        bytes(path.data(), path.size());
+        value(v);
+    }
+    if (const auto* s = std::get_if<SemiconductorParameters>(&m)) {
+        const unsigned char direct = s->band_to_band.direct_gap ? 1 : 0;
+        bytes(&direct, 1);
+        for (const double c : s->dos_mass.conduction) value(c);
+        for (const double c : s->dos_mass.valence) value(c);
+    }
+    return h;
 }
 
 std::span<const MaterialEntry> material_registry() noexcept { return registry; }

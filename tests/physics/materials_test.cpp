@@ -6,6 +6,7 @@
 // and parameters, independently of this code.
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <numbers>
@@ -319,4 +320,58 @@ TEST_CASE("material registry: parameter paths and values agree (DK7)", "[materia
         REQUIRE(*insulator_parameter(i, path) == value);
     }
     REQUIRE(insulator_parameter(i, "electron_mobility.mu_max") == nullptr);
+}
+
+// MAD3 / MAC6: every material Unit 68 adds cites every parameter; the earlier sets cite the whole set.
+TEST_CASE("material registry: parameter citations (MAC6)", "[materials][unit68]") {
+    for (const MaterialEntry& e : material_registry()) {
+        CAPTURE(e.name);
+        REQUIRE((!e.sources.empty() || e.name == "insulator"));
+        if (!e.recorded) {
+            REQUIRE(e.parameter_sources.empty());
+            continue;
+        }
+        const std::array<double, 2> zeros{};  // composition 0: the end binary
+        const auto set = e.make(std::span<const double>(zeros.data(), e.arguments_min));
+        REQUIRE(set.has_value());
+        for (const auto& [path, value] : parameter_values(*set)) {
+            CAPTURE(path);
+            bool cited = false;
+            for (const ParameterCitation& c : e.parameter_sources) {
+                if (c.path != path) continue;
+                cited = true;
+                REQUIRE(c.source < e.sources.size());
+                REQUIRE(std::ranges::find(citation_bases, c.basis) != std::end(citation_bases));
+            }
+            REQUIRE(cited);
+        }
+    }
+}
+
+TEST_CASE("material registry: nearest names (MAC13)", "[materials][unit68]") {
+    const std::array<std::string_view, 4> names{"silicon", "silicon_legacy", "gaas", "barrier"};
+    REQUIRE(nearest_name("silicn", names) == "silicon");
+    REQUIRE(nearest_name("gaass", names) == "gaas");
+    REQUIRE(nearest_name("barier", names) == "barrier");
+    REQUIRE(nearest_name("unobtainium", names).empty());
+    REQUIRE(nearest_name("x", names).empty());
+}
+
+TEST_CASE("material registry: parameter hash sees every value (MAD3)", "[materials][unit68]") {
+    const auto h = parameter_hash(MaterialParameters{silicon_parameters});
+    REQUIRE(h == parameter_hash(MaterialParameters{silicon_parameters}));
+    SemiconductorParameters s = silicon_parameters;
+    s.hole_mobility.mu_max = std::nextafter(s.hole_mobility.mu_max, 1e9);
+    REQUIRE(parameter_hash(MaterialParameters{s}) != h);
+    s = silicon_parameters;
+    s.band_to_band.direct_gap = !s.band_to_band.direct_gap;
+    REQUIRE(parameter_hash(MaterialParameters{s}) != h);
+    s = silicon_parameters;
+    s.dos_mass.valence[2] += 1e-3;
+    REQUIRE(parameter_hash(MaterialParameters{s}) != h);
+    REQUIRE(parameter_hash(MaterialParameters{legacy_silicon_parameters}) != h);
+    InsulatorParameters i = silicon_dioxide_parameters;
+    const auto hi = parameter_hash(MaterialParameters{i});
+    i.eps_r = 3.9000001;
+    REQUIRE(parameter_hash(MaterialParameters{i}) != hi);
 }

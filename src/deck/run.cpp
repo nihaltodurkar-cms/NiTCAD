@@ -267,6 +267,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
             run.mesh_type = plan.mesh_type;
             run.mesh_generation_digest = plan.generated->generation_digest;
         }
+        run.materials = plan.materials;  // Unit 68 (MAD3)
     };
     const Outputs& out = plan.outputs;
     if (plan.adapt) {
@@ -337,6 +338,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
             r->sweep.run.mesh_type = plan.mesh_type;
             r->sweep.run.mesh_generation_digest = fin.generated->generation_digest;
         }
+        r->sweep.run.materials = plan.materials;  // Unit 68 (MAD3)
         if (recorder) {
             auto h = recorder->finish(fin);
             if (!h) return std::unexpected(std::move(h.error()));

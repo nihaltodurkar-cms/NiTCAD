@@ -70,6 +70,13 @@ struct RegionSpec {
     std::vector<const Entry*> extrudes;  // Unit 53 (FD13): extrude3d meshes
     const Entry* overlap = nullptr;      // Unit 26m (MT4): overlap = replace | fill, layered meshes only
     bool fill = false;
+    std::optional<results::MaterialRecord> record;  // Unit 68 (MAD3): when the run records its material
+};
+
+// A [material] section built (Unit 68, MAD4): its set and its base's composition.
+struct UserMaterial {
+    physics::MaterialParameters parameters;
+    std::vector<double> composition;
 };
 
 class Builder {
@@ -156,10 +163,12 @@ private:
     // A material parameter by its member path (DK7) set from `e`; true when `e` was one.
     std::expected<bool, base::Error> parameter(physics::MaterialParameters& params, const Entry& e) const;
     // The registry material `e` names, with its composition arguments (Unit 68, MAD1).
-    std::expected<physics::MaterialParameters, base::Error> registry_material(const Entry& e) const;
+    // `composition`, when given, receives the arguments.
+    std::expected<physics::MaterialParameters, base::Error> registry_material(const Entry& e,
+                                                                              std::vector<double>* composition = nullptr) const;
     // Unit 68 (MAD4): the [material <name>] sections, inline or from their include file.
     std::expected<void, base::Error> user_materials();
-    std::expected<physics::MaterialParameters, base::Error> user_material(const Section& s) const;
+    std::expected<UserMaterial, base::Error> user_material(const Section& s) const;
     std::expected<RegionSpec, base::Error> region(const Section& s) const;
     std::expected<std::vector<double>, base::Error> axis(int line, std::string_view value) const;
     std::expected<std::vector<double>, base::Error> axis(const Entry& e) const { return axis(e.line, e.value); }
@@ -201,7 +210,7 @@ private:
     std::expected<Box, base::Error> box(const Entry& e, int dim) const;
 
     const Deck& d_;
-    std::map<std::string, physics::MaterialParameters, std::less<>> user_materials_;
+    std::map<std::string, UserMaterial, std::less<>> user_materials_;
     std::vector<RegionSpec> regions_;
     MeshType type_ = MeshType::tensor;
     std::string type_name_;  // the [mesh] type as written (extrude3d for a file mesh from a complex)
@@ -266,11 +275,20 @@ std::expected<bool, base::Error> Builder::parameter(physics::MaterialParameters&
     return false;
 }
 
-std::expected<physics::MaterialParameters, base::Error> Builder::registry_material(const Entry& e) const {
+std::expected<physics::MaterialParameters, base::Error> Builder::registry_material(const Entry& e,
+                                                                                   std::vector<double>* composition) const {
     const auto words = tokens(e.value);
     const std::string_view kind = words.front();
     const physics::MaterialEntry* entry = physics::find_material(kind);
-    if (!entry) return std::unexpected(at(e.line, "unknown material '" + std::string(kind) + "'"));
+    if (!entry) {
+        // MAC13: the nearest registry or [material] name, when it looks like a misspelling.
+        std::vector<std::string_view> names;
+        for (const physics::MaterialEntry& m : physics::material_registry()) names.push_back(m.name);
+        for (const auto& [name, user] : user_materials_) names.push_back(name);
+        const std::string_view nearest = physics::nearest_name(kind, names);
+        return std::unexpected(at(e.line, "unknown material '" + std::string(kind) + "'" +
+                                              (nearest.empty() ? "" : " (did you mean '" + std::string(nearest) + "'?)")));
+    }
     const std::size_t count = words.size() - 1;
     if (count < entry->arguments_min || count > entry->arguments_max) {
         if (entry->arguments_max == 0) return std::unexpected(at(e.line, "'" + std::string(kind) + "' takes no arguments"));
@@ -283,12 +301,13 @@ std::expected<physics::MaterialParameters, base::Error> Builder::registry_materi
     }
     auto made = entry->make(arguments);
     if (!made) return std::unexpected(located(e.line, "material", std::move(made.error())));
+    if (composition) *composition = std::move(arguments);
     return std::move(*made);
 }
 
 // A [material] section's own entries: base = <registry material> and member-path overrides,
 // validated as a region's material is (the error names the parameter).
-std::expected<physics::MaterialParameters, base::Error> Builder::user_material(const Section& s) const {
+std::expected<UserMaterial, base::Error> Builder::user_material(const Section& s) const {
     const Entry* base = nullptr;
     for (const Entry& e : s.entries) {
         if (e.key != "base") continue;
@@ -296,7 +315,8 @@ std::expected<physics::MaterialParameters, base::Error> Builder::user_material(c
         base = &e;
     }
     if (!base) return std::unexpected(at(s.line, "[material " + s.name + "] has no 'base'"));
-    NITCAD_DECK_TRY(params, registry_material(*base));
+    std::vector<double> composition;
+    NITCAD_DECK_TRY(params, registry_material(*base, &composition));
     for (const Entry& e : s.entries) {
         if (&e == base) continue;
         if (e.key == "include") return std::unexpected(at(e.line, "an included material file cannot include another"));
@@ -314,7 +334,7 @@ std::expected<physics::MaterialParameters, base::Error> Builder::user_material(c
     } else if (auto m = physics::Insulator::create(std::get<physics::InsulatorParameters>(params)); !m) {
         return std::unexpected(located(base->line, where, std::move(m.error())));
     }
-    return params;
+    return UserMaterial{std::move(params), std::move(composition)};
 }
 
 std::expected<void, base::Error> Builder::user_materials() {
@@ -375,10 +395,15 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         if (words.size() != 1) {
             return std::unexpected(at(material->line, "'" + std::string(words.front()) + "' takes no arguments"));
         }
-        params = user->second;
+        params = user->second.parameters;
+        spec.record = results::MaterialRecord{s.name, user->first, user->second.composition, 0};
     } else {
-        NITCAD_DECK_TRY(made, registry_material(*material));
+        std::vector<double> composition;
+        NITCAD_DECK_TRY(made, registry_material(*material, &composition));
         params = std::move(made);
+        if (physics::find_material(words.front())->recorded) {
+            spec.record = results::MaterialRecord{s.name, std::string(words.front()), std::move(composition), 0};
+        }
     }
     for (const Entry& e : s.entries) {
         if (&e == material) continue;
@@ -399,6 +424,7 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         return std::unexpected(at(e.line, "unknown key '" + e.key + "' in [region " + s.name +
                                               "] (not a parameter of its material)"));
     }
+    if (spec.record) spec.record->parameter_hash = physics::parameter_hash(params);
     if (const auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
         auto m = physics::Semiconductor::create(*sp);
         if (!m) return std::unexpected(located(material->line, "[region " + s.name + "]", std::move(m.error())));
@@ -2321,6 +2347,9 @@ std::expected<Plan, base::Error> Builder::run() {
     auto device = device::Device::create(std::move(d));
     if (!device) return std::unexpected(located(1, "device", std::move(device.error())));
     Plan plan{.device = std::move(*device), .generated = std::move(generated_), .mesh_type = type_name_};
+    for (const RegionSpec& g : regions_) {
+        if (g.record) plan.materials.push_back(*g.record);
+    }
     NITCAD_DECK_CHECK(models(plan.options.models));
     NITCAD_DECK_CHECK(solver(plan));
     NITCAD_DECK_CHECK(analysis(plan));

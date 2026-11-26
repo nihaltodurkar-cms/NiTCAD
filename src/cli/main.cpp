@@ -430,7 +430,11 @@ int materials(int argc, char** argv) {
     }
     const MaterialEntry* e = find_material(argv[2]);
     if (!e) {
-        std::fprintf(stderr, "nitcad materials: unknown material '%s' (nitcad materials lists them)\n", argv[2]);
+        std::vector<std::string_view> names;
+        for (const MaterialEntry& m : material_registry()) names.push_back(m.name);
+        const std::string_view nearest = nearest_name(argv[2], names);
+        std::fprintf(stderr, "nitcad materials: unknown material '%s'%s (nitcad materials lists them)\n", argv[2],
+                     nearest.empty() ? "" : std::format(" (did you mean '{}'?)", nearest).c_str());
         return 1;
     }
     std::vector<double> arguments;
@@ -446,11 +450,17 @@ int materials(int argc, char** argv) {
     const auto set = e->make(arguments);
     if (!set) return fail(set.error());
     std::printf("%s: %s, %s\n", std::string(e->name).c_str(), kind(e->kind), std::string(e->summary).c_str());
-    for (const Citation& c : e->sources) {
-        std::printf("  source: %s (%s)\n", std::string(c.source).c_str(), std::string(c.where).c_str());
+    for (std::size_t i = 0; i < e->sources.size(); ++i) {
+        const Citation& c = e->sources[i];
+        std::printf("  source [%zu]: %s (%s)\n", i + 1, std::string(c.source).c_str(), std::string(c.where).c_str());
     }
+    if (e->parameter_sources.empty()) std::puts("  (the sources above cover the whole set)");
     for (const auto& [path, value] : parameter_values(*set)) {
-        std::printf("  %s = %s\n", std::string(path).c_str(), std::format("{:.12g}", value).c_str());
+        std::string cited;
+        for (const ParameterCitation& c : e->parameter_sources) {
+            if (c.path == path) cited = std::format("   [{}] {}", c.source + 1, c.basis);
+        }
+        std::printf("  %s = %s%s\n", std::string(path).c_str(), std::format("{:.12g}", value).c_str(), cited.c_str());
     }
     return 0;
 }

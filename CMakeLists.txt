@@ -1104,7 +1104,9 @@ add_test(NAME cli_materials COMMAND nitcad materials)
 set_tests_properties(cli_materials PROPERTIES PASS_REGULAR_EXPRESSION "algaas +semiconductor +Al\\(x\\)Ga")
 add_test(NAME cli_materials_one COMMAND nitcad materials algaas 0.3)
 set_tests_properties(cli_materials_one PROPERTIES PASS_REGULAR_EXPRESSION
-  "algaas: semiconductor.*source: legacy materials\\.algaas.*eps_r = 12\\.12\n")
+  "algaas: semiconductor.*source \\[1\\]: legacy materials\\.algaas.*eps_r = 12\\.12\n")
+add_test(NAME cli_materials_suggest COMMAND nitcad materials silicn)
+set_tests_properties(cli_materials_suggest PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_materials_unknown COMMAND nitcad materials unobtainium)
 set_tests_properties(cli_materials_unknown PROPERTIES WILL_FAIL TRUE)
 

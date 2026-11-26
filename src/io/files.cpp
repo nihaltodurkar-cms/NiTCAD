@@ -326,6 +326,9 @@ constexpr std::uint16_t mesh_digest = 4;  // Unit 45; absent in older files (0: 
 constexpr std::uint16_t mesh_generation = 5;  // Unit 53 (FD14); absent unless the mesh came from a complex
 constexpr std::uint16_t generation_type = 1, generation_digest = 2;
 constexpr std::uint16_t warning = 6, warning_text = 1;  // Unit 62; absent without warnings
+// Unit 68 (MAD3); absent unless a region's material is recorded (RunRecord::materials).
+constexpr std::uint16_t material = 7, material_region = 1, material_name = 2, material_composition = 3,
+                        material_hash = 4;
 }
 namespace provenance_key {
 constexpr std::uint16_t version = 1, revision = 2, dirty = 3, build_type = 4, compiler = 5,
@@ -712,6 +715,14 @@ Writer write_run(const results::RunRecord& run) {
         t.text(run_key::warning_text, s);
         w.record(run_key::warning, t);
     }
+    for (const results::MaterialRecord& m : run.materials) {
+        Writer t;
+        t.text(run_key::material_region, m.region);
+        t.text(run_key::material_name, m.material);
+        t.f64s(run_key::material_composition, m.composition);
+        t.u64(run_key::material_hash, m.parameter_hash);
+        w.record(run_key::material, t);
+    }
     return w;
 }
 
@@ -746,6 +757,16 @@ std::expected<results::RunRecord, base::Error> read_run(const Reader& r) {
         for (const Reader& t : warnings) {
             NITCAD_IO_TRY(text, t.text(run_key::warning_text));
             run.warnings.push_back(std::move(text));
+        }
+    }
+    if (r.has(run_key::material)) {
+        NITCAD_IO_TRY(materials, r.records(run_key::material));
+        for (const Reader& t : materials) {
+            NITCAD_IO_TRY(region, t.text(run_key::material_region));
+            NITCAD_IO_TRY(name, t.text(run_key::material_name));
+            NITCAD_IO_TRY(composition, t.f64s(run_key::material_composition));
+            NITCAD_IO_TRY(hash, t.u64(run_key::material_hash));
+            run.materials.push_back({std::move(region), std::move(name), std::move(composition), hash});
         }
     }
     return run;

@@ -28,6 +28,18 @@ struct Citation {
     std::string_view where;   // which values, table or equation
 };
 
+// The source of one parameter of a set (MAD3): its member path, the index of its Citation in the
+// entry's sources, and how the value was got: "measured", "fit", "interpolated", "derived",
+// "secondary" (through a review, not the primary paper) or "default" (carried, not sourced).
+struct ParameterCitation {
+    std::string_view path;
+    std::size_t source;
+    std::string_view basis;
+};
+
+// The bases a ParameterCitation may name.
+inline constexpr std::string_view citation_bases[] = {"measured", "fit", "interpolated", "derived", "secondary", "default"};
+
 using MaterialParameters = std::variant<SemiconductorParameters, InsulatorParameters>;
 
 struct MaterialEntry {
@@ -41,6 +53,13 @@ struct MaterialEntry {
     // Builds the set from the arguments (their count already checked). Errors: as the material's
     // own factory (for example algaas_parameters).
     std::expected<MaterialParameters, base::Error> (*make)(std::span<const double> arguments);
+    // Each parameter's source (MAD3). Empty for the sets before Unit 68, which cite `sources` for
+    // the whole set (the citations already in their header comments, no new reading); every
+    // material Unit 68 adds cites every parameter_values path here (MAC6).
+    std::span<const ParameterCitation> parameter_sources = {};
+    // Whether a run records a region of this material (RunRecord::materials). False for the names
+    // before Unit 68, so their result files do not change (MAC1); true for every material it adds.
+    bool recorded = false;
 };
 
 // Every registry entry, in listing order.
@@ -56,5 +75,13 @@ struct MaterialEntry {
 
 // Every member path of the set a deck can set, with its value, in that order (`nitcad materials`).
 [[nodiscard]] std::vector<std::pair<std::string_view, double>> parameter_values(const MaterialParameters& p);
+
+// The name of `names` nearest `word` by edit distance, when near enough to be a misspelling
+// (distance at most a third of the word, at least 1; MAC13), or "" (the first on a tie).
+[[nodiscard]] std::string_view nearest_name(std::string_view word, std::span<const std::string_view> names);
+
+// A 64-bit FNV-1a digest of the set's kind, its parameter_values (paths and value bits), its
+// direct-gap flag and its density-of-states mass fits: equal sets give equal hashes (MAD3).
+[[nodiscard]] std::uint64_t parameter_hash(const MaterialParameters& p);
 
 }  // namespace NiTCAD::physics

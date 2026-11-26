@@ -4940,6 +4940,16 @@ hopping at room temperature per M19a; a Caughey-Thomas band mobility is recorded
 nio`. (5) Bi2X3 masses are tensors; the set uses the DOS mass (geometric mean), flagged "derived", under MAD16's
 isotropic limitation.
 
+**Slice 0 as built (2026-11-26; commits 1cc8378, bded2ee, 60c8952 and the next, on main 5904b83).** Registry (MAD1),
+`[material]` and `.nitmat` (MAD4), `nitcad materials` (MAD12), nearest-name suggestions (MAC13), the run's material
+records and per-parameter citations (MAD3). Reading taken for MAC6, flagged for the owner (it meets MAC1, which as
+written MAC6 would break): a run records a region's material only when the region names a `[material]` or a
+registry material Unit 68 adds (`MaterialEntry::recorded`); the nine earlier names, with or without composition,
+write no record, so every existing result file stays byte-identical. Decks differing only in x already differ in
+`input_identity` (it digests the parameters). Per-parameter citations: the nine earlier sets cite the whole set
+(MAD3's limitation); every set Unit 68 adds must cite every parameter (test in place, vacuous until slice 5).
+Not run: the full Release suite and the MAC1 byte-comparison of every bundled deck's result files against main.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

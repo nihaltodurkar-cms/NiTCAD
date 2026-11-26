@@ -204,6 +204,7 @@
 #include "NiTCAD/device/doping_profiles.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/results/learn.hpp"
+#include "NiTCAD/results/run.hpp"
 #include "NiTCAD/solve/adapt.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
@@ -250,6 +251,7 @@ struct Plan {
     device::Device device;
     std::optional<mesh::GeneratedMesh> generated;  // the mesh the deck generated or loaded, if any
     std::string mesh_type;                         // the [mesh] type, as written; extrude3d for a file mesh with a generation digest (Unit 53, FD14)
+    std::vector<results::MaterialRecord> materials;  // Unit 68 (MAD3): the regions' recorded materials (RunRecord::materials)
     Analysis analysis = Analysis::sweep;
     // Models, solver and, for a sweep or a small-signal run, the thermal contacts' temperature per
     // point (for a transient or a trace, one list held for the run).

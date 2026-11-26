@@ -20,6 +20,7 @@
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/physics/materials.hpp"
 #include "fixtures.hpp"
 
 using namespace NiTCAD;
@@ -1488,4 +1489,35 @@ TEST_CASE("deck build: [material] user materials (MAC5)", "[deck][unit68]") {
                "t.deck:7: 'm' takes no arguments");
         expect(failure(head + "[material]\nbase = silicon\n" + tail), "t.deck:4: [material] needs a name");
     }
+}
+
+// Unit 68 (MAD3, MAC6): the plan records each region's user material; the pre-Unit-68 names are
+// not recorded (their result files stay byte-identical, MAC1).
+TEST_CASE("deck build: user materials are recorded with their composition and hash (MAC6)", "[deck][unit68]") {
+    const std::string head = "[mesh]\ntype = tensor\nx = 0, 1um\n";
+    const std::string tail = "[contact a]\nkind = ohmic\npatch = x_min\n[equilibrium]\n";
+    const deck::Plan p = must(head + "[material barrier]\nbase = algaas 0.3\n[region a]\nmaterial = barrier\n" + tail);
+    REQUIRE(p.materials.size() == 1);
+    CHECK(p.materials[0].region == "a");
+    CHECK(p.materials[0].material == "barrier");
+    CHECK(p.materials[0].composition == std::vector<double>{0.3});
+    const auto& used = std::get<physics::Semiconductor>(p.device.regions()[0].material).parameters();
+    CHECK(p.materials[0].parameter_hash == physics::parameter_hash(physics::MaterialParameters{used}));
+    // Two decks differing only in x differ in hash; a region override changes it too.
+    const deck::Plan q = must(head + "[material barrier]\nbase = algaas 0.31\n[region a]\nmaterial = barrier\n" + tail);
+    CHECK(q.materials[0].parameter_hash != p.materials[0].parameter_hash);
+    const deck::Plan r = must(head + "[material barrier]\nbase = algaas 0.3\n[region a]\nmaterial = barrier\neps_r = 12\n" + tail);
+    CHECK(r.materials[0].parameter_hash != p.materials[0].parameter_hash);
+    // The registry names before Unit 68 are not recorded, with or without composition.
+    CHECK(must(head + "[region a]\nmaterial = algaas 0.3\n" + tail).materials.empty());
+    CHECK(must(head + "[region a]\nmaterial = silicon\n" + tail).materials.empty());
+}
+
+TEST_CASE("deck build: an unknown material suggests the nearest name (MAC13)", "[deck][unit68]") {
+    const std::string head = "[mesh]\ntype = tensor\nx = 0, 1um\n";
+    CHECK(failure(head + "[region a]\nmaterial = silicn\n[equilibrium]\n")
+              .find("t.deck:5: unknown material 'silicn' (did you mean 'silicon'?)") != std::string::npos);
+    CHECK(failure(head + "[material barrier]\nbase = algaas 0.3\n[region a]\nmaterial = barier\n[equilibrium]\n")
+              .find("unknown material 'barier' (did you mean 'barrier'?)") != std::string::npos);
+    CHECK(failure(head + "[region a]\nmaterial = unobtainium\n[equilibrium]\n").find("did you mean") == std::string::npos);
 }
