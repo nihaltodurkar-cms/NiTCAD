@@ -124,6 +124,9 @@ constexpr auto robertson_cites = dielectric_cites({0, "measured"}, {0, "derived"
 
 // MgO (MAD13): amorphous MgO on (100)Si by internal photoemission, the conduction band 3.37 eV
 // above the silicon valence band top (offset 3.37 - 1.12 = 2.25 eV), gap 6.1 eV; eps_r approximate.
+// chi 1.80 eV is Si-referenced (4.05 - 2.25), an interface-derived effective affinity, not MgO's
+// vacuum-referenced surface affinity (-0.40 eV, Rohlfing et al., PRL 91, 256802, 2003, via Heinisch
+// et al. 2012), which does not set the Si/MgO barrier.
 constexpr std::array<Citation, 2> mgo_sources{{
     {"V. V. Afanas'ev et al., Appl. Phys. Lett. 96, 052103 (2010), doi:10.1063/1.3294328",
      "abstract: a-MgO gap 6.1 eV, conduction band 3.37 eV above the Si valence band top"},
