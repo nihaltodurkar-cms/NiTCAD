@@ -5051,6 +5051,14 @@ region into one uniform-x region per node layer (`<region>.1`, ...; at most 512 
 continuous drift-diffusion. The region's overrides apply to every layer, each layer is recorded with its x, and
 an `[interface]` may not name a graded region.
 
+**Slice 1 step 3 (2026-11-26).** The owner chose the recommended answers. SiGe thermal conductivity stays off
+until a temperature exponent is sourced, so electrothermal runs on SiGe are refused. SiGe impact ionization and
+band-to-band tunnelling stay off. MAC9 is read as above: the average valence offset, plus the full textbook
+factor. Library deck `examples/devices/sige_hbt_2d.deck` is an npn with a 50 nm `sige_strained 0.2` base at
+2e18 cm^-3, contacted at its side, swept along the Gummel line at V_CB = 0. At V_BE = 0.7 V its collector
+current is 281 times the all-silicon base's (`xge = 0`). The textbook factor, mu_n ni_eff^2 of the base at
+2e18 cm^-3, is 335; exp(-dEg/kT) alone would be 697. The ratio is 16 % low, inside MAC9's 20 %.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

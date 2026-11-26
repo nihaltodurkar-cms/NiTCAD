@@ -177,7 +177,7 @@ TEST_CASE("library: the families (DT3)", "[app][library]") {
                        "finfet_bulk_3d.deck", "finfet_soi_3d.deck", "gaa_nanosheet_fet_3d.deck",
                        "gaa_nanowire_fet_3d.deck", "heterojunction_diode_2d.deck", "jfet_2d.deck", "mis_diode_2d.deck",
                        "moscap_1d.deck", "mosfet_2d.deck", "mosfet_3d.deck", "pin_diode_1d.deck", "pn_diode_1d.deck",
-                       "pn_diode_2d.deck", "pn_diode_3d.deck", "schottky_diode_1d.deck", "schottky_diode_2d.deck",
+                       "pn_diode_2d.deck", "pn_diode_3d.deck", "schottky_diode_1d.deck", "schottky_diode_2d.deck", "sige_hbt_2d.deck",
                        "soi_fd_mosfet_3d.deck", "soi_mosfet_2d.deck", "soi_pd_mosfet_2d.deck", "tri_gate_mosfet_3d.deck",
                        "tunnel_diode_1d.deck", "tunnel_fet_2d.deck", "varactor_diode_2d.deck", "zener_diode_2d.deck"});
 }
