@@ -4945,7 +4945,7 @@ constants. No published threshold-shift data compared (as KQ7).
 |---|---|
 | TDC1 | Off: every existing test passes unchanged; decks without the keys build equal `DeviceDescription`s (by construction: the deck path is untouched when no key is present). |
 | TDC2 | Formula: g₀ = 8.1e12; f_y(0) = (E₀/E₁)^m, f_y(1 MV/cm) = (1.1/2.35)^0.9 and f_y → 1 at 1e12 V/cm, each to 1e-12 relative; N_ot linear in D, t_ox and f_ot; N_ot = 0 at f_ot = 0. |
-| TDC3 | Gate equivalence: a MOS-capacitor deck with `dose` builds a device equal to the same deck with `fixed_charge` = Q_f + N_ot (the value printed `%.17g`), and their solved C–V points are bit-identical. |
+| TDC3 | Gate equivalence: a compact-gate MOSFET deck with `dose` builds a gate stack whose fixed charge is bit-equal to the same deck's with `fixed_charge` = Q_f + N_ot (the value printed `%.17g`), and their solved gate-sweep points (potentials, contact currents) are bit-identical. |
 | TDC4 | Interface equivalence: a meshed-oxide MOS deck with `dose` and `interface_trap_yield` builds a device equal to the deck with that `fixed_charge` and the two `trap_band` lines written out. |
 | TDC5 | Refusals: each TDD3 case refused at its line, with the message naming the key. |
 | TDC6 | Suites: the deck vocabulary test passes with the new keys; Release `/W4 /WX` full suite on the owner's word; Debug only on the owner's word. |
