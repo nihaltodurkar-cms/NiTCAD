@@ -54,6 +54,11 @@
 //                                | algaas <x> [<share>] | sio2 | insulator | metal | <a [material] name>
 //                       (metal, Unit 68 MAD6: work_function = <eV> or metal = <preset>, and an
 //                       electrode contact with region = <name> holds all its nodes)
+//                       (Unit 68: `nitcad materials` lists every name, e.g. hfo2, sige <x>,
+//                       sige_strained <x>, si_strained <x_substrate>)
+//                     composition = linear <x_start> <x_end> <x|y|z> <start> <end>  (Unit 68,
+//                       MAQ7a: a graded region; its material named without the fraction; one
+//                       region per node layer along the axis, named <region>.1, <region>.2, ...)
 //                       (silicon: Couderc et al.'s band set, Unit 35; silicon_legacy: the legacy's)
 //                     <parameter> = <value>   (a material parameter by its C++ member path, e.g.
 //                       eps_r, electron_mobility.mu_max, thermal.conductivity_W_cmK,

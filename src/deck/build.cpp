@@ -80,6 +80,17 @@ struct RegionSpec {
     bool fill = false;
     std::optional<results::MaterialRecord> record;  // Unit 68 (MAD3): when the run records its material
     std::optional<device::Electrode> metal;          // Unit 68 (MAD6): a metal region's electrode
+    // Unit 68 (MAQ7a, slice 1): `composition = linear <x_start> <x_end> <axis> <start> <end>`, the
+    // material's fraction linear along the axis between the two coordinates (held at the ends
+    // outside them); the region's parameter overrides apply to every layer.
+    struct Grading {
+        const physics::MaterialEntry* entry = nullptr;
+        const Entry* line = nullptr;
+        double x_start = 0.0, x_end = 0.0, start = 0.0, end = 0.0;
+        int axis = 0;
+        std::vector<const Entry*> overrides;
+    };
+    std::optional<Grading> grading;
 };
 
 // A [material] section built (Unit 68, MAD4): its set and its base's composition.
@@ -171,6 +182,8 @@ private:
     std::expected<void, base::Error> check_sections() const;
     // A material parameter by its member path (DK7) set from `e`; true when `e` was one.
     std::expected<bool, base::Error> parameter(physics::MaterialParameters& params, const Entry& e) const;
+    // Unit 68 (MAQ7a): each graded region split into one uniform-composition region per node layer.
+    std::expected<void, base::Error> grade(device::DeviceDescription& d);
     // The registry material `e` names, with its composition arguments (Unit 68, MAD1).
     // `composition`, when given, receives the arguments.
     std::expected<physics::MaterialParameters, base::Error> registry_material(const Entry& e,
@@ -221,6 +234,7 @@ private:
     const Deck& d_;
     std::map<std::string, UserMaterial, std::less<>> user_materials_;
     std::vector<RegionSpec> regions_;
+    std::vector<results::MaterialRecord> graded_records_;  // Unit 68: the layers a grading adds
     MeshType type_ = MeshType::tensor;
     std::string type_name_;  // the [mesh] type as written (extrude3d for a file mesh from a complex)
     bool layered_mesh_ = false;  // a layered generate2d or generate3d mesh (the only ones taking a region's overlap)
@@ -403,24 +417,60 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
     if (!material) return std::unexpected(at(s.line, "[region " + s.name + "] has no 'material'"));
     physics::MaterialParameters params;
     const auto words = tokens(material->value);
-    if (const auto user = user_materials_.find(words.front()); user != user_materials_.end()) {
+    const Entry* composition = nullptr;
+    for (const Entry& e : s.entries) {
+        if (e.key != "composition") continue;
+        if (composition) return std::unexpected(at(e.line, "a second 'composition'"));
+        composition = &e;
+    }
+    if (composition) {  // Unit 68 (MAQ7a): a graded region
+        const physics::MaterialEntry* entry = physics::find_material(words.front());
+        if (!entry || entry->arguments_min != 1 || words.size() != 1) {
+            return std::unexpected(at(composition->line, "a graded region names a material that takes a fraction, written "
+                                                      "without it (for example 'material = sige_strained')"));
+        }
+        const auto t = tokens(composition->value);
+        if (t.size() != 6 || t[0] != "linear") {
+            return std::unexpected(at(composition->line, "composition = linear <x_start> <x_end> <axis> <start> <end>"));
+        }
+        RegionSpec::Grading g{.entry = entry, .line = composition};
+        NITCAD_DECK_TRY(x0, lift(composition->line, number(t[1])));
+        NITCAD_DECK_TRY(x1, lift(composition->line, number(t[2])));
+        if (t[3] != "x" && t[3] != "y" && t[3] != "z") return std::unexpected(at(composition->line, "the grading axis is x, y or z"));
+        NITCAD_DECK_TRY(a, lift(composition->line, length(t[4])));
+        NITCAD_DECK_TRY(b, lift(composition->line, length(t[5])));
+        if (!(b > a)) return std::unexpected(at(composition->line, "the grading's end must lie beyond its start"));
+        g.x_start = x0;
+        g.x_end = x1;
+        g.axis = t[3][0] - 'x';
+        g.start = a;
+        g.end = b;
+        for (const double x : {x0, x1}) {  // both ends must be valid compositions
+            const std::array<double, 1> arg{x};
+            if (auto made = entry->make(arg); !made) return std::unexpected(located(composition->line, "composition", std::move(made.error())));
+        }
+        const std::array<double, 1> arg{x0};
+        params = *entry->make(arg);
+        spec.record = results::MaterialRecord{s.name, std::string(entry->name), {x0}, 0};
+        spec.grading = std::move(g);
+    } else if (const auto user = user_materials_.find(words.front()); user != user_materials_.end()) {
         if (words.size() != 1) {
             return std::unexpected(at(material->line, "'" + std::string(words.front()) + "' takes no arguments"));
         }
         params = user->second.parameters;
         spec.record = results::MaterialRecord{s.name, user->first, user->second.composition, 0};
     } else {
-        std::vector<double> composition;
-        NITCAD_DECK_TRY(made, registry_material(*material, &composition));
+        std::vector<double> arguments;
+        NITCAD_DECK_TRY(made, registry_material(*material, &arguments));
         params = std::move(made);
         if (physics::find_material(words.front())->recorded) {
-            spec.record = results::MaterialRecord{s.name, std::string(words.front()), std::move(composition), 0};
+            spec.record = results::MaterialRecord{s.name, std::string(words.front()), std::move(arguments), 0};
         }
     }
     const bool is_metal = std::holds_alternative<physics::InsulatorParameters>(params) &&
                           std::get<physics::InsulatorParameters>(params).metal;
     for (const Entry& e : s.entries) {
-        if (&e == material) continue;
+        if (&e == material || &e == composition) continue;
         if (e.key == "box") { spec.boxes.push_back(&e); continue; }
         if (e.key == "polygon") { spec.polygons.push_back(&e); continue; }
         if (e.key == "seed") { spec.seeds.push_back(&e); continue; }
@@ -456,7 +506,10 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
             continue;
         }
         NITCAD_DECK_TRY(taken, parameter(params, e));
-        if (taken) continue;
+        if (taken) {
+            if (spec.grading) spec.grading->overrides.push_back(&e);
+            continue;
+        }
         if (e.key == "metal" && !physics::find_metal_preset(e.value)) return std::unexpected(at(e.line, unknown_metal(e.value)));
         if (e.key == "work_function" || e.key == "metal") {
             return std::unexpected(at(e.line, "'" + e.key + "' is for a metal region (material = metal)"));
@@ -1294,6 +1347,65 @@ std::expected<void, base::Error> Builder::doping(device::DeviceDescription& d) c
     return {};
 }
 
+
+std::expected<void, base::Error> Builder::grade(device::DeviceDescription& d) {
+    for (std::size_t r = 0; r < regions_.size(); ++r) {
+        RegionSpec& spec = regions_[r];
+        if (!spec.grading) continue;
+        const RegionSpec::Grading& g = *spec.grading;
+        if (g.axis >= d.mesh.dimension()) {
+            return std::unexpected(at(g.line->line, std::format("the grading axis lies outside this {}D mesh", d.mesh.dimension())));
+        }
+        for (const Section& s : d_.sections) {
+            if (s.kind == "interface" && s.name.find(spec.section->name) != std::string::npos) {
+                for (const std::string_view w : tokens(s.name)) {
+                    if (w == spec.section->name) {
+                        return std::unexpected(at(s.line, "[interface] cannot name the graded region '" + spec.section->name + "'"));
+                    }
+                }
+            }
+        }
+        // The node layers: every node of the region by its coordinate along the axis.
+        std::map<double, std::vector<std::size_t>> layers;
+        const auto points = d.mesh.points();
+        for (std::size_t i = 0; i < d.node_region.size(); ++i) {
+            if (d.node_region[i] == static_cast<device::RegionId>(r)) layers[points[i][static_cast<std::size_t>(g.axis)]].push_back(i);
+        }
+        // shortcut: one region per distinct coordinate; an unstructured mesh has one per node, so
+        // it is capped; a tensor or extruded mesh has one per grid line.
+        constexpr std::size_t max_layers = 512;
+        if (layers.size() > max_layers) {
+            return std::unexpected(at(g.line->line, std::format("the graded region has {} node layers along its axis (at most {}): "
+                                                                "grade on a tensor or extruded mesh",
+                                                                layers.size(), max_layers)));
+        }
+        std::size_t k = 0;
+        for (const auto& [c, nodes] : layers) {
+            const double t = std::clamp((c - g.start) / (g.end - g.start), 0.0, 1.0);
+            const double x = g.x_start + (g.x_end - g.x_start) * t;
+            const std::array<double, 1> arg{x};
+            auto params = g.entry->make(arg);
+            if (!params) return std::unexpected(located(g.line->line, "composition", std::move(params.error())));
+            for (const Entry* e : g.overrides) NITCAD_DECK_CHECK(parameter(*params, *e));
+            auto made = physics::Semiconductor::create(std::get<physics::SemiconductorParameters>(*params));
+            if (!made) return std::unexpected(located(g.line->line, "composition", std::move(made.error())));
+            results::MaterialRecord record{spec.section->name, std::string(g.entry->name), {x}, physics::parameter_hash(*params)};
+            if (k == 0) {
+                d.regions[r].material = std::move(*made);
+                spec.record = std::move(record);
+            } else {
+                const std::string name = spec.section->name + "." + std::to_string(k);
+                const auto index = static_cast<device::RegionId>(d.regions.size());
+                d.regions.push_back({name, std::move(*made)});
+                for (const std::size_t i : nodes) d.node_region[i] = index;
+                record.region = name;
+                graded_records_.push_back(std::move(record));
+            }
+            ++k;
+        }
+    }
+    return {};
+}
 std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
                                                              const device::DeviceDescription& d) const {
     device::Contact c{.name = s.name, .kind = device::ContactKind::ohmic, .nodes = {}};
@@ -2447,6 +2559,7 @@ std::expected<Plan, base::Error> Builder::run() {
     for (const RegionSpec& g : regions_) d.regions.push_back(*g.region);
     NITCAD_DECK_CHECK(build_mesh(d));
     NITCAD_DECK_CHECK(doping(d));
+    NITCAD_DECK_CHECK(grade(d));
     for (const Section& s : d_.sections) {
         if (s.kind == "contact") {
             NITCAD_DECK_TRY(c, contact(s, d));
@@ -2465,6 +2578,7 @@ std::expected<Plan, base::Error> Builder::run() {
     for (const RegionSpec& g : regions_) {
         if (g.record) plan.materials.push_back(*g.record);
     }
+    plan.materials.insert(plan.materials.end(), graded_records_.begin(), graded_records_.end());
     NITCAD_DECK_CHECK(models(plan.options.models));
     NITCAD_DECK_CHECK(solver(plan));
     NITCAD_DECK_CHECK(analysis(plan));

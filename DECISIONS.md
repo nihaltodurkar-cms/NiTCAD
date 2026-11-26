@@ -5040,6 +5040,17 @@ exp(dEg / kT), since S1, S2 and S6 change those factors. Grading (MAQ7a) is buil
 one uniform-x region per node layer along the grading axis, joined by the default (continuous drift-diffusion)
 interface transport.
 
+**Slice 1 as built (steps 1-2, 2026-11-26).** `sige <x>`, `sige_strained <x>`, `si_strained <x_substrate>`
+(0 <= x <= 0.3) in `src/physics/sige.cpp`, every parameter path cited. At x = 0 the band, transport and
+recombination set is silicon's exactly; impact ionization, band-to-band tunnelling and thermal conductivity are
+off (zero) until the owner gives SiGe data. `AlloyGapParameters` carries the gap's temperature correction
+(F3a); it is saved and hashed only when set. MAC9's offset clause gives 0.0916 eV (average valence offset),
+with a band-edge offset of 0.1397 eV and a gap change of -0.1693 eV printed beside it. Grading: `composition =
+linear <x_start> <x_end> <x|y|z> <start> <end>`, with the material named without its fraction, splits the
+region into one uniform-x region per node layer (`<region>.1`, ...; at most 512 layers), joined by the default
+continuous drift-diffusion. The region's overrides apply to every layer, each layer is recorded with its x, and
+an `[interface]` may not name a graded region.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

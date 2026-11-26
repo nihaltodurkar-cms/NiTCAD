@@ -21,6 +21,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/materials.hpp"
+#include "NiTCAD/physics/sige.hpp"
 #include "fixtures.hpp"
 
 using namespace NiTCAD;
@@ -1611,4 +1612,40 @@ TEST_CASE("deck build: silicide presets on Schottky contacts (MAD14)", "[deck][u
     CHECK(failure(deck("gaas", "schottky", "metal = nisi\n")).find("measured on silicon") != std::string::npos);
     CHECK(failure(deck("silicon", "gate", "oxide_thickness = 2nm\nmetal = nisi\n")).find("is a silicide barrier, for a Schottky contact") != std::string::npos);
     CHECK(failure(deck("silicon", "schottky", "metal = nisi\nbarrier = 0.7\n")).find("'metal' replaces") != std::string::npos);
+}
+
+// Unit 68 (MAQ7a, slice 1): a graded SiGe region, one region per node layer, the fraction linear
+// along the axis and held at the ends; overrides on every layer; the records.
+TEST_CASE("deck build: a graded SiGe region (MAQ7a)", "[deck][unit68]") {
+    const std::string deck = "[mesh]\ntype = tensor\nx = linspace(0, 0.1um, 11)\n[region si]\nmaterial = silicon\n"
+                             "[region base]\nmaterial = sige_strained\nbox = 0.04um 0.1um\n"
+                             "composition = linear 0 0.2 x 0.05um 0.09um\nlifetime.tau_n0 = 2e-7\n"
+                             "[doping]\nprofile = acceptor constant 1e18\n"
+                             "[contact a]\nkind = ohmic\npatch = x_min\n[contact b]\nkind = ohmic\npatch = x_max\n[equilibrium]\n";
+    const deck::Plan p = must(deck);
+    // x = 0.04 ... 0.1 um: seven layers; 0.04 and 0.05 at x 0, 0.09 and 0.1 at x 0.2.
+    REQUIRE(p.device.regions().size() == 1 + 7);
+    REQUIRE(p.materials.size() == 7);
+    const std::array<double, 7> expected{0.0, 0.0, 0.05, 0.10, 0.15, 0.20, 0.20};
+    for (std::size_t k = 0; k < 7; ++k) {
+        CAPTURE(k);
+        CHECK(p.materials[k].region == (k == 0 ? std::string("base") : "base." + std::to_string(k)));
+        CHECK(p.materials[k].material == "sige_strained");
+        REQUIRE(p.materials[k].composition.size() == 1);
+        CHECK(std::abs(p.materials[k].composition[0] - expected[k]) < 1e-12);
+        const auto& m = std::get<physics::Semiconductor>(p.device.regions()[k + 1].material).parameters();
+        CHECK(m.lifetime.tau_n0 == 2e-7);
+        auto made = *physics::sige_parameters(p.materials[k].composition[0], true);
+        made.lifetime.tau_n0 = 2e-7;
+        CHECK(m == made);
+    }
+    CHECK(failure(changed(deck, "material = sige_strained\n", "material = sige_strained 0.1\n")).find("written without it") != std::string::npos);
+    CHECK(failure(changed(deck, "material = sige_strained\n", "material = silicon\n")).find("takes a fraction") != std::string::npos);
+    CHECK(failure(changed(deck, "linear 0 0.2 x", "linear 0 0.4 x")).find("outside [0, 0.3]") != std::string::npos);
+    CHECK(failure(changed(deck, "linear 0 0.2 x", "linear 0 0.2 y")).find("outside this 1D mesh") != std::string::npos);
+    CHECK(failure(changed(deck, "0.05um 0.09um", "0.09um 0.05um")).find("beyond its start") != std::string::npos);
+    CHECK(failure(deck + "[interface si base]\ntransport = thermionic\n").find("cannot name the graded region") != std::string::npos);
+    // The equilibrium solve runs across the layers.
+    const auto r = deck::run(p);
+    if (!r) FAIL(r.error().message);
 }

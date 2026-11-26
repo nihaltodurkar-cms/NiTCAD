@@ -90,7 +90,7 @@ constexpr std::array<KeyInfo, 28> mesh_keys{{
     {"path", 0, false, "<file>", "file: a mesh file", {}, {}, "file"},
 }};
 
-constexpr std::array<KeyInfo, 10> region_keys{{
+constexpr std::array<KeyInfo, 11> region_keys{{
     {"material", 0, false, "silicon", "the region's material (algaas takes its Al fraction)", materials, {}, {}},
     {"box", 0, true, "<lo hi> per dimension", "tensor meshes: the region's box", {}, {}, {}},
     {"polygon", 0, true, "<x y>, ...", "generate2d: the region's polygon", {}, {}, {}},
@@ -101,6 +101,7 @@ constexpr std::array<KeyInfo, 10> region_keys{{
     {"band_to_band.direct_gap", 0, false, "off", "direct-gap band-to-band tunnelling", on_off, {}, {}},
     {"work_function", 0, false, "<eV>", "material = metal: the metal's work function, eV (Unit 68)", {}, {}, {}},
     {"metal", 0, false, "tin", "material = metal: a named metal in place of work_function (Unit 68)", metals, {}, {}},
+{"composition", 0, false, "linear 0 0.2 x 0.1um 0.15um", "a graded region: its material's fraction linear along an axis (Unit 68)", {}, {}, {}},
 }};
 
 // Unit 68 (MAD4): a user material.
