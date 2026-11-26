@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <format>
 #include <limits>
 #include <memory>
@@ -36,6 +37,15 @@ using namespace NiTCAD;
 namespace {
 
 constexpr double inf = std::numeric_limits<double>::infinity();
+
+// True on the hosted CI runner: the environment variable CI set, as GitHub Actions sets it.
+bool on_ci() {
+    char* value = nullptr;
+    std::size_t length = 0;
+    const bool ci = _dupenv_s(&value, &length, "CI") == 0 && value != nullptr && *value != '\0';
+    std::free(value);
+    return ci;
+}
 
 double seconds_since(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
@@ -837,7 +847,9 @@ void cost_report(const solve::AdaptResult& r, const char* name) {
                     p.seconds_transposed);
         if (p.estimate.empty()) continue;
         const double per_factorization = p.seconds_estimate_factorize / static_cast<double>(r.points.size());
-        CHECK(p.seconds_transposed <= per_factorization);
+        // Gated on the workstation, recorded on CI (as SE5): sub-millisecond times on a shared runner (24 ms
+        // against 0.4 ms on main 5a3285b, one scheduling stall).
+        if (!on_ci()) CHECK(p.seconds_transposed <= per_factorization);
     }
     std::printf("AC11 %s verification: %zu nodes, %.4g s (final pass solve %.4g s)\n", name, r.verification_nodes,
                 r.verification_seconds, r.passes.back().seconds_solve);
