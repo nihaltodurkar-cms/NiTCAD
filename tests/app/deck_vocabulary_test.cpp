@@ -15,6 +15,7 @@
 #include "NiTCAD/app/deck_vocabulary.hpp"
 #include "NiTCAD/app/document.hpp"
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/physics/materials.hpp"
 #include "fixtures.hpp"
 
 using namespace NiTCAD;
@@ -76,6 +77,7 @@ Base base_for(std::string_view kind, std::string_view context) {
         return {diode, "contact anode"};
     }
     if (kind == "region") return {diode, "region silicon"};
+    if (kind == "material") return {diode + "\n[material mysi]\nbase = silicon\n", "material mysi"};
     if (kind == "interface") return {app_test::mosfet2d + "\n[interface silicon oxide]\n", "interface silicon oxide"};
     if (kind == "thermal_contact") {
         return {diode_with("\n[models]\nelectrothermal = on\n\n[thermal_contact sink]\npatch = x_min\nkind = isothermal\n"
@@ -549,4 +551,26 @@ TEST_CASE("app vocabulary: a mesh patch's form follows the mesh type (Unit 53, F
     const app::KeyInfo* faced = app::find_key_info(*mesh, "patch x_min far", "generate3d");
     REQUIRE(faced != nullptr);
     CHECK(faced->value == "<x y z>, ...");
+}
+
+// Unit 68 MAD12: the region's material choices are the registry's names, in its order.
+TEST_CASE("deck vocabulary: material choices are the material registry", "[vocabulary][unit68]") {
+    const app::SectionInfo* region = app::find_section_info("region");
+    REQUIRE(region != nullptr);
+    const app::KeyInfo* material = app::find_key_info(*region, "material", "");
+    REQUIRE(material != nullptr);
+    const auto registry = physics::material_registry();
+    REQUIRE(material->choices.size() == registry.size());
+    for (std::size_t i = 0; i < registry.size(); ++i) REQUIRE(material->choices[i] == registry[i].name);
+}
+
+// Unit 68 MAD14: the contact's metal choices are the metal presets, in their order.
+TEST_CASE("deck vocabulary: metal choices are the metal presets", "[vocabulary][unit68]") {
+    const app::SectionInfo* contact = app::find_section_info("contact");
+    REQUIRE(contact != nullptr);
+    const app::KeyInfo* metal = app::find_key_info(*contact, "metal", "gate");
+    REQUIRE(metal != nullptr);
+    const auto presets = physics::metal_presets();
+    REQUIRE(metal->choices.size() == presets.size());
+    for (std::size_t i = 0; i < presets.size(); ++i) REQUIRE(metal->choices[i] == presets[i].name);
 }

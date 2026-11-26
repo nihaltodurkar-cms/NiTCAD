@@ -52,6 +52,17 @@ struct BandSlope {
     return {((c[0] * T + c[1]) * T + c[2]) * T + c[3], (3.0 * c[0] * T + 2.0 * c[1]) * T + c[2]};
 }
 
+// The alloy gap correction (semiconductor.hpp, AlloyGapParameters) and its T derivative. No check.
+[[nodiscard]] inline BandSlope alloy_gap(const AlloyGapParameters& g, double T) {
+    if (g.fraction == 0.0) return {0.0, 0.0};
+    const auto d = [T](double a, double b) -> BandSlope {
+        const double s = T + b;
+        return {a * 300.0 * 300.0 / (300.0 + b) - a * T * T / s, -a * T * (T + 2.0 * b) / (s * s)};
+    };
+    const BandSlope da = d(g.alpha_a_eV_per_K, g.beta_a_K), db = d(g.alpha_b_eV_per_K, g.beta_b_K);
+    return {g.fraction * (db.value - da.value), g.fraction * (db.d_dT - da.d_dT)};
+}
+
 // 2 (2 pi m0 k / h^2)^(3/2) [cm^-3 K^-3/2] as Couderc et al. (2014) print it, eqs (4) and (5).
 inline constexpr double dos_constant = 4.83e15;
 

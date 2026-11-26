@@ -408,6 +408,8 @@ add_library(nitcad_physics STATIC
   src/physics/thermionic_emission.cpp
   src/physics/ionization.cpp
   src/physics/insulator.cpp
+  src/physics/materials.cpp
+  src/physics/sige.cpp
   src/physics/interface_traps.cpp
   src/physics/impact_ionization.cpp
   src/physics/band_to_band.cpp
@@ -435,6 +437,7 @@ add_executable(nitcad_physics_test
   tests/physics/quantum_confinement_test.cpp
   tests/physics/fermi_dirac_test.cpp
   tests/physics/materials_test.cpp
+  tests/physics/sige_test.cpp
   tests/physics/interface_traps_test.cpp
   tests/physics/impact_ionization_test.cpp
   tests/physics/band_to_band_test.cpp
@@ -796,6 +799,7 @@ add_executable(nitcad_deck_test
   tests/deck/trap_tunnelling_test.cpp
   tests/deck/total_dose_test.cpp
   tests/deck/schottky_test.cpp
+  tests/deck/sige_hbt_test.cpp
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp
   tests/deck/complex_finfet_test.cpp
@@ -1101,6 +1105,18 @@ foreach(_id TVB-01 TVB-03)
 endforeach()
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
   "^nitcad ${PROJECT_VERSION} \\(revision ([0-9a-f]+|unknown)(, modified)?, ${CMAKE_BUILD_TYPE}, MSVC [0-9.]+, Eigen [0-9]")
+# Unit 68 (MAD12, MAC6): the material registry from the command line.
+add_test(NAME cli_materials COMMAND nitcad materials)
+set_tests_properties(cli_materials PROPERTIES PASS_REGULAR_EXPRESSION "algaas +semiconductor +Al\\(x\\)Ga")
+add_test(NAME cli_materials_one COMMAND nitcad materials algaas 0.3)
+set_tests_properties(cli_materials_one PROPERTIES PASS_REGULAR_EXPRESSION
+  "algaas: semiconductor.*source \\[1\\]: legacy materials\\.algaas.*eps_r = 12\\.12\n")
+add_test(NAME cli_materials_suggest COMMAND nitcad materials silicn)
+set_tests_properties(cli_materials_suggest PROPERTIES WILL_FAIL TRUE)
+add_test(NAME cli_materials_unknown COMMAND nitcad materials unobtainium)
+set_tests_properties(cli_materials_unknown PROPERTIES WILL_FAIL TRUE)
+add_test(NAME cli_materials_metal COMMAND nitcad materials tin)
+set_tests_properties(cli_materials_metal PROPERTIES PASS_REGULAR_EXPRESSION "tin: metal preset, work function 4.7 eV")
 
 # --- app layer (the Windows application; Unit 26, DECISIONS.md VA1-VA9, AQ1-AQ4, WG1-WG8) ---------
 # The logic, plain C++ under test (26-1): documents, the run controller, the workspace, view settings,

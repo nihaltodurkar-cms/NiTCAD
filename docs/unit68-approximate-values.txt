@@ -1,0 +1,72 @@
+NiTCAD Unit 68 - approximate and owner-supplied material values
+================================================================
+
+Owner ruling 2026-11-26: where no source in hand gives a value, use a general
+approximate value. Each such value is cited with basis "approximate" in the
+material registry (src/physics/materials.cpp); `nitcad materials <name>` shows it.
+Replace a value here and in the registry when a source turns up.
+
+Tunnelling masses (m0) supplied by the owner 2026-11-26 (source not stated; basis "approximate")
+------------------------------------------------------------------------------------------------
+ #  Material          Carrier    Value
+ 1  hfo2              hole       0.60
+ 2  al2o3             hole       1.30
+ 3  si3n4             hole       0.35
+ 4  zro2              hole       0.60
+ 5  la2o3             hole       0.50
+ 6  tio2              hole       3.80
+ 7  ta2o5             hole       1.00
+ 8  mgo               hole       3.00
+ 9  aln_dielectric    hole       3.50
+10  sapphire          hole       0.36
+11  hbn               hole       1.33
+12  zro2              electron   0.28
+13  tio2              electron   0.50
+14  ta2o5             electron   0.25
+15  mgo               electron   0.35
+16  aln_dielectric    electron   0.33
+17  hbn               electron   2.21
+
+General approximate values (no source in hand; basis "approximate"; 18-22 confirmed by the owner 2026-11-26)
+-------------------------------------------------------------------------------------------------------
+18  mgo               eps_r                    9.8     Afanas'ev 2010 gives band alignment only
+19  aln_dielectric    eps_r                    8.5     arXiv:2407.17360 gives gap and affinity only
+20  sapphire          eps_r (along c)          11.6    no crystalline-sapphire source in hand
+21  hbn               eps_r (out of plane)     3.76    M15 not in hand
+22  hbn               electron_affinity_eV     2.0     no h-BN affinity or offset source in hand
+23  thermal set, owner-supplied 2026-11-26 (thin-film starting values near 300 K; basis "approximate"):
+      material         k [W/cm K]   heat capacity [J/cm3 K]
+      hfo2             0.010        1.16
+      al2o3            0.015        2.50
+      si3n4            0.012        2.30
+      zro2             0.005        2.70
+      la2o3            0.010        2.15
+      tio2             0.025        3.03
+      ta2o5            0.0012       2.52
+      mgo              0.10         3.33
+      aln_dielectric   0.10         2.40
+      sapphire         0.30         3.04   (along c)
+      hbn              0.033        1.80   (out of plane)
+    conductivity exponent 0 and thermopower exponents -0.5 kept (SiO2's model defaults).
+    Thermal conductivity is a scalar: anisotropy (h-BN, AlN, sapphire) is not modelled.
+
+Sourced but borrowed or averaged (worth checking)
+-------------------------------------------------
+24  sapphire          gap 8.8 eV, offset 2.8 eV: Robertson 2004 Al2O3 row marked "not ALD" (measured); electron mass 0.35 is alumina's (proxy)
+24b al2o3 (ALD)       gap 6.4 eV, offset 1.6 eV, chi 2.45 eV: Robertson & Wallace 2015 ALD row as the owner gave it (secondary, not read)
+25  aln_dielectric    electron affinity 1.89 eV: midpoint of 1.83-1.94 eV, rounded (arXiv:2407.17360, derived)
+26  hfo2              electron mass 0.11: Salmani's starred value of 0.11-0.17
+27  every dielectric  chi = 4.05 eV (silicon's affinity) - conduction-band offset (derived)
+
+sion <x> is linear in x between sio2's tunnelling set and si3n4, so it inherits si3n4's values.
+tunnel_mass_evb = 0 everywhere means "use the electron mass" (basis "default").
+tio2 has no conduction-band offset to Si (Robertson Table 2: 0 eV).
+
+Electron affinities are Si-referenced (owner agreed 2026-11-26)
+--------------------------------------------------------------
+chi for every dielectric is 4.05 eV - its conduction-band offset to Si: an effective,
+interface-derived affinity, not the vacuum-referenced surface affinity. Example: MgO's
+1.80 eV (Afanas'ev 2010, Si/MgO internal photoemission) is kept; the surface value
+-0.40 eV (Rohlfing et al., PRL 91, 256802, 2003; used by Heinisch et al., PRB 2012)
+does not set the Si/MgO barrier. Storing band offsets per interface (Si/oxide,
+metal/oxide, 2D/dielectric) instead of per material is a separate future unit.

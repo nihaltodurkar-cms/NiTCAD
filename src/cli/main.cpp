@@ -18,6 +18,8 @@
 //   nitcad compare <a.nitsweep> <b.nitsweep> [--rtol <x>] [--potential-tol <V>]
 //                         compare two sweeps by tolerances (Unit 60; compare.hpp, its own exit
 //                         status: 0 match, 4 differ, 1 unreadable or not comparable, 64 usage)
+//   nitcad materials [<name> [<composition>]...]
+//                         list the material registry, or one material's parameters and sources (Unit 68)
 //   nitcad --version      print the build: version, git revision, build type, compiler, Eigen
 //
 // Exit status: 0 done; 1 the deck, the run or the plot failed (the message on stderr); 2 a sweep,
@@ -30,6 +32,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 #include <expected>
 #include <filesystem>
@@ -43,6 +46,7 @@
 #include "NiTCAD/deck/dimension_sweep.hpp"
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/deck/syntax.hpp"
+#include "NiTCAD/physics/materials.hpp"
 #include "NiTCAD/solve/provenance.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
 #include "plot.hpp"
@@ -72,6 +76,7 @@ int usage() {
                "       nitcad learn manifest <manifest> <history.nithist>...\n"
                "       nitcad learn train <manifest> <model.nitlearn> [--holdout <history.nithist>]...\n"
                "       nitcad compare <a.nitsweep> <b.nitsweep> [--rtol <x>] [--potential-tol <V>]\n"
+               "       nitcad materials [<name> [<composition>]...]\n"
                "       nitcad --version\n",
                stderr);
     return 64;
@@ -412,6 +417,73 @@ int sweep(int argc, char** argv) {
     return status;
 }
 
+// `nitcad materials [<name> [<composition>]...]` (Unit 68, MAD12): the registry, one line per
+// material, or one material's set, every parameter a deck can set and the set's sources.
+int materials(int argc, char** argv) {
+    using namespace NiTCAD::physics;
+    const auto kind = [](MaterialKind k) {
+        return k == MaterialKind::semiconductor ? "semiconductor" : k == MaterialKind::insulator ? "insulator" : "metal";
+    };
+    if (argc == 2) {
+        for (const MaterialEntry& e : material_registry()) {
+            std::printf("%-16s %-14s %s\n", std::string(e.name).c_str(), kind(e.kind), std::string(e.summary).c_str());
+        }
+        std::puts("\nmetal presets (a contact's metal = <name>):");
+        for (const MetalPreset& m : metal_presets()) {
+            const std::string value = m.kind == MetalPresetKind::metal      ? std::format("{:.12g} eV", m.work_function_eV)
+                                      : m.kind == MetalPresetKind::silicide ? std::format("barrier {:.12g} eV on n-Si (Schottky, silicon)", m.barrier_eV)
+                                                                            : std::string(m.source.where);
+            std::printf("%-16s %s\n", std::string(m.name).c_str(), value.c_str());
+        }
+        return 0;
+    }
+    if (const MetalPreset* m = find_metal_preset(argv[2]); m && argc == 3) {
+        const std::string value = m->kind == MetalPresetKind::metal ? std::format(", work function {:.12g} eV", m->work_function_eV)
+                                  : m->kind == MetalPresetKind::silicide
+                                      ? std::format(", silicide barrier {:.12g} eV on n-Si", m->barrier_eV)
+                                      : std::string{};
+        std::printf("%s: metal preset%s\n  source: %s (%s)\n", argv[2], value.c_str(), std::string(m->source.source).c_str(),
+                    std::string(m->source.where).c_str());
+        return 0;
+    }
+    const MaterialEntry* e = find_material(argv[2]);
+    if (!e) {
+        std::vector<std::string_view> names;
+        for (const MaterialEntry& m : material_registry()) names.push_back(m.name);
+        for (const MetalPreset& m : metal_presets()) names.push_back(m.name);
+        const std::string_view nearest = nearest_name(argv[2], names);
+        std::fprintf(stderr, "nitcad materials: unknown material '%s'%s (nitcad materials lists them)\n", argv[2],
+                     nearest.empty() ? "" : std::format(" (did you mean '{}'?)", nearest).c_str());
+        return 1;
+    }
+    std::vector<double> arguments;
+    for (int i = 3; i < argc; ++i) {
+        char* end = nullptr;
+        const double v = std::strtod(argv[i], &end);
+        if (end == argv[i] || *end != '\0') return usage_error(std::format("'{}' is not a number", argv[i]));
+        arguments.push_back(v);
+    }
+    if (arguments.size() < e->arguments_min || arguments.size() > e->arguments_max) {
+        return usage_error(e->arguments_max == 0 ? std::format("'{}' takes no arguments", e->name) : std::string(e->usage));
+    }
+    const auto set = e->make(arguments);
+    if (!set) return fail(set.error());
+    std::printf("%s: %s, %s\n", std::string(e->name).c_str(), kind(e->kind), std::string(e->summary).c_str());
+    for (std::size_t i = 0; i < e->sources.size(); ++i) {
+        const Citation& c = e->sources[i];
+        std::printf("  source [%zu]: %s (%s)\n", i + 1, std::string(c.source).c_str(), std::string(c.where).c_str());
+    }
+    if (e->parameter_sources.empty()) std::puts("  (the sources above cover the whole set)");
+    for (const auto& [path, value] : parameter_values(*set)) {
+        std::string cited;
+        for (const ParameterCitation& c : e->parameter_sources) {
+            if (c.path == path) cited = std::format("   [{}] {}", c.source + 1, c.basis);
+        }
+        std::printf("  %s = %s%s\n", std::string(path).c_str(), std::format("{:.12g}", value).c_str(), cited.c_str());
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -422,6 +494,7 @@ int main(int argc, char** argv) {
     if (argc >= 2 && std::string_view(argv[1]) == "plot") return NiTCAD::cli::plot(argc, argv);
     if (argc >= 2 && std::string_view(argv[1]) == "learn") return NiTCAD::cli::learn(argc, argv);
     if (argc >= 2 && std::string_view(argv[1]) == "compare") return NiTCAD::cli::compare(argc, argv);
+    if (argc >= 2 && std::string_view(argv[1]) == "materials") return materials(argc, argv);
     if (argc >= 2 && std::string_view(argv[1]) == "verify") {
         return NiTCAD::cli::verify(argc, argv, NiTCAD::verify::benchmark::benchmarks());
     }

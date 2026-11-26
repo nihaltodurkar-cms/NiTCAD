@@ -20,6 +20,8 @@
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/physics/materials.hpp"
+#include "NiTCAD/physics/sige.hpp"
 #include "fixtures.hpp"
 
 using namespace NiTCAD;
@@ -1398,4 +1400,252 @@ patch = body
     fails("[mesh]\ntype = tensor\nx = 0, 1um, 2um\n[region si]\nmaterial = silicon\noverlap = fill\n[contact a]\nkind = ohmic\npatch = x_min\n"
           "[contact b]\nkind = ohmic\npatch = x_max\n[equilibrium]\n",
           ":6: overlap is for a layered mesh");
+}
+
+// Unit 68 (MAD4, MAC5): user materials, inline and from a .nitmat file.
+TEST_CASE("deck build: [material] user materials (MAC5)", "[deck][unit68]") {
+    const std::string head = "[mesh]\ntype = tensor\nx = 0, 1um\n";
+    const auto region_parameters = [](const deck::Plan& p) {
+        return std::get<physics::Semiconductor>(p.device.regions()[0].material).parameters();
+    };
+    // A deck that must build: an ohmic contact added before its analysis.
+    const auto built = [](std::string text, const fs::path& dir = {}) {
+        text.insert(text.find("[equilibrium]"), "[contact a]\nkind = ohmic\npatch = x_min\n");
+        return must(text, dir);
+    };
+    SECTION("a copy of silicon with no overrides is silicon bit for bit") {
+        const deck::Plan p = built(head + "[material mysi]\nbase = silicon\n[region si]\nmaterial = mysi\n[equilibrium]\n");
+        const deck::Plan q = built(head + "[region si]\nmaterial = silicon\n[equilibrium]\n");
+        CHECK(region_parameters(p) == region_parameters(q));
+        CHECK(region_parameters(p) == physics::silicon_parameters);
+    }
+    SECTION("an override changes exactly that member; a region may override again") {
+        const deck::Plan p = built(head + "[material mysi]\nbase = silicon\neps_r = 12.0\nhole_mobility.mu_max = 400\n"
+                                         "[region si]\nmaterial = mysi\nlifetime.tau_n0 = 1e-7\n[equilibrium]\n");
+        physics::SemiconductorParameters want = physics::silicon_parameters;
+        want.eps_r = 12.0;
+        want.hole_mobility.mu_max = 400;
+        want.lifetime.tau_n0 = 1e-7;
+        CHECK(region_parameters(p) == want);
+    }
+    SECTION("a base with composition, and an insulator base") {
+        const deck::Plan p = built(head + "[material barrier]\nbase = algaas 0.3\n[region a]\nmaterial = barrier\n[equilibrium]\n");
+        CHECK(region_parameters(p) == *physics::algaas_parameters(0.3));
+        const deck::Plan q = built("[mesh]\ntype = tensor\nx = 0, 1um, 2um\n[material hk]\nbase = insulator\neps_r = 22\n"
+                                  "[region si]\nmaterial = silicon\nbox = 0 1um\n[region ox]\nmaterial = hk\nbox = 1um 2um\n"
+                                  "[equilibrium]\n");
+        CHECK(std::get<physics::Insulator>(q.device.regions()[1].material).parameters().eps_r == 22.0);
+    }
+    SECTION("an include file equals the inline section") {
+        const fs::path dir = scratch("user_material");
+        {
+            std::ofstream f(dir / "mysi.nitmat", std::ios::binary);
+            f << "\xEF\xBB\xBF# a user material\nbase = silicon\neps_r = 12.0\nhole_mobility.mu_max = 400\n";
+        }
+        const deck::Plan p = built(head + "[material mysi]\ninclude = mysi.nitmat\n[region si]\nmaterial = mysi\n[equilibrium]\n", dir);
+
+        const deck::Plan q = built(head + "[material mysi]\nbase = silicon\neps_r = 12.0\nhole_mobility.mu_max = 400\n"
+                                         "[region si]\nmaterial = mysi\n[equilibrium]\n");
+        CHECK(region_parameters(p) == region_parameters(q));
+        {
+            std::ofstream f(dir / "bad.nitmat", std::ios::binary);
+            f << "base = silicon\n\nbogus = 1\n";
+        }
+        CHECK(failure(head + "[material m]\ninclude = bad.nitmat\n[region si]\nmaterial = m\n[equilibrium]\n", dir)
+                  .find("bad.nitmat:3: unknown key 'bogus' in [material m]") != std::string::npos);
+        {
+            std::ofstream f(dir / "nested.nitmat", std::ios::binary);
+            f << "base = silicon\ninclude = mysi.nitmat\n";
+        }
+        CHECK(failure(head + "[material m]\ninclude = nested.nitmat\n[region si]\nmaterial = m\n[equilibrium]\n", dir)
+                  .find("nested.nitmat:2: an included material file cannot include another") != std::string::npos);
+        {
+            std::ofstream f(dir / "sections.nitmat", std::ios::binary);
+            f << "base = silicon\n[region x]\n";
+        }
+        CHECK(failure(head + "[material m]\ninclude = sections.nitmat\n[region si]\nmaterial = m\n[equilibrium]\n", dir)
+                  .find("t.deck:5: include: a material file holds key lines only") != std::string::npos);
+        CHECK(failure(head + "[material m]\ninclude = none.nitmat\n[region si]\nmaterial = m\n[equilibrium]\n", dir)
+                  .find("t.deck:5: cannot open the material file") != std::string::npos);
+    }
+    SECTION("refusals name the key or section") {
+        const auto expect = [](const std::string& message, const std::string& what) {
+            INFO(message);
+            CHECK(message.find(what) != std::string::npos);
+        };
+        const std::string tail = "[region si]\nmaterial = m\n[equilibrium]\n";
+        expect(failure(head + "[material silicon]\nbase = silicon\n[region si]\nmaterial = silicon\n[equilibrium]\n"),
+               "t.deck:4: [material silicon]: 'silicon' is a registry material");
+        expect(failure(head + "[material m]\nbase = silicon\n[material m]\nbase = gaas\n" + tail), "t.deck:6: a second [material m]");
+        expect(failure(head + "[material m]\neps_r = 3\n" + tail), "t.deck:4: [material m] has no 'base'");
+        expect(failure(head + "[material m]\nbase = silicon\nbase = gaas\n" + tail), "t.deck:6: a second 'base'");
+        expect(failure(head + "[material m]\nbase = m2\n" + tail), "t.deck:5: unknown material 'm2'");
+        expect(failure(head + "[material m]\nbase = silicon\nbox = 0 1um\n" + tail),
+               "t.deck:6: unknown key 'box' in [material m] (not a parameter of its base)");
+        expect(failure(head + "[material m]\nbase = silicon\neps_r = -1\n" + tail), "t.deck:5: [material m]: ");
+        expect(failure(head + "[material m]\nbase = silicon\neps_r = -1\n" + tail), "eps_r");
+        expect(failure(head + "[material m]\nbase = silicon\ninclude = a.nitmat\n" + tail),
+               "t.deck:6: a [material] with 'include' takes no other key");
+        expect(failure(head + "[material m]\nbase = silicon\n[region si]\nmaterial = m 0.3\n[equilibrium]\n"),
+               "t.deck:7: 'm' takes no arguments");
+        expect(failure(head + "[material]\nbase = silicon\n" + tail), "t.deck:4: [material] needs a name");
+    }
+}
+
+// Unit 68 (MAD3, MAC6): the plan records each region's user material; the pre-Unit-68 names are
+// not recorded (their result files stay byte-identical, MAC1).
+TEST_CASE("deck build: user materials are recorded with their composition and hash (MAC6)", "[deck][unit68]") {
+    const std::string head = "[mesh]\ntype = tensor\nx = 0, 1um\n";
+    const std::string tail = "[contact a]\nkind = ohmic\npatch = x_min\n[equilibrium]\n";
+    const deck::Plan p = must(head + "[material barrier]\nbase = algaas 0.3\n[region a]\nmaterial = barrier\n" + tail);
+    REQUIRE(p.materials.size() == 1);
+    CHECK(p.materials[0].region == "a");
+    CHECK(p.materials[0].material == "barrier");
+    CHECK(p.materials[0].composition == std::vector<double>{0.3});
+    const auto& used = std::get<physics::Semiconductor>(p.device.regions()[0].material).parameters();
+    CHECK(p.materials[0].parameter_hash == physics::parameter_hash(physics::MaterialParameters{used}));
+    // Two decks differing only in x differ in hash; a region override changes it too.
+    const deck::Plan q = must(head + "[material barrier]\nbase = algaas 0.31\n[region a]\nmaterial = barrier\n" + tail);
+    CHECK(q.materials[0].parameter_hash != p.materials[0].parameter_hash);
+    const deck::Plan r = must(head + "[material barrier]\nbase = algaas 0.3\n[region a]\nmaterial = barrier\neps_r = 12\n" + tail);
+    CHECK(r.materials[0].parameter_hash != p.materials[0].parameter_hash);
+    // The registry names before Unit 68 are not recorded, with or without composition.
+    CHECK(must(head + "[region a]\nmaterial = algaas 0.3\n" + tail).materials.empty());
+    CHECK(must(head + "[region a]\nmaterial = silicon\n" + tail).materials.empty());
+}
+
+TEST_CASE("deck build: an unknown material suggests the nearest name (MAC13)", "[deck][unit68]") {
+    const std::string head = "[mesh]\ntype = tensor\nx = 0, 1um\n";
+    CHECK(failure(head + "[region a]\nmaterial = silicn\n[equilibrium]\n")
+              .find("t.deck:5: unknown material 'silicn' (did you mean 'silicon'?)") != std::string::npos);
+    CHECK(failure(head + "[material barrier]\nbase = algaas 0.3\n[region a]\nmaterial = barier\n[equilibrium]\n")
+              .find("unknown material 'barier' (did you mean 'barrier'?)") != std::string::npos);
+    CHECK(failure(head + "[region a]\nmaterial = unobtainium\n[equilibrium]\n").find("did you mean") == std::string::npos);
+}
+
+// Unit 68 (MAD14, slice 5a): `metal = <preset>` on a contact is its preset's work function or
+// polysilicon electrode, exactly as written out; the refusals name the reason.
+TEST_CASE("deck build: metal presets on contacts (MAD14)", "[deck][unit68]") {
+    const auto deck = [](const std::string& kind, const std::string& keys) {
+        return "[mesh]\ntype = tensor\nx = linspace(0, 1um, 11)\n[region si]\nmaterial = silicon\n"
+               "[doping]\nprofile = donor constant 1e16\n[contact a]\nkind = " + kind + "\npatch = x_min\n" + keys +
+               "[contact b]\nkind = ohmic\npatch = x_max\n[equilibrium]\n";
+    };
+    const auto contact = [](const deck::Plan& p) { return p.device.contacts().front(); };
+    const auto same = [&](const std::string& kind, const std::string& preset, const std::string& written) {
+        const device::Contact a = contact(must(deck(kind, "metal = " + preset + "\n")));
+        const device::Contact b = contact(must(deck(kind, written)));
+        CHECK(a.gate.electrode == b.gate.electrode);
+        CHECK(a.gate.work_function_eV == b.gate.work_function_eV);
+        CHECK(a.schottky.by_work_function == b.schottky.by_work_function);
+        CHECK(a.schottky.work_function_eV == b.schottky.work_function_eV);
+    };
+    same("schottky", "pt", "work_function = 5.65\n");
+    same("schottky", "tin", "work_function = 4.70\n");
+    same("gate", "al\noxide_thickness = 2nm", "oxide_thickness = 2nm\nelectrode = metal\nwork_function = 4.28\n");
+    same("gate", "p_poly\noxide_thickness = 2nm", "oxide_thickness = 2nm\nelectrode = p_poly\n");
+    CHECK(contact(must(deck("gate", "oxide_thickness = 2nm\nmetal = n_poly\n"))).gate.electrode == device::GateElectrode::n_poly);
+    CHECK(failure(deck("schottky", "metal = pt\nwork_function = 5\n")).find("'metal' replaces") != std::string::npos);
+    CHECK(failure(deck("gate", "oxide_thickness = 2nm\nmetal = al\nelectrode = metal\n")).find("'metal' replaces") != std::string::npos);
+    CHECK(failure(deck("ohmic", "metal = al\n")).find("'metal' is for a gate, electrode or Schottky contact") != std::string::npos);
+    CHECK(failure(deck("schottky", "metal = n_poly\n")).find("polysilicon electrode, not a Schottky metal") != std::string::npos);
+    CHECK(failure(deck("schottky", "metal = tln\n")).find("unknown metal 'tln' (did you mean 'tin'?)") != std::string::npos);
+}
+
+// Unit 68 (MAD6, MAC7): a gate written as a metal region equals the same gate as an electrode patch:
+// the potential at every node they share agrees to 1e-9 V, at equilibrium and under gate bias.
+TEST_CASE("deck build: a metal-region gate equals its electrode patch (MAC7)", "[deck][unit68]") {
+    const std::string body = "[region si]\nmaterial = silicon\n[region ox]\nmaterial = sio2\nbox = 1um 1.01um\n"
+                             "[doping]\nprofile = acceptor constant 1e17\n";
+    const std::string tail = "[contact b]\nkind = ohmic\npatch = x_min\n[sweep]\ncontact g = 0 : 0.5 : 1\n";
+    const std::string patch = "[mesh]\ntype = tensor\nx = linspace(0, 1um, 101) + linspace(1um, 1.01um, 11)\n" + body +
+                              "[contact g]\nkind = electrode\npatch = x_max\nelectrode = metal\nwork_function = 4.6\n" + tail;
+    const std::string metal = "[mesh]\ntype = tensor\nx = linspace(0, 1um, 101) + linspace(1um, 1.01um, 11) + "
+                              "linspace(1.01um, 1.02um, 6)\n" + body +
+                              "[region gm]\nmaterial = metal\nbox = 1.01um 1.02um\nwork_function = 4.6\n"
+                              "[contact g]\nkind = electrode\nregion = gm\n" + tail;
+    const deck::Plan pp = must(patch);
+    const deck::Plan pm = must(metal);
+    REQUIRE(pm.device.contacts().front().nodes.size() == 6);
+    const auto a = deck::run(pp);
+    const auto b = deck::run(pm);
+    if (!a) FAIL(a.error().message);
+    if (!b) FAIL(b.error().message);
+    REQUIRE(a->sweep->points.size() == b->sweep->points.size());
+    const std::size_t shared = pp.device.mesh().node_count();  // the patch mesh's nodes come first in x
+    for (std::size_t k = 0; k < a->sweep->points.size(); ++k) {
+        const auto& va = a->sweep->points[k].fields.potential_V;
+        const auto& vb = b->sweep->points[k].fields.potential_V;
+        double worst = 0.0;
+        for (std::size_t i = 0; i < shared; ++i) worst = std::max(worst, std::abs(va[i] - vb[i]));
+        INFO("point " << k);
+        CHECK(worst <= 1e-9);
+    }
+    // A preset is its work function; the refusals.
+    CHECK(must(changed(metal, "work_function = 4.6\n[contact", "metal = mo\n[contact")).device.contacts().front().electrode.work_function_eV == 4.6);
+    CHECK(failure(changed(metal, "[contact g]\nkind = electrode\nregion = gm\n", "")).find("held by no electrode contact") != std::string::npos);
+    CHECK(failure(changed(metal, "region = gm", "region = ox")).find("is not a metal region") != std::string::npos);
+    CHECK(failure(changed(metal, "region = gm", "region = gm\npatch = x_max")).find("takes no 'patch'") != std::string::npos);
+    CHECK(failure(changed(metal, "region = gm", "region = gm\nwork_function = 4")).find("gives the electrode's work function") != std::string::npos);
+    CHECK(failure(changed(metal, "work_function = 4.6\n[contact", "[contact")).find("needs 'work_function' or 'metal") != std::string::npos);
+    CHECK(failure(changed(metal, "work_function = 4.6\n[contact", "work_function = 4.6\neps_r = 2\n[contact")).find("takes 'work_function' or 'metal', not 'eps_r'") != std::string::npos);
+    CHECK(failure(changed(metal, "material = silicon\n", "material = silicon\nwork_function = 4\n")).find("is for a metal region") != std::string::npos);
+    CHECK(failure(changed(metal, "box = 1um 1.01um", "box = 0.5um 0.51um")).find("touches a semiconductor") != std::string::npos);
+    CHECK(failure(metal + "[material m2]\nbase = metal\n").find("not a [material] base") != std::string::npos);
+}
+
+// Unit 68 (MAD14, slice 5c): a silicide preset is its measured barrier, on Schottky contacts on silicon only.
+TEST_CASE("deck build: silicide presets on Schottky contacts (MAD14)", "[deck][unit68]") {
+    const auto deck = [](const std::string& material, const std::string& kind, const std::string& keys) {
+        return "[mesh]\ntype = tensor\nx = linspace(0, 1um, 11)\n[region si]\nmaterial = " + material +
+               "\n[doping]\nprofile = donor constant 1e16\n[contact a]\nkind = " + kind + "\npatch = x_min\n" + keys +
+               "[contact b]\nkind = ohmic\npatch = x_max\n[equilibrium]\n";
+    };
+    for (const auto& [name, barrier] : {std::pair{"nisi", 0.75}, {"tisi2", 0.60}, {"cosi2", 0.64}}) {
+        const device::Contact a = must(deck("silicon", "schottky", "metal = " + std::string(name) + "\n")).device.contacts().front();
+        const device::Contact b = must(deck("silicon", "schottky", "barrier = " + std::to_string(barrier) + "\n")).device.contacts().front();
+        CHECK_FALSE(a.schottky.by_work_function);
+        CHECK(a.schottky.barrier_eV == barrier);
+        CHECK(a.schottky.barrier_eV == b.schottky.barrier_eV);
+    }
+    CHECK(must(deck("silicon_legacy", "schottky", "metal = nisi\n")).device.contacts().front().schottky.barrier_eV == 0.75);
+    CHECK(failure(deck("gaas", "schottky", "metal = nisi\n")).find("measured on silicon") != std::string::npos);
+    CHECK(failure(deck("silicon", "gate", "oxide_thickness = 2nm\nmetal = nisi\n")).find("is a silicide barrier, for a Schottky contact") != std::string::npos);
+    CHECK(failure(deck("silicon", "schottky", "metal = nisi\nbarrier = 0.7\n")).find("'metal' replaces") != std::string::npos);
+}
+
+// Unit 68 (MAQ7a, slice 1): a graded SiGe region, one region per node layer, the fraction linear
+// along the axis and held at the ends; overrides on every layer; the records.
+TEST_CASE("deck build: a graded SiGe region (MAQ7a)", "[deck][unit68]") {
+    const std::string deck = "[mesh]\ntype = tensor\nx = linspace(0, 0.1um, 11)\n[region si]\nmaterial = silicon\n"
+                             "[region base]\nmaterial = sige_strained\nbox = 0.04um 0.1um\n"
+                             "composition = linear 0 0.2 x 0.05um 0.09um\nlifetime.tau_n0 = 2e-7\n"
+                             "[doping]\nprofile = acceptor constant 1e18\n"
+                             "[contact a]\nkind = ohmic\npatch = x_min\n[contact b]\nkind = ohmic\npatch = x_max\n[equilibrium]\n";
+    const deck::Plan p = must(deck);
+    // x = 0.04 ... 0.1 um: seven layers; 0.04 and 0.05 at x 0, 0.09 and 0.1 at x 0.2.
+    REQUIRE(p.device.regions().size() == 1 + 7);
+    REQUIRE(p.materials.size() == 7);
+    const std::array<double, 7> expected{0.0, 0.0, 0.05, 0.10, 0.15, 0.20, 0.20};
+    for (std::size_t k = 0; k < 7; ++k) {
+        CAPTURE(k);
+        CHECK(p.materials[k].region == (k == 0 ? std::string("base") : "base." + std::to_string(k)));
+        CHECK(p.materials[k].material == "sige_strained");
+        REQUIRE(p.materials[k].composition.size() == 1);
+        CHECK(std::abs(p.materials[k].composition[0] - expected[k]) < 1e-12);
+        const auto& m = std::get<physics::Semiconductor>(p.device.regions()[k + 1].material).parameters();
+        CHECK(m.lifetime.tau_n0 == 2e-7);
+        auto made = *physics::sige_parameters(p.materials[k].composition[0], true);
+        made.lifetime.tau_n0 = 2e-7;
+        CHECK(m == made);
+    }
+    CHECK(failure(changed(deck, "material = sige_strained\n", "material = sige_strained 0.1\n")).find("written without it") != std::string::npos);
+    CHECK(failure(changed(deck, "material = sige_strained\n", "material = silicon\n")).find("takes a fraction") != std::string::npos);
+    CHECK(failure(changed(deck, "linear 0 0.2 x", "linear 0 0.4 x")).find("outside [0, 0.3]") != std::string::npos);
+    CHECK(failure(changed(deck, "linear 0 0.2 x", "linear 0 0.2 y")).find("outside this 1D mesh") != std::string::npos);
+    CHECK(failure(changed(deck, "0.05um 0.09um", "0.09um 0.05um")).find("beyond its start") != std::string::npos);
+    CHECK(failure(deck + "[interface si base]\ntransport = thermionic\n").find("cannot name the graded region") != std::string::npos);
+    // The equilibrium solve runs across the layers.
+    const auto r = deck::run(p);
+    if (!r) FAIL(r.error().message);
 }

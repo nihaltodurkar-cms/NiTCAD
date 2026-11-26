@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -23,6 +25,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/heavy_ion.hpp"
 #include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/physics/materials.hpp"
 #include "NiTCAD/physics/total_dose.hpp"
 #include "NiTCAD/solve/adapt_adjoint.hpp"
 #include "NiTCAD/solve/adapt_derived.hpp"
@@ -45,55 +48,12 @@ namespace {
 
 using namespace detail;
 
-// --- material parameters by name (DK7) ---------------------------------------------------------
-
-#define NITCAD_THERMAL_PARAMETERS(X)                                                           \
-    X(thermal.conductivity_W_cmK) X(thermal.conductivity_exponent) X(thermal.heat_capacity_J_cm3K) \
-    X(thermal.thermopower_exponent_n) X(thermal.thermopower_exponent_p)
-
-#define NITCAD_SEMICONDUCTOR_PARAMETERS(X)                                                     \
-    X(eps_r) X(Eg0_eV) X(varshni_alpha_eV_per_K) X(varshni_beta_K) X(Nc300) X(Nv300)           \
-    X(electron_affinity_eV) X(electron_mobility.mu_min) X(electron_mobility.mu_max)            \
-    X(electron_mobility.N_ref) X(electron_mobility.alpha) X(electron_mobility.T_exponent)      \
-    X(hole_mobility.mu_min) X(hole_mobility.mu_max) X(hole_mobility.N_ref)                     \
-    X(hole_mobility.alpha) X(hole_mobility.T_exponent) X(lifetime.tau_n0) X(lifetime.tau_p0)   \
-    X(lifetime.N_ref) X(auger.Cn) X(auger.Cp) X(bandgap_narrowing.E0_eV)                       \
-    X(bandgap_narrowing.N0) X(electron_saturation.v_sat_cm_s) X(electron_saturation.beta)      \
-    X(hole_saturation.v_sat_cm_s) X(hole_saturation.beta) X(radiative_cm3_s)                   \
-    X(ionization.donor_eV) X(ionization.acceptor_eV) X(ionization.donor_degeneracy)            \
-    X(ionization.acceptor_degeneracy) X(richardson.electron) X(richardson.hole)                \
-    X(impact_ionization.electron.A_low_per_cm) X(impact_ionization.electron.B_low_V_per_cm)    \
-    X(impact_ionization.electron.A_high_per_cm) X(impact_ionization.electron.B_high_V_per_cm)  \
-    X(impact_ionization.electron.switch_V_per_cm) X(impact_ionization.hole.A_low_per_cm)       \
-    X(impact_ionization.hole.B_low_V_per_cm) X(impact_ionization.hole.A_high_per_cm)           \
-    X(impact_ionization.hole.B_high_V_per_cm) X(impact_ionization.hole.switch_V_per_cm)        \
-    X(impact_ionization.phonon_energy_eV) X(band_to_band.A_per_cm3_s)                          \
-    X(band_to_band.B_V_per_cm) X(band_to_band.electron_mass) X(band_to_band.hole_mass)         \
-    X(passler_gap.alpha_eV_per_K) X(passler_gap.Theta_K) X(passler_gap.Delta)                  \
-    X(energy_relaxation.tau_n_s) X(energy_relaxation.tau_p_s)                                  \
-    NITCAD_THERMAL_PARAMETERS(X)
-
-double* semiconductor_parameter(physics::SemiconductorParameters& p, std::string_view name) {
-#define NITCAD_X(path) \
-    if (name == #path) return &p.path;
-    NITCAD_SEMICONDUCTOR_PARAMETERS(NITCAD_X)
-#undef NITCAD_X
-    return nullptr;
-}
-
-double* insulator_parameter(physics::InsulatorParameters& p, std::string_view name) {
-#define NITCAD_X(path) \
-    if (name == #path) return &p.path;
-    NITCAD_X(eps_r)
-    NITCAD_THERMAL_PARAMETERS(NITCAD_X)
-    // Unit 51 (GD5, GD10): gate-tunnelling band data.
-    NITCAD_X(electron_affinity_eV)
-    NITCAD_X(band_gap_eV)
-    NITCAD_X(tunnel_mass_n)
-    NITCAD_X(tunnel_mass_p)
-    NITCAD_X(tunnel_mass_evb)
-#undef NITCAD_X
-    return nullptr;
+// Unit 68 (MAD14): an unknown metal preset, with the nearest name.
+std::string unknown_metal(const std::string& value) {
+    std::vector<std::string_view> names;
+    for (const physics::MetalPreset& m : physics::metal_presets()) names.push_back(m.name);
+    const std::string_view nearest = physics::nearest_name(value, names);
+    return "unknown metal '" + value + "'" + (nearest.empty() ? "" : " (did you mean '" + std::string(nearest) + "'?)");
 }
 
 // --- the builder -------------------------------------------------------------------------------
@@ -119,6 +79,25 @@ struct RegionSpec {
     std::vector<const Entry*> extrudes;  // Unit 53 (FD13): extrude3d meshes
     const Entry* overlap = nullptr;      // Unit 26m (MT4): overlap = replace | fill, layered meshes only
     bool fill = false;
+    std::optional<results::MaterialRecord> record;  // Unit 68 (MAD3): when the run records its material
+    std::optional<device::Electrode> metal;          // Unit 68 (MAD6): a metal region's electrode
+    // Unit 68 (MAQ7a, slice 1): `composition = linear <x_start> <x_end> <axis> <start> <end>`, the
+    // material's fraction linear along the axis between the two coordinates (held at the ends
+    // outside them); the region's parameter overrides apply to every layer.
+    struct Grading {
+        const physics::MaterialEntry* entry = nullptr;
+        const Entry* line = nullptr;
+        double x_start = 0.0, x_end = 0.0, start = 0.0, end = 0.0;
+        int axis = 0;
+        std::vector<const Entry*> overrides;
+    };
+    std::optional<Grading> grading;
+};
+
+// A [material] section built (Unit 68, MAD4): its set and its base's composition.
+struct UserMaterial {
+    physics::MaterialParameters parameters;
+    std::vector<double> composition;
 };
 
 class Builder {
@@ -202,6 +181,17 @@ private:
     }
 
     std::expected<void, base::Error> check_sections() const;
+    // A material parameter by its member path (DK7) set from `e`; true when `e` was one.
+    std::expected<bool, base::Error> parameter(physics::MaterialParameters& params, const Entry& e) const;
+    // Unit 68 (MAQ7a): each graded region split into one uniform-composition region per node layer.
+    std::expected<void, base::Error> grade(device::DeviceDescription& d);
+    // The registry material `e` names, with its composition arguments (Unit 68, MAD1).
+    // `composition`, when given, receives the arguments.
+    std::expected<physics::MaterialParameters, base::Error> registry_material(const Entry& e,
+                                                                              std::vector<double>* composition = nullptr) const;
+    // Unit 68 (MAD4): the [material <name>] sections, inline or from their include file.
+    std::expected<void, base::Error> user_materials();
+    std::expected<UserMaterial, base::Error> user_material(const Section& s) const;
     std::expected<RegionSpec, base::Error> region(const Section& s) const;
     std::expected<std::vector<double>, base::Error> axis(int line, std::string_view value) const;
     std::expected<std::vector<double>, base::Error> axis(const Entry& e) const { return axis(e.line, e.value); }
@@ -259,7 +249,9 @@ private:
     std::expected<Box, base::Error> box(const Entry& e, int dim) const;
 
     const Deck& d_;
+    std::map<std::string, UserMaterial, std::less<>> user_materials_;
     std::vector<RegionSpec> regions_;
+    std::vector<results::MaterialRecord> graded_records_;  // Unit 68: the layers a grading adds
     MeshType type_ = MeshType::tensor;
     std::string type_name_;  // the [mesh] type as written (extrude3d for a file mesh from a complex)
     bool layered_mesh_ = false;  // a layered generate2d or generate3d mesh (the only ones taking a region's overlap)
@@ -276,7 +268,7 @@ std::expected<void, base::Error> Builder::check_sections() const {
                                                  "sweep",        "transient", "small_signal",
                                                  "trace",        "output",    "adapt"};
     static const std::set<std::string_view> many{"region", "contact", "interface", "heavy_ion",
-                                                 "thermal_contact"};
+                                                 "thermal_contact", "material"};
     std::set<std::string> seen;
     for (const Section& s : d_.sections) {
         if (once.contains(s.kind)) {
@@ -301,6 +293,134 @@ std::expected<void, base::Error> Builder::check_sections() const {
     return {};
 }
 
+std::expected<bool, base::Error> Builder::parameter(physics::MaterialParameters& params, const Entry& e) const {
+    if (auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
+        if (e.key == "band_to_band.direct_gap") {
+            NITCAD_DECK_TRY(v, flag(e));
+            sp->band_to_band.direct_gap = v;
+            return true;
+        }
+        if (double* target = physics::semiconductor_parameter(*sp, e.key)) {
+            NITCAD_DECK_TRY(v, num(e));
+            *target = v;
+            return true;
+        }
+        return false;
+    }
+    if (double* target = physics::insulator_parameter(std::get<physics::InsulatorParameters>(params), e.key)) {
+        NITCAD_DECK_TRY(v, num(e));
+        *target = v;
+        return true;
+    }
+    return false;
+}
+
+std::expected<physics::MaterialParameters, base::Error> Builder::registry_material(const Entry& e,
+                                                                                   std::vector<double>* composition) const {
+    const auto words = tokens(e.value);
+    const std::string_view kind = words.front();
+    const physics::MaterialEntry* entry = physics::find_material(kind);
+    if (!entry) {
+        // MAC13: the nearest registry or [material] name, when it looks like a misspelling.
+        std::vector<std::string_view> names;
+        for (const physics::MaterialEntry& m : physics::material_registry()) names.push_back(m.name);
+        for (const auto& [name, user] : user_materials_) names.push_back(name);
+        const std::string_view nearest = physics::nearest_name(kind, names);
+        return std::unexpected(at(e.line, "unknown material '" + std::string(kind) + "'" +
+                                              (nearest.empty() ? "" : " (did you mean '" + std::string(nearest) + "'?)")));
+    }
+    const std::size_t count = words.size() - 1;
+    if (count < entry->arguments_min || count > entry->arguments_max) {
+        if (entry->arguments_max == 0) return std::unexpected(at(e.line, "'" + std::string(kind) + "' takes no arguments"));
+        return std::unexpected(at(e.line, std::string(entry->usage)));
+    }
+    std::vector<double> arguments;
+    for (std::size_t i = 1; i < words.size(); ++i) {
+        NITCAD_DECK_TRY(v, lift(e.line, number(words[i])));
+        arguments.push_back(v);
+    }
+    auto made = entry->make(arguments);
+    if (!made) return std::unexpected(located(e.line, "material", std::move(made.error())));
+    if (composition) *composition = std::move(arguments);
+    return std::move(*made);
+}
+
+// A [material] section's own entries: base = <registry material> and member-path overrides,
+// validated as a region's material is (the error names the parameter).
+std::expected<UserMaterial, base::Error> Builder::user_material(const Section& s) const {
+    const Entry* base = nullptr;
+    for (const Entry& e : s.entries) {
+        if (e.key != "base") continue;
+        if (base) return std::unexpected(at(e.line, "a second 'base'"));
+        base = &e;
+    }
+    if (!base) return std::unexpected(at(s.line, "[material " + s.name + "] has no 'base'"));
+    std::vector<double> composition;
+    NITCAD_DECK_TRY(params, registry_material(*base, &composition));
+    if (const auto* i = std::get_if<physics::InsulatorParameters>(&params); i && i->metal) {
+        return std::unexpected(at(base->line, "'metal' is not a [material] base: a region names it directly"));
+    }
+    for (const Entry& e : s.entries) {
+        if (&e == base) continue;
+        if (e.key == "include") return std::unexpected(at(e.line, "an included material file cannot include another"));
+        NITCAD_DECK_TRY(taken, parameter(params, e));
+        if (!taken) {
+            return std::unexpected(at(e.line, "unknown key '" + e.key + "' in [material " + s.name +
+                                                  "] (not a parameter of its base)"));
+        }
+    }
+    const std::string where = "[material " + s.name + "]";
+    if (const auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
+        if (auto m = physics::Semiconductor::create(*sp); !m) {
+            return std::unexpected(located(base->line, where, std::move(m.error())));
+        }
+    } else if (auto m = physics::Insulator::create(std::get<physics::InsulatorParameters>(params)); !m) {
+        return std::unexpected(located(base->line, where, std::move(m.error())));
+    }
+    return UserMaterial{std::move(params), std::move(composition)};
+}
+
+std::expected<void, base::Error> Builder::user_materials() {
+    for (const Section& s : d_.sections) {
+        if (s.kind != "material") continue;
+        if (physics::find_material(s.name)) {
+            return std::unexpected(at(s.line, "[material " + s.name + "]: '" + s.name +
+                                                  "' is a registry material; a user material needs a name of its own"));
+        }
+        if (user_materials_.contains(s.name)) return std::unexpected(at(s.line, "a second [material " + s.name + "]"));
+        const Entry* include = nullptr;
+        for (const Entry& e : s.entries) {
+            if (e.key == "include") include = &e;
+        }
+        if (!include) {
+            NITCAD_DECK_TRY(params, user_material(s));
+            user_materials_.emplace(s.name, std::move(params));
+            continue;
+        }
+        if (s.entries.size() != 1) {
+            return std::unexpected(at(include->line, "a [material] with 'include' takes no other key"));
+        }
+        // The file holds the section's key lines; parsed under the section's header, its lines
+        // renumbered to the file's own, and built by a builder whose messages name the file.
+        const std::filesystem::path path = file(*include);
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return std::unexpected(at(include->line, "cannot open the material file '" + path.string() + "'"));
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string_view body = text;
+        if (body.starts_with("\xEF\xBB\xBF")) body.remove_prefix(3);
+        auto parsed = parse("[material " + s.name + "]\n" + std::string(body), path.filename().string(),
+                            path.parent_path());
+        if (!parsed) return std::unexpected(located(include->line, "include", std::move(parsed.error())));
+        if (parsed->sections.size() != 1) {
+            return std::unexpected(at(include->line, "include: a material file holds key lines only, no section"));
+        }
+        for (Entry& e : parsed->sections.front().entries) --e.line;
+        NITCAD_DECK_TRY(params, Builder(*parsed, nullptr).user_material(parsed->sections.front()));
+        user_materials_.emplace(s.name, std::move(params));
+    }
+    return {};
+}
+
 std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
     RegionSpec spec;
     spec.section = &s;
@@ -312,36 +432,62 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         }
     }
     if (!material) return std::unexpected(at(s.line, "[region " + s.name + "] has no 'material'"));
+    physics::MaterialParameters params;
     const auto words = tokens(material->value);
-    const std::string_view kind = words.front();
-    std::variant<physics::SemiconductorParameters, physics::InsulatorParameters> params;
-    if (kind == "algaas") {
-        if (words.size() < 2 || words.size() > 3) {
-            return std::unexpected(at(material->line, "algaas takes the Al fraction and optionally the conduction share"));
-        }
-        NITCAD_DECK_TRY(x, lift(material->line, number(words[1])));
-        double share = 0.85 / 1.247;
-        if (words.size() == 3) {
-            NITCAD_DECK_TRY(v, lift(material->line, number(words[2])));
-            share = v;
-        }
-        auto p = physics::algaas_parameters(x, share);
-        if (!p) return std::unexpected(located(material->line, "material", std::move(p.error())));
-        params = *p;
-    } else {
-        if (words.size() != 1) return std::unexpected(at(material->line, "'" + std::string(kind) + "' takes no arguments"));
-        if (kind == "silicon") params = physics::silicon_parameters;
-        else if (kind == "silicon_legacy") params = physics::legacy_silicon_parameters;
-        else if (kind == "germanium") params = physics::germanium_parameters;
-        else if (kind == "gaas") params = physics::gallium_arsenide_parameters;
-        else if (kind == "ingaas") params = physics::indium_gallium_arsenide_parameters;
-        else if (kind == "sic_4h") params = physics::silicon_carbide_4h_parameters;
-        else if (kind == "sio2") params = physics::silicon_dioxide_parameters;
-        else if (kind == "insulator") params = physics::InsulatorParameters{.eps_r = 0.0};
-        else return std::unexpected(at(material->line, "unknown material '" + std::string(kind) + "'"));
-    }
+    const Entry* composition = nullptr;
     for (const Entry& e : s.entries) {
-        if (&e == material) continue;
+        if (e.key != "composition") continue;
+        if (composition) return std::unexpected(at(e.line, "a second 'composition'"));
+        composition = &e;
+    }
+    if (composition) {  // Unit 68 (MAQ7a): a graded region
+        const physics::MaterialEntry* entry = physics::find_material(words.front());
+        if (!entry || entry->arguments_min != 1 || words.size() != 1) {
+            return std::unexpected(at(composition->line, "a graded region names a material that takes a fraction, written "
+                                                      "without it (for example 'material = sige_strained')"));
+        }
+        const auto t = tokens(composition->value);
+        if (t.size() != 6 || t[0] != "linear") {
+            return std::unexpected(at(composition->line, "composition = linear <x_start> <x_end> <axis> <start> <end>"));
+        }
+        RegionSpec::Grading g{.entry = entry, .line = composition};
+        NITCAD_DECK_TRY(x0, lift(composition->line, number(t[1])));
+        NITCAD_DECK_TRY(x1, lift(composition->line, number(t[2])));
+        if (t[3] != "x" && t[3] != "y" && t[3] != "z") return std::unexpected(at(composition->line, "the grading axis is x, y or z"));
+        NITCAD_DECK_TRY(a, lift(composition->line, length(t[4])));
+        NITCAD_DECK_TRY(b, lift(composition->line, length(t[5])));
+        if (!(b > a)) return std::unexpected(at(composition->line, "the grading's end must lie beyond its start"));
+        g.x_start = x0;
+        g.x_end = x1;
+        g.axis = t[3][0] - 'x';
+        g.start = a;
+        g.end = b;
+        for (const double x : {x0, x1}) {  // both ends must be valid compositions
+            const std::array<double, 1> arg{x};
+            if (auto made = entry->make(arg); !made) return std::unexpected(located(composition->line, "composition", std::move(made.error())));
+        }
+        const std::array<double, 1> arg{x0};
+        params = *entry->make(arg);
+        spec.record = results::MaterialRecord{s.name, std::string(entry->name), {x0}, 0};
+        spec.grading = std::move(g);
+    } else if (const auto user = user_materials_.find(words.front()); user != user_materials_.end()) {
+        if (words.size() != 1) {
+            return std::unexpected(at(material->line, "'" + std::string(words.front()) + "' takes no arguments"));
+        }
+        params = user->second.parameters;
+        spec.record = results::MaterialRecord{s.name, user->first, user->second.composition, 0};
+    } else {
+        std::vector<double> arguments;
+        NITCAD_DECK_TRY(made, registry_material(*material, &arguments));
+        params = std::move(made);
+        if (physics::find_material(words.front())->recorded) {
+            spec.record = results::MaterialRecord{s.name, std::string(words.front()), std::move(arguments), 0};
+        }
+    }
+    const bool is_metal = std::holds_alternative<physics::InsulatorParameters>(params) &&
+                          std::get<physics::InsulatorParameters>(params).metal;
+    for (const Entry& e : s.entries) {
+        if (&e == material || &e == composition) continue;
         if (e.key == "box") { spec.boxes.push_back(&e); continue; }
         if (e.key == "polygon") { spec.polygons.push_back(&e); continue; }
         if (e.key == "seed") { spec.seeds.push_back(&e); continue; }
@@ -354,25 +500,44 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
             spec.fill = e.value == "fill";
             continue;
         }
-        if (auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
-            if (e.key == "band_to_band.direct_gap") {
-                NITCAD_DECK_TRY(v, flag(e));
-                sp->band_to_band.direct_gap = v;
-                continue;
+        if (is_metal) {  // Unit 68 (MAD6): the metal's work function, and nothing else
+            if (e.key != "work_function" && e.key != "metal") {
+                return std::unexpected(at(e.line, "a metal region takes 'work_function' or 'metal', not '" + e.key + "'"));
             }
-            if (double* target = semiconductor_parameter(*sp, e.key)) {
+            if (spec.metal) return std::unexpected(at(e.line, "a metal region takes one of 'work_function' and 'metal'"));
+            if (e.key == "work_function") {
                 NITCAD_DECK_TRY(v, num(e));
-                *target = v;
+                spec.metal = device::Electrode{.kind = device::GateElectrode::metal, .work_function_eV = v};
                 continue;
             }
-        } else if (double* target = insulator_parameter(std::get<physics::InsulatorParameters>(params), e.key)) {
-            NITCAD_DECK_TRY(v, num(e));
-            *target = v;
+            const physics::MetalPreset* p = physics::find_metal_preset(e.value);
+            if (!p) return std::unexpected(at(e.line, unknown_metal(e.value)));
+            if (p->kind == physics::MetalPresetKind::silicide) {
+                return std::unexpected(at(e.line, "'" + e.value + "' is a silicide barrier, for a Schottky contact, not a metal region"));
+            }
+            spec.metal = device::Electrode{
+                .kind = p->kind == physics::MetalPresetKind::n_poly   ? device::GateElectrode::n_poly
+                        : p->kind == physics::MetalPresetKind::p_poly ? device::GateElectrode::p_poly
+                                                                      : device::GateElectrode::metal,
+                .work_function_eV = p->work_function_eV};
             continue;
+        }
+        NITCAD_DECK_TRY(taken, parameter(params, e));
+        if (taken) {
+            if (spec.grading) spec.grading->overrides.push_back(&e);
+            continue;
+        }
+        if (e.key == "metal" && !physics::find_metal_preset(e.value)) return std::unexpected(at(e.line, unknown_metal(e.value)));
+        if (e.key == "work_function" || e.key == "metal") {
+            return std::unexpected(at(e.line, "'" + e.key + "' is for a metal region (material = metal)"));
         }
         return std::unexpected(at(e.line, "unknown key '" + e.key + "' in [region " + s.name +
                                               "] (not a parameter of its material)"));
     }
+    if (is_metal && !spec.metal) {
+        return std::unexpected(at(material->line, "a metal region needs 'work_function' or 'metal = <preset>'"));
+    }
+    if (spec.record) spec.record->parameter_hash = physics::parameter_hash(params);
     if (const auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
         auto m = physics::Semiconductor::create(*sp);
         if (!m) return std::unexpected(located(material->line, "[region " + s.name + "]", std::move(m.error())));
@@ -1199,6 +1364,65 @@ std::expected<void, base::Error> Builder::doping(device::DeviceDescription& d) c
     return {};
 }
 
+
+std::expected<void, base::Error> Builder::grade(device::DeviceDescription& d) {
+    for (std::size_t r = 0; r < regions_.size(); ++r) {
+        RegionSpec& spec = regions_[r];
+        if (!spec.grading) continue;
+        const RegionSpec::Grading& g = *spec.grading;
+        if (g.axis >= d.mesh.dimension()) {
+            return std::unexpected(at(g.line->line, std::format("the grading axis lies outside this {}D mesh", d.mesh.dimension())));
+        }
+        for (const Section& s : d_.sections) {
+            if (s.kind == "interface" && s.name.find(spec.section->name) != std::string::npos) {
+                for (const std::string_view w : tokens(s.name)) {
+                    if (w == spec.section->name) {
+                        return std::unexpected(at(s.line, "[interface] cannot name the graded region '" + spec.section->name + "'"));
+                    }
+                }
+            }
+        }
+        // The node layers: every node of the region by its coordinate along the axis.
+        std::map<double, std::vector<std::size_t>> layers;
+        const auto points = d.mesh.points();
+        for (std::size_t i = 0; i < d.node_region.size(); ++i) {
+            if (d.node_region[i] == static_cast<device::RegionId>(r)) layers[points[i][static_cast<std::size_t>(g.axis)]].push_back(i);
+        }
+        // shortcut: one region per distinct coordinate; an unstructured mesh has one per node, so
+        // it is capped; a tensor or extruded mesh has one per grid line.
+        constexpr std::size_t max_layers = 512;
+        if (layers.size() > max_layers) {
+            return std::unexpected(at(g.line->line, std::format("the graded region has {} node layers along its axis (at most {}): "
+                                                                "grade on a tensor or extruded mesh",
+                                                                layers.size(), max_layers)));
+        }
+        std::size_t k = 0;
+        for (const auto& [c, nodes] : layers) {
+            const double t = std::clamp((c - g.start) / (g.end - g.start), 0.0, 1.0);
+            const double x = g.x_start + (g.x_end - g.x_start) * t;
+            const std::array<double, 1> arg{x};
+            auto params = g.entry->make(arg);
+            if (!params) return std::unexpected(located(g.line->line, "composition", std::move(params.error())));
+            for (const Entry* e : g.overrides) NITCAD_DECK_CHECK(parameter(*params, *e));
+            auto made = physics::Semiconductor::create(std::get<physics::SemiconductorParameters>(*params));
+            if (!made) return std::unexpected(located(g.line->line, "composition", std::move(made.error())));
+            results::MaterialRecord record{spec.section->name, std::string(g.entry->name), {x}, physics::parameter_hash(*params)};
+            if (k == 0) {
+                d.regions[r].material = std::move(*made);
+                spec.record = std::move(record);
+            } else {
+                const std::string name = spec.section->name + "." + std::to_string(k);
+                const auto index = static_cast<device::RegionId>(d.regions.size());
+                d.regions.push_back({name, std::move(*made)});
+                for (const std::size_t i : nodes) d.node_region[i] = index;
+                record.region = name;
+                graded_records_.push_back(std::move(record));
+            }
+            ++k;
+        }
+    }
+    return {};
+}
 std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
                                                              const device::DeviceDescription& d) const {
     device::Contact c{.name = s.name, .kind = device::ContactKind::ohmic, .nodes = {}};
@@ -1208,11 +1432,17 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
     bool gate_keys = false;
     const Entry* work_function = nullptr;
     const Entry* barrier = nullptr;
+    const Entry* electrode = nullptr;
+    const Entry* metal = nullptr;  // Unit 68 (MAD14): a named metal in place of the work function
+    const Entry* region_entry = nullptr;  // Unit 68 (MAD6): the metal region an electrode holds
+    const Entry* silicide = nullptr;      // Unit 68 (MAD14, slice 5c): a silicide barrier preset
     bool schottky_keys = false;
     DoseKeys dose;
     for (const Entry& e : s.entries) {
         if (dose_key(e, dose)) gate_keys = true;
         else if (e.key == "kind") kind = &e;
+        else if (e.key == "metal") metal = &e;
+        else if (e.key == "region") region_entry = &e;
         else if (e.key == "patch") patch = &e;
         else if (e.key == "box") boxes.push_back(&e);
         else if (e.key == "oxide_thickness") {
@@ -1235,6 +1465,7 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
             else return std::unexpected(at(e.line, "electrode is n_poly, p_poly or metal"));
             c.gate.electrode = g;
             c.electrode.kind = g;
+            electrode = &e;
         } else if (e.key == "work_function") {
             NITCAD_DECK_TRY(v, num(e));
             c.gate.work_function_eV = v;
@@ -1318,6 +1549,39 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
     if ((barrier || schottky_keys) && c.kind != device::ContactKind::schottky) {
         return std::unexpected(at(s.line, "barrier, richardson_n and richardson_p are for a Schottky contact"));
     }
+    if (metal) {  // Unit 68 (MAD14): the preset stands for 'electrode' and 'work_function'
+        const physics::MetalPreset* p = physics::find_metal_preset(metal->value);
+        if (!p) return std::unexpected(at(metal->line, unknown_metal(metal->value)));
+        if (work_function || barrier || electrode) {
+            return std::unexpected(at(metal->line, "'metal' replaces 'work_function', 'barrier' and 'electrode'; give one"));
+        }
+        if (c.kind == device::ContactKind::ohmic) {
+            return std::unexpected(at(metal->line, "'metal' is for a gate, electrode or Schottky contact"));
+        }
+        if (p->kind == physics::MetalPresetKind::silicide) {  // slice 5c: a measured barrier (MAD14)
+            if (c.kind != device::ContactKind::schottky) {
+                return std::unexpected(at(metal->line, "'" + metal->value + "' is a silicide barrier, for a Schottky contact "
+                                                                            "on silicon (silicide barriers do not follow Schottky-Mott)"));
+            }
+            c.schottky.barrier_eV = p->barrier_eV;
+            barrier = metal;
+            silicide = metal;
+        } else if (p->kind != physics::MetalPresetKind::metal && c.kind == device::ContactKind::schottky) {
+            return std::unexpected(at(metal->line, "'" + metal->value + "' is a polysilicon electrode, not a Schottky metal"));
+        }
+        const device::GateElectrode g = p->kind == physics::MetalPresetKind::n_poly   ? device::GateElectrode::n_poly
+                                        : p->kind == physics::MetalPresetKind::p_poly ? device::GateElectrode::p_poly
+                                                                                      : device::GateElectrode::metal;
+        // Exactly as written out: `electrode = <kind>` (gate, electrode) and `work_function = <eV>`.
+        if (c.kind != device::ContactKind::schottky) {
+            c.gate.electrode = g;
+            c.electrode.kind = g;
+        }
+        if (!silicide) {
+            c.gate.work_function_eV = c.electrode.work_function_eV = c.schottky.work_function_eV = p->work_function_eV;
+            work_function = metal;  // a Schottky contact takes it as its work function (SD1)
+        }
+    }
     if (c.kind == device::ContactKind::schottky) {
         // Exactly one of the barrier and the work function (SD1).
         if ((barrier != nullptr) == (work_function != nullptr)) {
@@ -1325,6 +1589,28 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
         }
         c.schottky.by_work_function = work_function != nullptr;
         c.schottky.boundary = patch ? patch->value : std::string{};
+    }
+    if (region_entry) {  // Unit 68 (MAD6): the electrode is the whole metal region
+        if (c.kind != device::ContactKind::electrode) {
+            return std::unexpected(at(region_entry->line, "'region' is for a kind = electrode contact"));
+        }
+        if (patch || !boxes.empty()) {
+            return std::unexpected(at(region_entry->line, "an electrode on a metal region takes no 'patch' or 'box'"));
+        }
+        if (work_function || electrode || metal) {
+            return std::unexpected(at(region_entry->line, "the metal region gives the electrode's work function; "
+                                                          "drop 'work_function', 'electrode' and 'metal' here"));
+        }
+        const auto spec = std::ranges::find_if(regions_, [&](const RegionSpec& g) { return g.section->name == region_entry->value; });
+        if (spec == regions_.end()) return std::unexpected(at(region_entry->line, "no [region " + region_entry->value + "]"));
+        if (!spec->metal) return std::unexpected(at(region_entry->line, "[region " + region_entry->value + "] is not a metal region"));
+        c.electrode = *spec->metal;
+        const auto r = static_cast<device::RegionId>(spec - regions_.begin());
+        for (std::size_t k = 0; k < d.node_region.size(); ++k) {
+            if (d.node_region[k] == r) c.nodes.push_back(static_cast<mesh::NodeId>(k));
+        }
+        if (c.nodes.empty()) return std::unexpected(at(region_entry->line, "metal region '" + region_entry->value + "' has no mesh node"));
+        return c;
     }
     if (!patch) return std::unexpected(at(s.line, "[contact " + s.name + "] needs 'patch'"));
     const mesh::BoundaryPatch* b = d.mesh.find_boundary(patch->value);
@@ -1350,6 +1636,16 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
         return std::unexpected(at(patch->line, std::string("patch '") + patch->value + "' has no " +
                                                    (want_insulator ? "insulator" : "semiconductor") +
                                                    " node for this contact"));
+    }
+    if (silicide) {  // MAD14: a silicide barrier is measured on silicon
+        for (const mesh::NodeId k : c.nodes) {
+            const auto& m = d.regions[static_cast<std::size_t>(d.node_region[static_cast<std::size_t>(k)])].material;
+            const auto& sp = std::get<physics::Semiconductor>(m).parameters();
+            if (!(sp == physics::silicon_parameters) && !(sp == physics::legacy_silicon_parameters)) {
+                return std::unexpected(at(silicide->line, "'" + silicide->value + "' is a barrier measured on silicon; "
+                                                          "this contact has a node of another material"));
+            }
+        }
     }
     return c;
 }
@@ -2345,6 +2641,7 @@ std::expected<Plan, base::Error> Builder::run() {
             d.temperature_K = v;
         }
     }
+    NITCAD_DECK_CHECK(user_materials());
     for (const Section& s : d_.sections) {
         if (s.kind != "region") continue;
         NITCAD_DECK_TRY(spec, region(s));
@@ -2354,6 +2651,7 @@ std::expected<Plan, base::Error> Builder::run() {
     for (const RegionSpec& g : regions_) d.regions.push_back(*g.region);
     NITCAD_DECK_CHECK(build_mesh(d));
     NITCAD_DECK_CHECK(doping(d));
+    NITCAD_DECK_CHECK(grade(d));
     for (const Section& s : d_.sections) {
         if (s.kind == "contact") {
             NITCAD_DECK_TRY(c, contact(s, d));
@@ -2369,6 +2667,10 @@ std::expected<Plan, base::Error> Builder::run() {
     auto device = device::Device::create(std::move(d));
     if (!device) return std::unexpected(located(1, "device", std::move(device.error())));
     Plan plan{.device = std::move(*device), .generated = std::move(generated_), .mesh_type = type_name_};
+    for (const RegionSpec& g : regions_) {
+        if (g.record) plan.materials.push_back(*g.record);
+    }
+    plan.materials.insert(plan.materials.end(), graded_records_.begin(), graded_records_.end());
     NITCAD_DECK_CHECK(models(plan.options.models));
     NITCAD_DECK_CHECK(solver(plan));
     NITCAD_DECK_CHECK(analysis(plan));

@@ -6,11 +6,18 @@
 // and parameters, independently of this code.
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
+#include <span>
+#include <string_view>
+#include <variant>
 
 #include "NiTCAD/base/constants.hpp"
+#include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/ionization.hpp"
+#include "NiTCAD/physics/materials.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
@@ -248,4 +255,192 @@ TEST_CASE("thermionic: a set Richardson constant gives A* T^2 / (q N)") {
     bad = silicon_parameters;
     bad.radiative_cm3_s = -1e-10;
     REQUIRE_FALSE(Semiconductor::create(bad).has_value());
+}
+
+// Unit 68 MAD1 / MAC1: the registry returns the existing sets unchanged.
+TEST_CASE("material registry: existing names give the existing sets bit for bit", "[materials][unit68]") {
+    const auto semi = [](std::string_view name, std::span<const double> a = {}) {
+        const MaterialEntry* e = find_material(name);
+        REQUIRE(e != nullptr);
+        REQUIRE(e->kind == MaterialKind::semiconductor);
+        auto p = e->make(a);
+        REQUIRE(p.has_value());
+        return std::get<SemiconductorParameters>(*p);
+    };
+    REQUIRE(semi("silicon") == silicon_parameters);
+    REQUIRE(semi("silicon_legacy") == legacy_silicon_parameters);
+    REQUIRE(semi("germanium") == germanium_parameters);
+    REQUIRE(semi("gaas") == gallium_arsenide_parameters);
+    REQUIRE(semi("ingaas") == indium_gallium_arsenide_parameters);
+    REQUIRE(semi("sic_4h") == silicon_carbide_4h_parameters);
+    const std::array<double, 1> x{0.3};
+    REQUIRE(semi("algaas", x) == *algaas_parameters(0.3));
+    const std::array<double, 2> xs{0.3, 0.6};
+    REQUIRE(semi("algaas", xs) == *algaas_parameters(0.3, 0.6));
+    const std::array<double, 1> bad{0.9};
+    REQUIRE_FALSE(find_material("algaas")->make(bad).has_value());
+
+    const MaterialEntry* sio2 = find_material("sio2");
+    REQUIRE(sio2->kind == MaterialKind::insulator);
+    REQUIRE(std::get<InsulatorParameters>(*sio2->make({})) == silicon_dioxide_parameters);
+    REQUIRE(std::get<InsulatorParameters>(*find_material("insulator")->make({})).eps_r == 0.0);
+    REQUIRE(find_material("unobtainium") == nullptr);
+    // Unit 68 (MAD6): the metal region set.
+    const MaterialEntry* metal = find_material("metal");
+    REQUIRE(metal->kind == MaterialKind::metal);
+    REQUIRE(metal->recorded);
+    REQUIRE(std::get<InsulatorParameters>(*metal->make({})).metal);
+    REQUIRE(Insulator::create(std::get<InsulatorParameters>(*metal->make({}))).has_value());
+}
+
+TEST_CASE("material registry: names unique, arities and usage consistent", "[materials][unit68]") {
+    const auto all = material_registry();
+    REQUIRE(all.size() == 25);
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        CAPTURE(all[i].name);
+        REQUIRE(find_material(all[i].name) == &all[i]);
+        REQUIRE(all[i].arguments_min <= all[i].arguments_max);
+        REQUIRE((all[i].arguments_max == 0) == all[i].usage.empty());
+        REQUIRE_FALSE(all[i].summary.empty());
+    }
+}
+
+TEST_CASE("material registry: parameter paths and values agree (DK7)", "[materials][unit68]") {
+    SemiconductorParameters s = silicon_parameters;
+    const auto sv = parameter_values(MaterialParameters{s});
+    REQUIRE(sv.size() == 65);  // Unit 68 slice 1: the five alloy_gap paths
+    for (const auto& [path, value] : sv) {
+        CAPTURE(path);
+        double* target = semiconductor_parameter(s, path);
+        REQUIRE(target != nullptr);
+        REQUIRE(*target == value);
+    }
+    REQUIRE(semiconductor_parameter(s, "eps_r") == &s.eps_r);
+    REQUIRE(semiconductor_parameter(s, "dos_mass") == nullptr);
+    InsulatorParameters i = silicon_dioxide_tunnelling_parameters;
+    const auto iv = parameter_values(MaterialParameters{i});
+    REQUIRE(iv.size() == 11);
+    for (const auto& [path, value] : iv) {
+        CAPTURE(path);
+        REQUIRE(insulator_parameter(i, path) != nullptr);
+        REQUIRE(*insulator_parameter(i, path) == value);
+    }
+    REQUIRE(insulator_parameter(i, "electron_mobility.mu_max") == nullptr);
+}
+
+// MAD3 / MAC6: every material Unit 68 adds cites every parameter; the earlier sets cite the whole set.
+TEST_CASE("material registry: parameter citations (MAC6)", "[materials][unit68]") {
+    for (const MaterialEntry& e : material_registry()) {
+        CAPTURE(e.name);
+        REQUIRE((!e.sources.empty() || e.name == "insulator"));
+        if (!e.recorded) {
+            REQUIRE(e.parameter_sources.empty());
+            continue;
+        }
+        const std::array<double, 2> zeros{};  // composition 0: the end binary
+        const auto set = e.make(std::span<const double>(zeros.data(), e.arguments_min));
+        REQUIRE(set.has_value());
+        for (const auto& [path, value] : parameter_values(*set)) {
+            CAPTURE(path);
+            bool cited = false;
+            for (const ParameterCitation& c : e.parameter_sources) {
+                if (c.path != path) continue;
+                cited = true;
+                REQUIRE(c.source < e.sources.size());
+                REQUIRE(std::ranges::find(citation_bases, c.basis) != std::end(citation_bases));
+            }
+            REQUIRE(cited);
+        }
+    }
+}
+
+TEST_CASE("material registry: nearest names (MAC13)", "[materials][unit68]") {
+    const std::array<std::string_view, 4> names{"silicon", "silicon_legacy", "gaas", "barrier"};
+    REQUIRE(nearest_name("silicn", names) == "silicon");
+    REQUIRE(nearest_name("gaass", names) == "gaas");
+    REQUIRE(nearest_name("barier", names) == "barrier");
+    const std::array<std::string_view, 2> metals{"ni", "nisi"};
+    REQUIRE(nearest_name("nii", metals) == "nisi");  // a tie goes to the dropped-letter form
+    REQUIRE(nearest_name("nis", metals) == "nisi");
+    REQUIRE(nearest_name("n", metals) == "ni");
+    REQUIRE(nearest_name("unobtainium", names).empty());
+    REQUIRE(nearest_name("x", names).empty());
+}
+
+TEST_CASE("material registry: parameter hash sees every value (MAD3)", "[materials][unit68]") {
+    const auto h = parameter_hash(MaterialParameters{silicon_parameters});
+    REQUIRE(h == parameter_hash(MaterialParameters{silicon_parameters}));
+    SemiconductorParameters s = silicon_parameters;
+    s.hole_mobility.mu_max = std::nextafter(s.hole_mobility.mu_max, 1e9);
+    REQUIRE(parameter_hash(MaterialParameters{s}) != h);
+    s = silicon_parameters;
+    s.band_to_band.direct_gap = !s.band_to_band.direct_gap;
+    REQUIRE(parameter_hash(MaterialParameters{s}) != h);
+    s = silicon_parameters;
+    s.dos_mass.valence[2] += 1e-3;
+    REQUIRE(parameter_hash(MaterialParameters{s}) != h);
+    REQUIRE(parameter_hash(MaterialParameters{legacy_silicon_parameters}) != h);
+    InsulatorParameters i = silicon_dioxide_parameters;
+    const auto hi = parameter_hash(MaterialParameters{i});
+    i.eps_r = 3.9000001;
+    REQUIRE(parameter_hash(MaterialParameters{i}) != hi);
+}
+
+// Unit 68 (MAD6, MAD14): every metal preset is named once, cited, and a metal has a work function.
+TEST_CASE("material registry: metal presets (MAD14)", "[materials][unit68]") {
+    std::vector<std::string_view> seen;
+    for (const MetalPreset& m : metal_presets()) {
+        CAPTURE(m.name);
+        REQUIRE(std::ranges::find(seen, m.name) == seen.end());
+        REQUIRE(find_material(m.name) == nullptr);
+        seen.push_back(m.name);
+        REQUIRE_FALSE(m.source.source.empty());
+        REQUIRE((m.kind == MetalPresetKind::metal) == (m.work_function_eV > 0.0));
+        REQUIRE(find_metal_preset(m.name) == &m);
+    }
+    REQUIRE(find_metal_preset("tin")->work_function_eV == 4.70);
+    REQUIRE(find_metal_preset("nisi")->barrier_eV == 0.75);  // slice 5c, Sze & Ng Table 4
+    for (const MetalPreset& m : metal_presets()) REQUIRE((m.kind == MetalPresetKind::silicide) == (m.barrier_eV > 0.0));
+}
+
+// Unit 68 slice 5b (MAD5, MAD13): every dielectric carries band data, so gate tunnelling runs
+// through it; the general hole mass is cited "approximate" (owner ruling 2026-11-26).
+TEST_CASE("material registry: dielectrics with band data (MAD5, MAD13)", "[materials][unit68]") {
+    for (const std::string_view name : {"hfo2", "al2o3", "si3n4", "zro2", "la2o3", "tio2", "ta2o5", "mgo", "aln_dielectric",
+                                        "sapphire", "hbn"}) {
+        CAPTURE(name);
+        const MaterialEntry* e = find_material(name);
+        REQUIRE(e != nullptr);
+        const auto p = std::get<InsulatorParameters>(*e->make({}));
+        REQUIRE(has_band_data(p));
+        REQUIRE(Insulator::create(p).has_value());
+        REQUIRE(p.tunnel_mass_p > 0.0);
+        for (const ParameterCitation& c : e->parameter_sources) {
+            if (c.path == "tunnel_mass_p") REQUIRE(c.basis == "approximate");
+        }
+    }
+    const auto hfo2 = std::get<InsulatorParameters>(*find_material("hfo2")->make({}));
+    REQUIRE(hfo2.eps_r == 25.0);
+    REQUIRE(hfo2.band_gap_eV == 5.8);
+    REQUIRE(std::abs(hfo2.electron_affinity_eV - 2.65) < 1e-12);  // 4.05 - 1.4 (Robertson Table 2)
+    REQUIRE(hfo2.tunnel_mass_n == 0.11);
+    REQUIRE(hfo2.tunnel_mass_p == 0.60);  // owner-supplied 2026-11-26
+    REQUIRE(hfo2.thermal.conductivity_W_cmK == 0.010);
+    REQUIRE(hfo2.thermal.conductivity_exponent == 0.0);
+    const auto al2o3 = std::get<InsulatorParameters>(*find_material("al2o3")->make({}));
+    const auto sapphire = std::get<InsulatorParameters>(*find_material("sapphire")->make({}));
+    REQUIRE(al2o3.band_gap_eV == 6.4);  // ALD (Robertson & Wallace 2015)
+    REQUIRE(sapphire.band_gap_eV == 8.8);  // crystalline, "not ALD" (Robertson 2004)
+    REQUIRE(std::abs(sapphire.electron_affinity_eV - 1.25) < 1e-12);
+    REQUIRE(std::get<InsulatorParameters>(*find_material("hbn")->make({})).tunnel_mass_n == 2.21);
+    // SiON: linear in x between the SiO2 tunnelling set and si3n4.
+    const MaterialEntry* sion = find_material("sion");
+    const std::array<double, 1> zero{0.0}, one{1.0}, half{0.5}, bad{1.5};
+    REQUIRE(std::get<InsulatorParameters>(*sion->make(zero)) == silicon_dioxide_tunnelling_parameters);
+    const auto si3n4 = std::get<InsulatorParameters>(*find_material("si3n4")->make({}));
+    const auto x1 = std::get<InsulatorParameters>(*sion->make(one));
+    REQUIRE(x1.eps_r == si3n4.eps_r);
+    REQUIRE(x1.band_gap_eV == si3n4.band_gap_eV);
+    REQUIRE(std::get<InsulatorParameters>(*sion->make(half)).band_gap_eV == 0.5 * (9.0 + 5.3));
+    REQUIRE_FALSE(sion->make(bad).has_value());
 }

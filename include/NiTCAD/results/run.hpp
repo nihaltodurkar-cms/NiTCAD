@@ -42,6 +42,16 @@ struct Provenance {
     bool operator==(const Provenance&) const = default;
 };
 
+// A region's material as a run used it (Unit 68, MAD3).
+struct MaterialRecord {
+    std::string region;
+    std::string material;              // a registry name or a [material] name
+    std::vector<double> composition;   // the registry base's arguments (empty for none)
+    std::uint64_t parameter_hash = 0;  // physics::parameter_hash of the set the region used
+
+    bool operator==(const MaterialRecord&) const = default;
+};
+
 struct RunRecord {
     // A 64-bit FNV-1a digest of the device description and the solve options. Equal inputs give
     // equal digests on the same build; it identifies a run, it is not a checksum to compare across
@@ -59,6 +69,11 @@ struct RunRecord {
     // not part of input_identity.
     std::string mesh_type;
     std::uint64_t mesh_generation_digest = 0;
+    // Unit 68 (MAD3, MAC6): the material of each region that names a [material] or a registry
+    // material added by Unit 68: its name, composition and physics::parameter_hash. Empty for the
+    // pre-Unit-68 names, so their result files stay byte-identical (MAC1); not part of
+    // input_identity (which covers the parameters already).
+    std::vector<MaterialRecord> materials;
     // What the run warns about (Unit 62: density gradient's continuation rungs, QP9, and its coarse-mesh
     // check, QP15); empty otherwise. Not part of input_identity.
     std::vector<std::string> warnings;

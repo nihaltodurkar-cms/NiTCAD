@@ -231,8 +231,14 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
         const bool thermionic =
             ra != rb &&
             device.transport(ra, rb) == device::InterfaceTransport::thermionic_emission;
-        const double eta = permittivity_ratio(device.relative_permittivity(edge.first), scaling);
-        const double etb = permittivity_ratio(device.relative_permittivity(edge.second), scaling);
+        double eta = permittivity_ratio(device.relative_permittivity(edge.first), scaling);
+        double etb = permittivity_ratio(device.relative_permittivity(edge.second), scaling);
+        // Unit 68 (MAD6): a metal node is the electrode's surface; the edge lies in its other end's
+        // medium, as an electrode patch's does. (Between two metal nodes both ends are held.)
+        const bool metal_a = device::is_metal(device.regions()[static_cast<std::size_t>(ra)]);
+        const bool metal_b = device::is_metal(device.regions()[static_cast<std::size_t>(rb)]);
+        if (metal_a && !metal_b) eta = etb;
+        if (metal_b && !metal_a) etb = eta;
         const bool interface = carriers ? !(device.material(edge.first).parameters() ==
                                             device.material(edge.second).parameters())
                                         : ra != rb;

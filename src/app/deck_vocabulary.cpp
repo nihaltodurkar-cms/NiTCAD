@@ -17,12 +17,17 @@ using Words = std::span<const std::string_view>;
 constexpr std::array<std::string_view, 2> on_off{"on", "off"};
 constexpr std::array<std::string_view, 2> overlap_rules{"replace", "fill"};
 constexpr std::array<std::string_view, 5> mesh_types{"tensor", "generate2d", "generate3d", "extrude3d", "file"};
-constexpr std::array<std::string_view, 9> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas",
-                                                    "sic_4h",  "algaas",         "sio2",      "insulator"};
+constexpr std::array<std::string_view, 25> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas", "sic_4h",
+                                                     "algaas", "sio2", "insulator", "metal", "hfo2", "al2o3", "si3n4",
+                                                     "zro2", "la2o3", "tio2", "ta2o5", "mgo", "aln_dielectric",
+                                                     "sapphire", "hbn", "sion", "sige", "sige_strained", "si_strained"};
 constexpr std::array<std::string_view, 2> dopants{"donor", "acceptor"};
 constexpr std::array<std::string_view, 3> shapes{"constant", "gaussian", "erfc"};
 constexpr std::array<std::string_view, 4> contact_kinds{"ohmic", "gate", "electrode", "schottky"};
 constexpr std::array<std::string_view, 3> electrodes{"n_poly", "p_poly", "metal"};
+// Unit 68 (MAD14): the metal presets, as physics::metal_presets() lists them (tested).
+constexpr std::array<std::string_view, 19> metals{"al", "au", "co", "cr", "cu", "mo", "ni", "pd", "pt", "ru",
+                                                  "ti", "w", "tin", "tan", "n_poly", "p_poly", "nisi", "tisi2", "cosi2"};
 constexpr std::array<std::string_view, 2> transports{"drift_diffusion", "thermionic"};
 constexpr std::array<std::string_view, 2> thermal_kinds{"isothermal", "resistance"};
 constexpr std::array<std::string_view, 3> btbt_nonlocal{"off", "kane", "direct_wkb"};
@@ -85,7 +90,7 @@ constexpr std::array<KeyInfo, 28> mesh_keys{{
     {"path", 0, false, "<file>", "file: a mesh file", {}, {}, "file"},
 }};
 
-constexpr std::array<KeyInfo, 8> region_keys{{
+constexpr std::array<KeyInfo, 11> region_keys{{
     {"material", 0, false, "silicon", "the region's material (algaas takes its Al fraction)", materials, {}, {}},
     {"box", 0, true, "<lo hi> per dimension", "tensor meshes: the region's box", {}, {}, {}},
     {"polygon", 0, true, "<x y>, ...", "generate2d: the region's polygon", {}, {}, {}},
@@ -94,6 +99,15 @@ constexpr std::array<KeyInfo, 8> region_keys{{
     {"overlap", 0, false, "replace", "layered meshes: the region's shapes replace what they cover, or fill only empty space", overlap_rules, {}, {}},
     {"extrude", 0, true, "<cells> <t_lo>:<t_hi>", "extrude3d: cells filled in the sections between two stations", {}, {}, {}},
     {"band_to_band.direct_gap", 0, false, "off", "direct-gap band-to-band tunnelling", on_off, {}, {}},
+    {"work_function", 0, false, "<eV>", "material = metal: the metal's work function, eV (Unit 68)", {}, {}, {}},
+    {"metal", 0, false, "tin", "material = metal: a named metal in place of work_function (Unit 68)", metals, {}, {}},
+{"composition", 0, false, "linear 0 0.2 x 0.1um 0.15um", "a graded region: its material's fraction linear along an axis (Unit 68)", {}, {}, {}},
+}};
+
+// Unit 68 (MAD4): a user material.
+constexpr std::array<KeyInfo, 2> material_keys{{
+    {"base", 0, false, "silicon", "the registry material it starts from (with its composition)", materials, {}, {}},
+    {"include", 0, false, "<file.nitmat>", "its keys from a file, relative to the deck (nothing else here)", {}, {}, {}},
 }};
 
 constexpr std::array<KeyInfo, 1> doping_keys{{
@@ -102,15 +116,17 @@ constexpr std::array<KeyInfo, 1> doping_keys{{
      shapes, {}},
 }};
 
-constexpr std::array<KeyInfo, 20> contact_keys{{
+constexpr std::array<KeyInfo, 22> contact_keys{{
     {"kind", 0, false, "ohmic", "ohmic | gate | electrode | schottky", contact_kinds, {}, {}},
     {"patch", 0, false, "<boundary patch>", "the boundary patch the contact lies on", {}, {}, {}},
+    {"region", 0, false, "<metal region>", "electrode: the metal region it holds, in place of patch (Unit 68)", {}, {}, "electrode"},
     {"box", 0, true, "<lo hi> per dimension", "only the patch's nodes inside the box", {}, {}, {}},
     {"oxide_thickness", 0, false, "<length>", "gate: the oxide's thickness", {}, {}, "gate"},
     {"oxide_permittivity", 0, false, "3.9", "gate: the oxide's relative permittivity", {}, {}, "gate"},
     {"fixed_charge", 0, false, "0", "gate: oxide fixed charge, cm^-2", {}, {}, "gate"},
     {"electrode", 0, false, "n_poly", "gate, electrode: n_poly | p_poly | metal", electrodes, {}, "gate electrode"},
     {"work_function", 0, false, "<eV>", "gate, electrode, schottky: a metal's work function, eV", {}, {}, "gate electrode schottky"},
+    {"metal", 0, false, "tin", "gate, electrode, schottky: a named metal in place of work_function (Unit 68)", metals, {}, "gate electrode schottky"},
     {"barrier", 0, false, "<eV>", "schottky: the electron barrier height, eV", {}, {}, "schottky"},
     {"richardson_n", 0, false, "0", "schottky: electron Richardson constant, A/(cm^2 K^2); 0 the material's", {}, {}, "schottky"},
     {"richardson_p", 0, false, "0", "schottky: hole Richardson constant, A/(cm^2 K^2); 0 the material's", {}, {}, "schottky"},
@@ -321,10 +337,11 @@ constexpr std::array<KeyInfo, 10> heavy_ion_keys{{  // Unit 65 (HD9): no default
     {"sigma", 0, false, "<time>", "the pulse's width", {}, {}, {}},
 }};
 
-constexpr std::array<SectionInfo, 17> sections{{
+constexpr std::array<SectionInfo, 18> sections{{
     {"device", 0, false, "the device's temperature", device_keys, {}},
     {"mesh", 0, false, "the mesh: tensor, generated or from a file", mesh_keys, "type"},
     {"region", 1, true, "a region: its material and where it is", region_keys, {}},
+    {"material", 1, true, "a user material: a registry base and its overrides (Unit 68)", material_keys, {}},
     {"doping", 0, false, "doping profiles", doping_keys, {}},
     {"contact", 1, true, "a contact on a boundary patch", contact_keys, "kind"},
     {"interface", 2, true, "the interface between two regions", interface_keys, {}},
@@ -491,10 +508,16 @@ std::optional<std::string> nearest(std::string_view word, std::span<const std::s
     const std::size_t limit = std::min<std::size_t>(2, std::max<std::size_t>(1, word.size() / 3));
     std::optional<std::string_view> best;
     std::size_t best_distance = limit + 1;
+    // A tie goes to a name the word is a dropped-letter form of, as physics::nearest_name does.
+    const auto dropped_from = [&](std::string_view n) {
+        std::size_t i = 0;
+        for (const char c : n) i += i < word.size() && word[i] == c;
+        return i == word.size() && n.size() > word.size();
+    };
     for (const std::string_view n : names) {
         if (n.empty()) continue;
         const std::size_t d = edit_distance(word, n);
-        if (d < best_distance) {
+        if (d < best_distance || (d == best_distance && best && dropped_from(n) && !dropped_from(*best))) {
             best = n;
             best_distance = d;
         }

@@ -51,7 +51,14 @@
 //   [region <name>]   (repeatable, in order: region k is the k-th section, also for a generated
 //                     mesh and a mesh file, whose node regions are indices)
 //                     material = silicon | silicon_legacy | germanium | gaas | ingaas | sic_4h
-//                                | algaas <x> [<share>] | sio2 | insulator
+//                                | algaas <x> [<share>] | sio2 | insulator | metal | <a [material] name>
+//                       (metal, Unit 68 MAD6: work_function = <eV> or metal = <preset>, and an
+//                       electrode contact with region = <name> holds all its nodes)
+//                       (Unit 68: `nitcad materials` lists every name, e.g. hfo2, sige <x>,
+//                       sige_strained <x>, si_strained <x_substrate>)
+//                     composition = linear <x_start> <x_end> <x|y|z> <start> <end>  (Unit 68,
+//                       MAQ7a: a graded region; its material named without the fraction; one
+//                       region per node layer along the axis, named <region>.1, <region>.2, ...)
 //                       (silicon: Couderc et al.'s band set, Unit 35; silicon_legacy: the legacy's)
 //                     <parameter> = <value>   (a material parameter by its C++ member path, e.g.
 //                       eps_r, electron_mobility.mu_max, thermal.conductivity_W_cmK,
@@ -61,14 +68,22 @@
 //                       is the background, at most one; later regions override earlier ones, DK8)
 //                     generate2d: polygon = <x y>, ... (repeatable)
 //                     generate3d with planes: seed = <x y z>, a point inside its slab
-//   [doping]          profile = <donor|acceptor> <constant|gaussian|erfc> <peak> [axis=x|y|z]
+//   [material <name>] (repeatable; Unit 68 MAD4) a user material, named by a region's material
+//                     base = <registry material> [<composition>]
+//                     <parameter> = <value>   (as in [region], applied to the base and checked)
+//                     include = <file.nitmat> (relative to the deck: those lines from a file; then
+//                       nothing else here); its name is not a registry name
+//   [doping]         profile = <donor|acceptor> <constant|gaussian|erfc> <peak> [axis=x|y|z]
 //                       [center=<l>] [width=<l>] [x=<lo>:<hi>] [y=...] [z=...] [lateral=<l>]
 //                       (repeatable; device/doping_profiles.hpp)
 //   [contact <name>]  (repeatable) kind = ohmic | gate | electrode; patch = <boundary patch>;
+//                     electrode: region = <a metal region> in place of patch (Unit 68, MAD6);
 //                     box = <lo hi> per dimension (optional: only the patch nodes inside);
 //                     gate: oxide_thickness, oxide_permittivity, electrode = n_poly|p_poly|metal,
 //                           work_function, fixed_charge;
 //                     electrode: electrode, work_function
+//                     gate, electrode, schottky: metal = <preset> in place of electrode and
+//                           work_function (Unit 68, MAD14; nitcad materials lists the presets)
 //                     The contact's nodes are the patch's semiconductor nodes (ohmic, gate) or its
 //                     insulator nodes (electrode).
 //   [interface <a> <b>] (repeatable) transport = drift_diffusion | thermionic; fixed_charge;
@@ -199,6 +214,7 @@
 #include "NiTCAD/device/doping_profiles.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/results/learn.hpp"
+#include "NiTCAD/results/run.hpp"
 #include "NiTCAD/solve/adapt.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
@@ -245,6 +261,7 @@ struct Plan {
     device::Device device;
     std::optional<mesh::GeneratedMesh> generated;  // the mesh the deck generated or loaded, if any
     std::string mesh_type;                         // the [mesh] type, as written; extrude3d for a file mesh with a generation digest (Unit 53, FD14)
+    std::vector<results::MaterialRecord> materials;  // Unit 68 (MAD3): the regions' recorded materials (RunRecord::materials)
     Analysis analysis = Analysis::sweep;
     // Models, solver and, for a sweep or a small-signal run, the thermal contacts' temperature per
     // point (for a transient or a trace, one list held for the run).

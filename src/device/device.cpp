@@ -52,6 +52,11 @@ bool insulator_node(const DeviceDescription& d, mesh::NodeId v) {
     return is_insulator(d.regions[static_cast<std::size_t>(r)]);
 }
 
+// Unit 68 (MAD6): a node of a metal region.
+bool metal_node(const DeviceDescription& d, mesh::NodeId v) {
+    return is_metal(d.regions[static_cast<std::size_t>(d.node_region[static_cast<std::size_t>(v)])]);
+}
+
 const physics::Semiconductor& semiconductor_of(const Region& r) {
     return std::get<physics::Semiconductor>(r.material);
 }
@@ -251,7 +256,7 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
                                c);
             }
             const auto i = static_cast<std::size_t>(v);
-            if (!on_boundary[i]) {
+            if (!on_boundary[i] && !(contact.kind == ContactKind::electrode && metal_node(d, v))) {
                 return invalid("contact '" + contact.name + "': node is on no mesh boundary patch",
                                c, static_cast<double>(v));
             }
@@ -276,6 +281,19 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
             if (auto e = check_schottky(d, c)) return e;
         }
         if (contact.kind == ContactKind::electrode) {
+            // A metal region is held whole by this one electrode (MAD6).
+            for (const mesh::NodeId v : contact.nodes) {
+                if (!metal_node(d, v)) continue;
+                const RegionId r = d.node_region[static_cast<std::size_t>(v)];
+                for (std::size_t i = 0; i < n; ++i) {
+                    if (d.node_region[i] == r && !std::ranges::binary_search(contact.nodes, static_cast<mesh::NodeId>(i))) {
+                        return invalid("electrode '" + contact.name + "': it holds part of metal region '" +
+                                           d.regions[static_cast<std::size_t>(r)].name + "', not all of it",
+                                       c, static_cast<double>(i));
+                    }
+                }
+                break;  // shortcut: checks the first metal region only; an electrode holds one (the deck builds it so)
+            }
             const Electrode& el = contact.electrode;
             const std::string where = "electrode '" + contact.name + "': ";
             if (el.kind == GateElectrode::metal) {
@@ -286,6 +304,24 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
             } else if (el.kind != GateElectrode::n_poly && el.kind != GateElectrode::p_poly) {
                 return invalid(where + "unknown electrode kind", c);
             }
+        }
+    }
+    // Unit 68 (MAD6): every metal node is an electrode's, and no edge joins a metal to a
+    // semiconductor (that is a Schottky or ohmic contact, not a metal region).
+    for (std::size_t i = 0; i < n; ++i) {
+        if (metal_node(d, static_cast<mesh::NodeId>(i)) && !in_contact[i]) {
+            const RegionId r = d.node_region[i];
+            return invalid("metal region '" + d.regions[static_cast<std::size_t>(r)].name +
+                               "' is held by no electrode contact (region = <name> on a kind = electrode contact)",
+                           std::nullopt, static_cast<double>(i));
+        }
+    }
+    for (const mesh::Edge& e : d.mesh.edges()) {
+        const bool ma = metal_node(d, e.first), mb = metal_node(d, e.second);
+        if (ma != mb && !insulator_node(d, ma ? e.second : e.first)) {
+            return invalid("a metal region touches a semiconductor; put an insulator between them or use a "
+                           "Schottky or ohmic contact",
+                           std::nullopt, static_cast<double>(ma ? e.first : e.second));
         }
     }
     return std::nullopt;
