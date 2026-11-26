@@ -175,6 +175,22 @@ struct EnergyRelaxationParameters {
     bool operator==(const EnergyRelaxationParameters&) const = default;
 };
 
+// An alloy's band-gap temperature correction (Unit 68 slice 1, ruling F3a), added to the gap of
+// either form:
+//     fraction [ d(T; alpha_b, beta_b) - d(T; alpha_a, beta_a) ],
+//     d(T; alpha, beta) = alpha 300^2 / (300 + beta) - alpha T^2 / (T + beta),
+// each d the Varshni change of an end member from 300 K (a: the host the set is anchored to, b:
+// the other end). Zero at 300 K. fraction 0 (the default): none.
+struct AlloyGapParameters {
+    double fraction = 0.0;
+    double alpha_a_eV_per_K = 0.0;
+    double beta_a_K = 0.0;
+    double alpha_b_eV_per_K = 0.0;
+    double beta_b_K = 0.0;
+
+    bool operator==(const AlloyGapParameters&) const = default;
+};
+
 struct SemiconductorParameters {
     double eps_r;                   // relative permittivity
     double Eg0_eV;                  // band gap at 0 K
@@ -199,6 +215,7 @@ struct SemiconductorParameters {
     PasslerGapParameters passler_gap{};               // Unit 35; alpha 0: Varshni
     DensityOfStatesMassParameters dos_mass{};         // Unit 35; all 0: (T / 300)^(3/2)
     EnergyRelaxationParameters energy_relaxation{};   // Unit 52; 0: not given
+    AlloyGapParameters alloy_gap{};                   // Unit 68; fraction 0: none
 
     bool operator==(const SemiconductorParameters&) const = default;
 };

@@ -141,11 +141,18 @@ void semiconductor_fields(P& p, F&& f) {
 }
 
 // Unit 52: the energy relaxation times, written only when given (nonzero), so a device without
-// them is written as before (EC1); absent, they stay 0 (not given).
+// them is written as before (EC1); absent, they stay 0 (not given). Unit 68: the alloy gap
+// correction likewise (keys 70-74; 0 on every set before it).
 template <class P>
 auto energy_relaxation_fields(P& p) {
-    return std::array<std::pair<std::uint16_t, decltype(&p.energy_relaxation.tau_n_s)>, 2>{
-        {{68, &p.energy_relaxation.tau_n_s}, {69, &p.energy_relaxation.tau_p_s}}};
+    return std::array<std::pair<std::uint16_t, decltype(&p.energy_relaxation.tau_n_s)>, 7>{
+        {{68, &p.energy_relaxation.tau_n_s},
+         {69, &p.energy_relaxation.tau_p_s},
+         {70, &p.alloy_gap.fraction},
+         {71, &p.alloy_gap.alpha_a_eV_per_K},
+         {72, &p.alloy_gap.beta_a_K},
+         {73, &p.alloy_gap.alpha_b_eV_per_K},
+         {74, &p.alloy_gap.beta_b_K}}};
 }
 
 constexpr std::uint16_t thermal_record_key = 100;

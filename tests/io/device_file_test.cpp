@@ -88,6 +88,8 @@ Device rich_device() {
     oxide.traps.thermal_velocity_n_cm_s = 2.3e7;
     auto algaas = *physics::algaas_parameters(0.3);
     algaas.energy_relaxation = {.tau_n_s = 0.30000000000000004e-12, .tau_p_s = 0.25e-12};  // Unit 52
+    algaas.alloy_gap = {.fraction = 0.3, .alpha_a_eV_per_K = 4.73e-4, .beta_a_K = 636.0,  // Unit 68
+                        .alpha_b_eV_per_K = 4.774e-4, .beta_b_K = 235.0};
     auto d = Device::create(
         {.mesh = std::move(m),
          .temperature_K = 301.5,

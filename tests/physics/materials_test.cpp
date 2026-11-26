@@ -295,7 +295,7 @@ TEST_CASE("material registry: existing names give the existing sets bit for bit"
 
 TEST_CASE("material registry: names unique, arities and usage consistent", "[materials][unit68]") {
     const auto all = material_registry();
-    REQUIRE(all.size() == 22);
+    REQUIRE(all.size() == 25);
     for (std::size_t i = 0; i < all.size(); ++i) {
         CAPTURE(all[i].name);
         REQUIRE(find_material(all[i].name) == &all[i]);
@@ -308,7 +308,7 @@ TEST_CASE("material registry: names unique, arities and usage consistent", "[mat
 TEST_CASE("material registry: parameter paths and values agree (DK7)", "[materials][unit68]") {
     SemiconductorParameters s = silicon_parameters;
     const auto sv = parameter_values(MaterialParameters{s});
-    REQUIRE(sv.size() == 60);
+    REQUIRE(sv.size() == 65);  // Unit 68 slice 1: the five alloy_gap paths
     for (const auto& [path, value] : sv) {
         CAPTURE(path);
         double* target = semiconductor_parameter(s, path);

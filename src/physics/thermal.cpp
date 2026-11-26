@@ -135,9 +135,10 @@ ValueSlope thermal_conductivity(const ThermalParameters& t, double temperature_K
 double band_gap_slope_eV_per_K(const Semiconductor& m, double temperature_K) {
     detail::expect_temperature(temperature_K);
     const SemiconductorParameters& p = m.parameters();
-    if (has_passler_gap(p)) return detail::passler_gap(p.Eg0_eV, p.passler_gap, temperature_K).d_dT;
+    const double alloy = detail::alloy_gap(p.alloy_gap, temperature_K).d_dT;  // Unit 68: 0 without
+    if (has_passler_gap(p)) return detail::passler_gap(p.Eg0_eV, p.passler_gap, temperature_K).d_dT + alloy;
     const double T = temperature_K, s = T + p.varshni_beta_K;
-    return -p.varshni_alpha_eV_per_K * T * (T + 2.0 * p.varshni_beta_K) / (s * s);
+    return -p.varshni_alpha_eV_per_K * T * (T + 2.0 * p.varshni_beta_K) / (s * s) + alloy;
 }
 
 ValueSlope dos_mass_log(const Semiconductor& m, Carrier band, double temperature_K) {

@@ -5014,6 +5014,32 @@ to 1e-12 relative at 1 V); every dielectric passes Insulator::create with band d
 masses: Materials Project / Ricci 2017 (conductivity masses), Garcia 2004/2005 (band masses), arXiv:1204.2886 (ZrO2
 band masses), cond-mat/0609403 (assumes 0.5 m0).
 
+**Amendment 5 — slice 1 sources and rulings (2026-11-26).** Owner, from here on: no approximating; every value no
+source gives is asked for. Source: M7, the Ioffe NSM SiGe pages (F. Schäffler's chapter of Levinshtein et al. 2001,
+the second half of M4; read over HTTP, the HTTPS certificate fails; copy outside the repo in `papers\Unit 68\ioffe-sige`).
+It gives relaxed eps_r = 11.7 + 4.5x, Eg(300 K) = 1.12 - 0.41x + 0.008x^2 (x < 0.85), Nc ~ 2.8e19, hole DOS mass
+(0.81 - 0.47x) m0, low-doping mobilities mu_n = 1396 - 4315x, mu_p = 450 - 865x (x <= 0.3), k = 0.046 + 0.084x
+(0.2 < x < 0.85), the spin-orbit splitting 0.044 + 0.246x, the lattice constant, the Poisson ratio 0.278 - 0.005x,
+the Rieger-Vogl weighted-average valence offset (0.47 - 0.06x)(x - x_s) and the Van de Walle-Martin deformation
+potentials (linear in x, as the page suggests). Owner rulings (S1-S11, F1-F4; "choose recommended" for F):
+S1 silicon's mu_min, N_ref, alpha, T exponents; S2 Ioffe's mobility lines scaled so x = 0 is NiTCAD silicon
+(mu_max,n = 1360 (1396 - 4315x)/1396, mu_max,p = 495 (450 - 865x)/450); S3 x <= 0.30, refused above; S4/F3a
+Eg(x, T) = Eg_silicon(T) + (-0.41x + 0.008x^2) + x [dEg_Ge(T) - dEg_Si(T)], each d the Varshni change from 300 K
+(Si 4.73e-4, 636 K; Ge 4.774e-4, 235 K, Palankovski-Selberherr as the owner gave them); S5 silicon's SRH, Auger and
+radiative values; S6 BGN (1 - 0.5x) times silicon's (owner's own fit, cited approximate), F2b saturation velocity a
+constant per carrier, Sasso-Rinaldi's composition interpolation at 1e16 cm^-3 and 300 K scaled so x = 0 is NiTCAD
+silicon (owner-supplied, the paper unread), F4a acceptor 45 - 34.6x meV (boron), donor 45 - 33x meV (phosphorus);
+S7 electrothermal refused below x = 0.2, k = 0.046 + 0.084x above; S8 strained SiGe takes the relaxed mobility;
+S9/F1b the relaxed DOS for strained SiGe (Sasso-Rinaldi unreachable: CORE and TU Wien refuse); S10 MAC9's offset
+check against the Rieger-Vogl formula, which is the weighted-average valence offset: the check compares that
+quantity, and the band-edge offset (with the strain splitting) is reported beside it; S11 `si_strained` takes
+silicon's mobility. Anchoring at x = 0 (S2, F3a) is extended to the DOS: silicon's Couderc conduction mass fit is
+kept (Ioffe: Nc ~ constant below x = 0.85) and its valence fit is scaled by ((0.81 - 0.47x)/0.81)^(3/2). MAC9's
+current check compares the Gummel ratio with the full textbook factor (mobility, Nc Nv and BGN included) times
+exp(dEg / kT), since S1, S2 and S6 change those factors. Grading (MAQ7a) is built by splitting a graded region into
+one uniform-x region per node layer along the grading axis, joined by the default (continuous drift-diffusion)
+interface transport.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

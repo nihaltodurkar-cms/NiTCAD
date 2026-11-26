@@ -1,5 +1,7 @@
 #include "NiTCAD/physics/materials.hpp"
 
+#include "NiTCAD/physics/sige.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -7,6 +9,40 @@
 
 namespace NiTCAD::physics {
 namespace {
+// --- material parameters by member path (DK7) --------------------------------------------------
+
+#define NITCAD_THERMAL_PARAMETERS(X)                                                           \
+    X(thermal.conductivity_W_cmK) X(thermal.conductivity_exponent) X(thermal.heat_capacity_J_cm3K) \
+    X(thermal.thermopower_exponent_n) X(thermal.thermopower_exponent_p)
+
+#define NITCAD_SEMICONDUCTOR_PARAMETERS(X)                                                     \
+    X(eps_r) X(Eg0_eV) X(varshni_alpha_eV_per_K) X(varshni_beta_K) X(Nc300) X(Nv300)           \
+    X(electron_affinity_eV) X(electron_mobility.mu_min) X(electron_mobility.mu_max)            \
+    X(electron_mobility.N_ref) X(electron_mobility.alpha) X(electron_mobility.T_exponent)      \
+    X(hole_mobility.mu_min) X(hole_mobility.mu_max) X(hole_mobility.N_ref)                     \
+    X(hole_mobility.alpha) X(hole_mobility.T_exponent) X(lifetime.tau_n0) X(lifetime.tau_p0)   \
+    X(lifetime.N_ref) X(auger.Cn) X(auger.Cp) X(bandgap_narrowing.E0_eV)                       \
+    X(bandgap_narrowing.N0) X(electron_saturation.v_sat_cm_s) X(electron_saturation.beta)      \
+    X(hole_saturation.v_sat_cm_s) X(hole_saturation.beta) X(radiative_cm3_s)                   \
+    X(ionization.donor_eV) X(ionization.acceptor_eV) X(ionization.donor_degeneracy)            \
+    X(ionization.acceptor_degeneracy) X(richardson.electron) X(richardson.hole)                \
+    X(impact_ionization.electron.A_low_per_cm) X(impact_ionization.electron.B_low_V_per_cm)    \
+    X(impact_ionization.electron.A_high_per_cm) X(impact_ionization.electron.B_high_V_per_cm)  \
+    X(impact_ionization.electron.switch_V_per_cm) X(impact_ionization.hole.A_low_per_cm)       \
+    X(impact_ionization.hole.B_low_V_per_cm) X(impact_ionization.hole.A_high_per_cm)           \
+    X(impact_ionization.hole.B_high_V_per_cm) X(impact_ionization.hole.switch_V_per_cm)        \
+    X(impact_ionization.phonon_energy_eV) X(band_to_band.A_per_cm3_s)                          \
+    X(band_to_band.B_V_per_cm) X(band_to_band.electron_mass) X(band_to_band.hole_mass)         \
+    X(passler_gap.alpha_eV_per_K) X(passler_gap.Theta_K) X(passler_gap.Delta)                  \
+    X(energy_relaxation.tau_n_s) X(energy_relaxation.tau_p_s) X(alloy_gap.fraction)             \
+    X(alloy_gap.alpha_a_eV_per_K) X(alloy_gap.beta_a_K) X(alloy_gap.alpha_b_eV_per_K)          \
+    X(alloy_gap.beta_b_K) NITCAD_THERMAL_PARAMETERS(X)
+
+// Unit 51 (GD5, GD10): an insulator's gate-tunnelling band data after its permittivity and heat.
+#define NITCAD_INSULATOR_PARAMETERS(X)                                                         \
+    X(eps_r) NITCAD_THERMAL_PARAMETERS(X) X(electron_affinity_eV) X(band_gap_eV) X(tunnel_mass_n) \
+    X(tunnel_mass_p) X(tunnel_mass_evb)
+
 
 template <const SemiconductorParameters& P>
 std::expected<MaterialParameters, base::Error> fixed_semiconductor(std::span<const double>) {
@@ -202,7 +238,83 @@ constexpr std::array<ParameterCitation, 11> metal_parameter_sources{{
     {"tunnel_mass_evb", 0, "default"},
 }};
 
-constexpr std::array<MaterialEntry, 22> registry{{
+// --- SiGe (MAD7; slice 1, amendment 5) -----------------------------------------------------------
+
+#define NITCAD_PATH(member) std::string_view{#member},
+constexpr std::string_view semiconductor_paths[] = {NITCAD_SEMICONDUCTOR_PARAMETERS(NITCAD_PATH)};
+#undef NITCAD_PATH
+
+// One citation per semiconductor path: `fallback`, overridden by the rules in order (a rule names a
+// path, or a group with its trailing dot).
+template <std::size_t N>
+constexpr auto semiconductor_cites(Cite fallback, const std::array<ParameterCitation, N>& rules) {
+    std::array<ParameterCitation, std::size(semiconductor_paths)> out{};
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        const std::string_view path = semiconductor_paths[i];
+        out[i] = {path, fallback.source, fallback.basis};
+        for (const ParameterCitation& r : rules) {
+            if (path == r.path || (r.path.ends_with('.') && path.starts_with(r.path))) out[i] = {path, r.source, r.basis};
+        }
+    }
+    return out;
+}
+
+constexpr Citation ioffe_sige{"Ioffe NSM archive, SiGe (F. Schaffler, in M. Levinshtein et al., eds., Properties of "
+                              "Advanced Semiconductor Materials, Wiley 2001)",
+                              "eps_r; gap fit; Rieger-Vogl offset, spin-orbit splitting, deformation potentials; lattice "
+                              "constant, Poisson ratio; hole DOS mass; mobility lines; specific heat and density"};
+constexpr Citation silicon_inherited{"NiTCAD silicon (Couderc et al. 2014; legacy materials.py)",
+                                     "inherited: the x = 0 anchor (rulings S1, S5, S8, S11, F1b)"};
+constexpr Citation sige_rulings{"owner rulings 2026-11-26 (Unit 68 amendment 5)",
+                                "BGN (1 - 0.5 x) silicon's (owner's fit); saturation velocity ratios of Sasso and Rinaldi "
+                                "2010 (owner-supplied, unread); ionization energies linear between Si and Ge; Varshni end "
+                                "points of Palankovski and Selberherr"};
+constexpr Citation sige_none{"NiTCAD: no SiGe data in hand",
+                             "off: impact ionization, band-to-band tunnelling, thermal conductivity (its temperature "
+                             "exponent awaits the owner)"};
+constexpr std::array<Citation, 4> sige_sources{{ioffe_sige, silicon_inherited, sige_rulings, sige_none}};
+
+constexpr auto sige_cites = semiconductor_cites(
+    {1, "secondary"},
+    std::array<ParameterCitation, 17>{{{"eps_r", 0, "fit"},
+                                       {"Eg0_eV", 0, "derived"},
+                                       {"electron_affinity_eV", 0, "derived"},
+                                       {"electron_mobility.mu_max", 0, "derived"},
+                                       {"hole_mobility.mu_max", 0, "derived"},
+                                       {"bandgap_narrowing.E0_eV", 2, "approximate"},
+                                       {"electron_saturation.v_sat_cm_s", 2, "secondary"},
+                                       {"hole_saturation.v_sat_cm_s", 2, "secondary"},
+                                       {"ionization.donor_eV", 2, "interpolated"},
+                                       {"ionization.acceptor_eV", 2, "interpolated"},
+                                       {"impact_ionization.", 3, "default"},
+                                       {"band_to_band.", 3, "default"},
+                                       {"alloy_gap.", 2, "secondary"},
+                                       {"alloy_gap.fraction", 0, "derived"},
+                                       {"thermal.conductivity_W_cmK", 3, "default"},
+                                       {"thermal.conductivity_exponent", 3, "default"},
+                                       {"thermal.heat_capacity_J_cm3K", 0, "derived"}}});
+constexpr auto si_strained_cites = semiconductor_cites(
+    {1, "secondary"}, std::array<ParameterCitation, 3>{{{"Eg0_eV", 0, "derived"},
+                                                       {"electron_affinity_eV", 0, "derived"},
+                                                       {"alloy_gap.", 3, "default"}}});
+
+std::expected<MaterialParameters, base::Error> sige(std::span<const double> a) {
+    auto p = sige_parameters(a[0], false);
+    if (!p) return std::unexpected(std::move(p.error()));
+    return *p;
+}
+std::expected<MaterialParameters, base::Error> sige_strained(std::span<const double> a) {
+    auto p = sige_parameters(a[0], true);
+    if (!p) return std::unexpected(std::move(p.error()));
+    return *p;
+}
+std::expected<MaterialParameters, base::Error> si_strained(std::span<const double> a) {
+    auto p = strained_silicon_parameters(a[0]);
+    if (!p) return std::unexpected(std::move(p.error()));
+    return *p;
+}
+
+constexpr std::array<MaterialEntry, 25> registry{{
     {"silicon", MaterialKind::semiconductor, 0, 0, "", "silicon, Couderc band set (default)", silicon_sources,
      fixed_semiconductor<silicon_parameters>},
     {"silicon_legacy", MaterialKind::semiconductor, 0, 0, "", "silicon, the legacy set", legacy_silicon_sources,
@@ -244,6 +356,12 @@ constexpr std::array<MaterialEntry, 22> registry{{
      hbn_sources, fixed_insulator<hbn>, hbn_cites, true},
     {"sion", MaterialKind::insulator, 1, 1, "sion takes the Si3N4 share x, 0 <= x <= 1",
      "SiON, linear between SiO2 (x = 0) and Si3N4 (x = 1)", sion_sources, sion, sion_cites, true},
+    {"sige", MaterialKind::semiconductor, 1, 1, "sige takes the Ge fraction x, 0 <= x <= 0.3",
+     "Si(1-x)Ge(x), relaxed, 0 <= x <= 0.3", sige_sources, sige, sige_cites, true},
+    {"sige_strained", MaterialKind::semiconductor, 1, 1, "sige_strained takes the Ge fraction x, 0 <= x <= 0.3",
+     "Si(1-x)Ge(x) pseudomorphic on (001) silicon, 0 <= x <= 0.3", sige_sources, sige_strained, sige_cites, true},
+    {"si_strained", MaterialKind::semiconductor, 1, 1, "si_strained takes the substrate's Ge fraction, 0 <= x <= 0.3",
+     "silicon pseudomorphic on relaxed Si(1-x)Ge(x)", sige_sources, si_strained, si_strained_cites, true},
 }};
 
 // --- metal presets (MAD6, MAD14; amendment 4) ---------------------------------------------------
@@ -278,38 +396,6 @@ constexpr std::array<MetalPreset, 19> presets{{
     {"cosi2", MetalPresetKind::silicide, 0.0, {sze, "Table 4, CoSi2 (cubic) on n-Si"}, 0.64},
 }};
 
-// --- material parameters by member path (DK7) --------------------------------------------------
-
-#define NITCAD_THERMAL_PARAMETERS(X)                                                           \
-    X(thermal.conductivity_W_cmK) X(thermal.conductivity_exponent) X(thermal.heat_capacity_J_cm3K) \
-    X(thermal.thermopower_exponent_n) X(thermal.thermopower_exponent_p)
-
-#define NITCAD_SEMICONDUCTOR_PARAMETERS(X)                                                     \
-    X(eps_r) X(Eg0_eV) X(varshni_alpha_eV_per_K) X(varshni_beta_K) X(Nc300) X(Nv300)           \
-    X(electron_affinity_eV) X(electron_mobility.mu_min) X(electron_mobility.mu_max)            \
-    X(electron_mobility.N_ref) X(electron_mobility.alpha) X(electron_mobility.T_exponent)      \
-    X(hole_mobility.mu_min) X(hole_mobility.mu_max) X(hole_mobility.N_ref)                     \
-    X(hole_mobility.alpha) X(hole_mobility.T_exponent) X(lifetime.tau_n0) X(lifetime.tau_p0)   \
-    X(lifetime.N_ref) X(auger.Cn) X(auger.Cp) X(bandgap_narrowing.E0_eV)                       \
-    X(bandgap_narrowing.N0) X(electron_saturation.v_sat_cm_s) X(electron_saturation.beta)      \
-    X(hole_saturation.v_sat_cm_s) X(hole_saturation.beta) X(radiative_cm3_s)                   \
-    X(ionization.donor_eV) X(ionization.acceptor_eV) X(ionization.donor_degeneracy)            \
-    X(ionization.acceptor_degeneracy) X(richardson.electron) X(richardson.hole)                \
-    X(impact_ionization.electron.A_low_per_cm) X(impact_ionization.electron.B_low_V_per_cm)    \
-    X(impact_ionization.electron.A_high_per_cm) X(impact_ionization.electron.B_high_V_per_cm)  \
-    X(impact_ionization.electron.switch_V_per_cm) X(impact_ionization.hole.A_low_per_cm)       \
-    X(impact_ionization.hole.B_low_V_per_cm) X(impact_ionization.hole.A_high_per_cm)           \
-    X(impact_ionization.hole.B_high_V_per_cm) X(impact_ionization.hole.switch_V_per_cm)        \
-    X(impact_ionization.phonon_energy_eV) X(band_to_band.A_per_cm3_s)                          \
-    X(band_to_band.B_V_per_cm) X(band_to_band.electron_mass) X(band_to_band.hole_mass)         \
-    X(passler_gap.alpha_eV_per_K) X(passler_gap.Theta_K) X(passler_gap.Delta)                  \
-    X(energy_relaxation.tau_n_s) X(energy_relaxation.tau_p_s)                                  \
-    NITCAD_THERMAL_PARAMETERS(X)
-
-// Unit 51 (GD5, GD10): an insulator's gate-tunnelling band data after its permittivity and heat.
-#define NITCAD_INSULATOR_PARAMETERS(X)                                                         \
-    X(eps_r) NITCAD_THERMAL_PARAMETERS(X) X(electron_affinity_eV) X(band_gap_eV) X(tunnel_mass_n) \
-    X(tunnel_mass_p) X(tunnel_mass_evb)
 
 }  // namespace
 

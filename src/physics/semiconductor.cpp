@@ -123,8 +123,9 @@ std::optional<base::Error> check_mobility(std::string_view group,
 }
 
 double band_gap_unchecked(const SemiconductorParameters& p, double T) {
-    if (has_passler_gap(p)) return detail::passler_gap(p.Eg0_eV, p.passler_gap, T).value;
-    return p.Eg0_eV - p.varshni_alpha_eV_per_K * (T * T) / (T + p.varshni_beta_K);
+    const double alloy = detail::alloy_gap(p.alloy_gap, T).value;  // Unit 68: 0 without
+    if (has_passler_gap(p)) return detail::passler_gap(p.Eg0_eV, p.passler_gap, T).value + alloy;
+    return p.Eg0_eV - p.varshni_alpha_eV_per_K * (T * T) / (T + p.varshni_beta_K) + alloy;
 }
 
 // (T / 300)^1.5, the temperature factor of both effective densities of states.
@@ -204,6 +205,16 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
         return std::unexpected(std::move(*e));
     }
     if (auto e = check_band_forms(p)) return std::unexpected(std::move(*e));
+    {  // Unit 68: the alloy gap correction, fraction in [0, 1], its Varshni terms non-negative
+        const AlloyGapParameters& g = p.alloy_gap;
+        if (!(g.fraction >= 0.0 && g.fraction <= 1.0)) {
+            return std::unexpected(parameter_error("alloy_gap.", "fraction", " must lie in [0, 1]", g.fraction));
+        }
+        for (const auto& [field, v] : {std::pair{"alpha_a_eV_per_K", g.alpha_a_eV_per_K}, {"beta_a_K", g.beta_a_K},
+                                       {"alpha_b_eV_per_K", g.alpha_b_eV_per_K}, {"beta_b_K", g.beta_b_K}}) {
+            if (auto e = check("alloy_gap.", field, v, non_negative)) return std::unexpected(std::move(*e));
+        }
+    }
     if (auto e = check("", "electron_affinity_eV", p.electron_affinity_eV, non_negative)) {
         return std::unexpected(std::move(*e));
     }
