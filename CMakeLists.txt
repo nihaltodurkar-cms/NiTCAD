@@ -1218,8 +1218,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
 endif()
 # WG1 measures the UI thread's message loop against 100 ms, so these files run with no other test beside
 # them: under ctest -j the self-test's loop stalled 494 and 611 ms and its solve ran at half speed.
+# The frame-time gates likewise (SE5 on WARP, JG8's slowest frame): under ctest -j 6 on 8cfee95 the solid
+# modeller's WARP orbit median ran 27.1 ms (7.95 alone) and the GPU's slowest move frame 16.5 ms (8.1 alone).
 set_tests_properties(app.run_controller app_window.self_test app_window.analysis_window
-  PROPERTIES RUN_SERIAL TRUE)
+  app_window.solid_window app_window.hover_window PROPERTIES RUN_SERIAL TRUE)
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   set_tests_properties(app_window_3d PROPERTIES RUN_SERIAL TRUE)
 endif()
