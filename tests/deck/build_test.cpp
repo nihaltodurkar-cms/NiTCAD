@@ -1592,3 +1592,23 @@ TEST_CASE("deck build: a metal-region gate equals its electrode patch (MAC7)", "
     CHECK(failure(changed(metal, "box = 1um 1.01um", "box = 0.5um 0.51um")).find("touches a semiconductor") != std::string::npos);
     CHECK(failure(metal + "[material m2]\nbase = metal\n").find("not a [material] base") != std::string::npos);
 }
+
+// Unit 68 (MAD14, slice 5c): a silicide preset is its measured barrier, on Schottky contacts on silicon only.
+TEST_CASE("deck build: silicide presets on Schottky contacts (MAD14)", "[deck][unit68]") {
+    const auto deck = [](const std::string& material, const std::string& kind, const std::string& keys) {
+        return "[mesh]\ntype = tensor\nx = linspace(0, 1um, 11)\n[region si]\nmaterial = " + material +
+               "\n[doping]\nprofile = donor constant 1e16\n[contact a]\nkind = " + kind + "\npatch = x_min\n" + keys +
+               "[contact b]\nkind = ohmic\npatch = x_max\n[equilibrium]\n";
+    };
+    for (const auto& [name, barrier] : {std::pair{"nisi", 0.75}, {"tisi2", 0.60}, {"cosi2", 0.64}}) {
+        const device::Contact a = must(deck("silicon", "schottky", "metal = " + std::string(name) + "\n")).device.contacts().front();
+        const device::Contact b = must(deck("silicon", "schottky", "barrier = " + std::to_string(barrier) + "\n")).device.contacts().front();
+        CHECK_FALSE(a.schottky.by_work_function);
+        CHECK(a.schottky.barrier_eV == barrier);
+        CHECK(a.schottky.barrier_eV == b.schottky.barrier_eV);
+    }
+    CHECK(must(deck("silicon_legacy", "schottky", "metal = nisi\n")).device.contacts().front().schottky.barrier_eV == 0.75);
+    CHECK(failure(deck("gaas", "schottky", "metal = nisi\n")).find("measured on silicon") != std::string::npos);
+    CHECK(failure(deck("silicon", "gate", "oxide_thickness = 2nm\nmetal = nisi\n")).find("is a silicide barrier, for a Schottky contact") != std::string::npos);
+    CHECK(failure(deck("silicon", "schottky", "metal = nisi\nbarrier = 0.7\n")).find("'metal' replaces") != std::string::npos);
+}

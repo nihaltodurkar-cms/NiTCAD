@@ -359,6 +359,10 @@ TEST_CASE("material registry: nearest names (MAC13)", "[materials][unit68]") {
     REQUIRE(nearest_name("silicn", names) == "silicon");
     REQUIRE(nearest_name("gaass", names) == "gaas");
     REQUIRE(nearest_name("barier", names) == "barrier");
+    const std::array<std::string_view, 2> metals{"ni", "nisi"};
+    REQUIRE(nearest_name("nii", metals) == "nisi");  // a tie goes to the dropped-letter form
+    REQUIRE(nearest_name("nis", metals) == "nisi");
+    REQUIRE(nearest_name("n", metals) == "ni");
     REQUIRE(nearest_name("unobtainium", names).empty());
     REQUIRE(nearest_name("x", names).empty());
 }
@@ -395,5 +399,6 @@ TEST_CASE("material registry: metal presets (MAD14)", "[materials][unit68]") {
         REQUIRE(find_metal_preset(m.name) == &m);
     }
     REQUIRE(find_metal_preset("tin")->work_function_eV == 4.70);
-    REQUIRE(find_metal_preset("nisi") == nullptr);  // slice 5c
+    REQUIRE(find_metal_preset("nisi")->barrier_eV == 0.75);  // slice 5c, Sze & Ng Table 4
+    for (const MetalPreset& m : metal_presets()) REQUIRE((m.kind == MetalPresetKind::silicide) == (m.barrier_eV > 0.0));
 }

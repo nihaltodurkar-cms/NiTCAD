@@ -24,8 +24,8 @@ constexpr std::array<std::string_view, 3> shapes{"constant", "gaussian", "erfc"}
 constexpr std::array<std::string_view, 4> contact_kinds{"ohmic", "gate", "electrode", "schottky"};
 constexpr std::array<std::string_view, 3> electrodes{"n_poly", "p_poly", "metal"};
 // Unit 68 (MAD14): the metal presets, as physics::metal_presets() lists them (tested).
-constexpr std::array<std::string_view, 16> metals{"al", "au", "co", "cr", "cu", "mo", "ni", "pd", "pt", "ru",
-                                                  "ti", "w", "tin", "tan", "n_poly", "p_poly"};
+constexpr std::array<std::string_view, 19> metals{"al", "au", "co", "cr", "cu", "mo", "ni", "pd", "pt", "ru",
+                                                  "ti", "w", "tin", "tan", "n_poly", "p_poly", "nisi", "tisi2", "cosi2"};
 constexpr std::array<std::string_view, 2> transports{"drift_diffusion", "thermionic"};
 constexpr std::array<std::string_view, 2> thermal_kinds{"isothermal", "resistance"};
 constexpr std::array<std::string_view, 3> btbt_nonlocal{"off", "kane", "direct_wkb"};
@@ -497,10 +497,16 @@ std::optional<std::string> nearest(std::string_view word, std::span<const std::s
     const std::size_t limit = std::min<std::size_t>(2, std::max<std::size_t>(1, word.size() / 3));
     std::optional<std::string_view> best;
     std::size_t best_distance = limit + 1;
+    // A tie goes to a name the word is a dropped-letter form of, as physics::nearest_name does.
+    const auto dropped_from = [&](std::string_view n) {
+        std::size_t i = 0;
+        for (const char c : n) i += i < word.size() && word[i] == c;
+        return i == word.size() && n.size() > word.size();
+    };
     for (const std::string_view n : names) {
         if (n.empty()) continue;
         const std::size_t d = edit_distance(word, n);
-        if (d < best_distance) {
+        if (d < best_distance || (d == best_distance && best && dropped_from(n) && !dropped_from(*best))) {
             best = n;
             best_distance = d;
         }

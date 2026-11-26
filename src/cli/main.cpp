@@ -430,17 +430,20 @@ int materials(int argc, char** argv) {
         }
         std::puts("\nmetal presets (a contact's metal = <name>):");
         for (const MetalPreset& m : metal_presets()) {
-            std::printf("%-16s %s\n", std::string(m.name).c_str(),
-                        m.kind == MetalPresetKind::metal ? std::format("{:.12g} eV", m.work_function_eV).c_str()
-                                                         : std::string(m.source.where).c_str());
+            const std::string value = m.kind == MetalPresetKind::metal      ? std::format("{:.12g} eV", m.work_function_eV)
+                                      : m.kind == MetalPresetKind::silicide ? std::format("barrier {:.12g} eV on n-Si (Schottky, silicon)", m.barrier_eV)
+                                                                            : std::string(m.source.where);
+            std::printf("%-16s %s\n", std::string(m.name).c_str(), value.c_str());
         }
         return 0;
     }
     if (const MetalPreset* m = find_metal_preset(argv[2]); m && argc == 3) {
-        std::printf("%s: metal preset%s\n  source: %s (%s)\n", argv[2],
-                    m->kind == MetalPresetKind::metal ? std::format(", work function {:.12g} eV", m->work_function_eV).c_str()
-                                                      : "",
-                    std::string(m->source.source).c_str(), std::string(m->source.where).c_str());
+        const std::string value = m->kind == MetalPresetKind::metal ? std::format(", work function {:.12g} eV", m->work_function_eV)
+                                  : m->kind == MetalPresetKind::silicide
+                                      ? std::format(", silicide barrier {:.12g} eV on n-Si", m->barrier_eV)
+                                      : std::string{};
+        std::printf("%s: metal preset%s\n  source: %s (%s)\n", argv[2], value.c_str(), std::string(m->source.source).c_str(),
+                    std::string(m->source.where).c_str());
         return 0;
     }
     const MaterialEntry* e = find_material(argv[2]);

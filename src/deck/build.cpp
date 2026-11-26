@@ -47,6 +47,14 @@ namespace {
 
 using namespace detail;
 
+// Unit 68 (MAD14): an unknown metal preset, with the nearest name.
+std::string unknown_metal(const std::string& value) {
+    std::vector<std::string_view> names;
+    for (const physics::MetalPreset& m : physics::metal_presets()) names.push_back(m.name);
+    const std::string_view nearest = physics::nearest_name(value, names);
+    return "unknown metal '" + value + "'" + (nearest.empty() ? "" : " (did you mean '" + std::string(nearest) + "'?)");
+}
+
 // --- the builder -------------------------------------------------------------------------------
 
 enum class MeshType { tensor, generate2d, generate3d, extrude3d, file };
@@ -436,7 +444,10 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
                 continue;
             }
             const physics::MetalPreset* p = physics::find_metal_preset(e.value);
-            if (!p) return std::unexpected(at(e.line, "unknown metal '" + e.value + "' (nitcad materials lists them)"));
+            if (!p) return std::unexpected(at(e.line, unknown_metal(e.value)));
+            if (p->kind == physics::MetalPresetKind::silicide) {
+                return std::unexpected(at(e.line, "'" + e.value + "' is a silicide barrier, for a Schottky contact, not a metal region"));
+            }
             spec.metal = device::Electrode{
                 .kind = p->kind == physics::MetalPresetKind::n_poly   ? device::GateElectrode::n_poly
                         : p->kind == physics::MetalPresetKind::p_poly ? device::GateElectrode::p_poly
@@ -446,6 +457,7 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         }
         NITCAD_DECK_TRY(taken, parameter(params, e));
         if (taken) continue;
+        if (e.key == "metal" && !physics::find_metal_preset(e.value)) return std::unexpected(at(e.line, unknown_metal(e.value)));
         if (e.key == "work_function" || e.key == "metal") {
             return std::unexpected(at(e.line, "'" + e.key + "' is for a metal region (material = metal)"));
         }
@@ -1294,6 +1306,7 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
     const Entry* electrode = nullptr;
     const Entry* metal = nullptr;  // Unit 68 (MAD14): a named metal in place of the work function
     const Entry* region_entry = nullptr;  // Unit 68 (MAD6): the metal region an electrode holds
+    const Entry* silicide = nullptr;      // Unit 68 (MAD14, slice 5c): a silicide barrier preset
     bool schottky_keys = false;
     for (const Entry& e : s.entries) {
         if (e.key == "kind") kind = &e;
@@ -1398,21 +1411,23 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
         return std::unexpected(at(s.line, "barrier, richardson_n and richardson_p are for a Schottky contact"));
     }
     if (metal) {  // Unit 68 (MAD14): the preset stands for 'electrode' and 'work_function'
+        const physics::MetalPreset* p = physics::find_metal_preset(metal->value);
+        if (!p) return std::unexpected(at(metal->line, unknown_metal(metal->value)));
         if (work_function || barrier || electrode) {
             return std::unexpected(at(metal->line, "'metal' replaces 'work_function', 'barrier' and 'electrode'; give one"));
         }
         if (c.kind == device::ContactKind::ohmic) {
             return std::unexpected(at(metal->line, "'metal' is for a gate, electrode or Schottky contact"));
         }
-        const physics::MetalPreset* p = physics::find_metal_preset(metal->value);
-        if (!p) {
-            std::vector<std::string_view> names;
-            for (const physics::MetalPreset& m : physics::metal_presets()) names.push_back(m.name);
-            const std::string_view nearest = physics::nearest_name(metal->value, names);
-            return std::unexpected(at(metal->line, "unknown metal '" + metal->value + "'" +
-                                                       (nearest.empty() ? "" : " (did you mean '" + std::string(nearest) + "'?)")));
-        }
-        if (p->kind != physics::MetalPresetKind::metal && c.kind == device::ContactKind::schottky) {
+        if (p->kind == physics::MetalPresetKind::silicide) {  // slice 5c: a measured barrier (MAD14)
+            if (c.kind != device::ContactKind::schottky) {
+                return std::unexpected(at(metal->line, "'" + metal->value + "' is a silicide barrier, for a Schottky contact "
+                                                                            "on silicon (silicide barriers do not follow Schottky-Mott)"));
+            }
+            c.schottky.barrier_eV = p->barrier_eV;
+            barrier = metal;
+            silicide = metal;
+        } else if (p->kind != physics::MetalPresetKind::metal && c.kind == device::ContactKind::schottky) {
             return std::unexpected(at(metal->line, "'" + metal->value + "' is a polysilicon electrode, not a Schottky metal"));
         }
         const device::GateElectrode g = p->kind == physics::MetalPresetKind::n_poly   ? device::GateElectrode::n_poly
@@ -1423,8 +1438,10 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
             c.gate.electrode = g;
             c.electrode.kind = g;
         }
-        c.gate.work_function_eV = c.electrode.work_function_eV = c.schottky.work_function_eV = p->work_function_eV;
-        work_function = metal;  // a Schottky contact takes it as its work function (SD1)
+        if (!silicide) {
+            c.gate.work_function_eV = c.electrode.work_function_eV = c.schottky.work_function_eV = p->work_function_eV;
+            work_function = metal;  // a Schottky contact takes it as its work function (SD1)
+        }
     }
     if (c.kind == device::ContactKind::schottky) {
         // Exactly one of the barrier and the work function (SD1).
@@ -1480,6 +1497,16 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
         return std::unexpected(at(patch->line, std::string("patch '") + patch->value + "' has no " +
                                                    (want_insulator ? "insulator" : "semiconductor") +
                                                    " node for this contact"));
+    }
+    if (silicide) {  // MAD14: a silicide barrier is measured on silicon
+        for (const mesh::NodeId k : c.nodes) {
+            const auto& m = d.regions[static_cast<std::size_t>(d.node_region[static_cast<std::size_t>(k)])].material;
+            const auto& sp = std::get<physics::Semiconductor>(m).parameters();
+            if (!(sp == physics::silicon_parameters) && !(sp == physics::legacy_silicon_parameters)) {
+                return std::unexpected(at(silicide->line, "'" + silicide->value + "' is a barrier measured on silicon; "
+                                                          "this contact has a node of another material"));
+            }
+        }
     }
     return c;
 }

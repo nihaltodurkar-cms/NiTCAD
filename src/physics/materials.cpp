@@ -99,8 +99,9 @@ constexpr std::string_view michaelson = "H. B. Michaelson, J. Appl. Phys. 48, 47
 constexpr std::string_view michaelson_where = "Table III, polycrystalline preferred value";
 constexpr std::string_view greczynski = "G. Greczynski, arXiv:2405.10919 (2024)";
 constexpr std::string_view poly = "degenerate polysilicon: Fermi level at the silicon band edge";
+constexpr std::string_view sze = "S. M. Sze, K. K. Ng, Physics of Semiconductor Devices, 3rd ed. (Wiley 2007), ch. 3, p. 180";
 
-constexpr std::array<MetalPreset, 16> presets{{
+constexpr std::array<MetalPreset, 19> presets{{
     {"al", MetalPresetKind::metal, 4.28, {michaelson, michaelson_where}},
     {"au", MetalPresetKind::metal, 5.1, {michaelson, michaelson_where}},
     {"co", MetalPresetKind::metal, 5.0, {michaelson, michaelson_where}},
@@ -118,6 +119,10 @@ constexpr std::array<MetalPreset, 16> presets{{
     {"tan", MetalPresetKind::metal, 4.41, {greczynski, "UPS work function of TaN"}},
     {"n_poly", MetalPresetKind::n_poly, 0.0, {poly, "phi_m = chi of silicon"}},
     {"p_poly", MetalPresetKind::p_poly, 0.0, {poly, "phi_m = chi + Eg(T) of silicon"}},
+    // Slice 5c (M18): the highest reported barrier of each system, as the table gives it.
+    {"nisi", MetalPresetKind::silicide, 0.0, {sze, "Table 4, NiSi (orthorhombic) on n-Si"}, 0.75},
+    {"tisi2", MetalPresetKind::silicide, 0.0, {sze, "Table 4, TiSi2 (orthorhombic, C54) on n-Si"}, 0.60},
+    {"cosi2", MetalPresetKind::silicide, 0.0, {sze, "Table 4, CoSi2 (cubic) on n-Si"}, 0.64},
 }};
 
 // --- material parameters by member path (DK7) --------------------------------------------------
@@ -203,9 +208,15 @@ std::string_view nearest_name(std::string_view word, std::span<const std::string
     const std::size_t limit = std::max<std::size_t>(1, word.size() / 3);
     std::string_view best;
     std::size_t best_distance = limit + 1;
+    // A tie goes to a name the word is a dropped-letter form of ('nii': 'nisi' over 'ni').
+    const auto dropped_from = [&](std::string_view n) {
+        std::size_t i = 0;
+        for (const char c : n) i += i < word.size() && word[i] == c;
+        return i == word.size() && n.size() > word.size();
+    };
     for (const std::string_view n : names) {
         const std::size_t d = distance(word, n);
-        if (d < best_distance) {
+        if (d < best_distance || (d == best_distance && !best.empty() && dropped_from(n) && !dropped_from(best))) {
             best = n;
             best_distance = d;
         }

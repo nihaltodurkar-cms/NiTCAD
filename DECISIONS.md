@@ -4988,6 +4988,14 @@ contact. MAC7's planar clause met in 1D: a metal-region gate equals its electrod
 node, at equilibrium and at 0.5 and 1 V. Not run: MAC7's FinFET clause (the 3D deck, hours; owner stopped the 3D runs),
 the full Release suite. Limitation: a metal region on a semiconductor is refused, not modelled.
 
+**Slice 5c as built (2026-11-26).** M18 in hand (owner holds a licensed copy): Sze & Ng 3rd ed., ch. 3, Table 4,
+p. 180 (highest reported Phi_Bn on n-Si). Presets `nisi` 0.75, `tisi2` 0.60, `cosi2` 0.64 eV, kind `silicide`: a
+measured barrier, so `metal = nisi` on a Schottky contact is `barrier = 0.75` exactly; refused on gate and electrode
+contacts, in a metal region, and on a contact with a node of any material but silicon (the barrier is measured on
+silicon and does not follow Schottky-Mott). Suggestions now break a distance tie toward the name the word is a
+dropped-letter form of (`nii` -> `nisi`, not `ni`), in physics::nearest_name and the editor's suggestion alike.
+Slice 5b still waits: no hole tunnelling mass in hand (Kao 2022, UCB/EECS-2022-34, read; it gives none).
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

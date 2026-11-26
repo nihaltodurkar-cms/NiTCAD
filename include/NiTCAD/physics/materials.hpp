@@ -83,14 +83,17 @@ struct MaterialEntry {
 
 // A named gate or contact metal (Unit 68, MAD6, MAD14; slice 5a). A metal preset is a work
 // function; `n_poly` and `p_poly` are the polysilicon electrodes, whose Fermi level sits at a band
-// edge of silicon (device::GateElectrode), so they carry no number.
-enum class MetalPresetKind : std::uint8_t { metal, n_poly, p_poly };
+// edge of silicon (device::GateElectrode), so they carry no number. A silicide preset (slice 5c)
+// is a measured barrier on n-type silicon, for Schottky contacts on silicon only: silicide
+// barriers do not follow Schottky-Mott.
+enum class MetalPresetKind : std::uint8_t { metal, n_poly, p_poly, silicide };
 
 struct MetalPreset {
     std::string_view name;
     MetalPresetKind kind;
-    double work_function_eV;  // the metal's; 0 for a polysilicon preset
+    double work_function_eV;  // the metal's; 0 for a polysilicon or silicide preset
     Citation source;
+    double barrier_eV = 0.0;  // a silicide's Phi_Bn on n-Si; 0 otherwise
 };
 
 // Every metal preset, in listing order.
