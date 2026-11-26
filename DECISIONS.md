@@ -5076,6 +5076,65 @@ extrinsic base beside the emitter, with an SiO2 spacer between them. At V_BE = 0
 264 (-21.3 %, a MAC9 failure): electrons injected through the emitter's side wall cross silicon, not SiGe, and
 dilute the ratio. The oxide spacer removes that path.
 
+**Amendment 6 (2026-11-27): slice 2 sources and values.** Source M2' is Levinshtein, Rumyantsev and Shur, eds.,
+*Properties of Advanced Semiconductor Materials* (Wiley 2001), ch. 1-3 (licensed copy, outside the repo). It
+supplies: permittivity; GaN and AlN gap and Varshni; masses; Nc and Nv; radiative coefficient; 300 K thermal
+conductivity; specific heat; density; lattice constants. The owner supplied the rest on 2026-11-27, items 1-30 of
+`slice2-unknowns.txt`, cited per value as "owner 2026-11-27" with the owner's own references (TU Wien IUE nitride
+tables, KAUST, AIP, Cornell; secondary).
+- InN: Eg(0) 0.69 eV, Eg(300) 0.608 eV, Varshni 0.414 meV/K and 154 K. These replace the book's 1.9-2.05 eV.
+- Affinities: GaN 4.10, AlN 2.00, InN 5.80 eV.
+- Dopants: GaN Si 0.017, Mg 0.17; AlN Si 0.25, Mg 0.51; InN Mg 0.06 eV. InN donors have no default level and
+  are fully ionized.
+- Electron mobility, Caughey-Thomas with temperature exponents (GaN, AlN, InN):
+  - mu_max 1405, 683, 10400 (gamma0 -2.85, 0.80, -3.70);
+  - mu_min 80, 29, 500 (gamma1 -0.20, -3.21, 2.39);
+  - N_ref 7.78e16, 5.0e17, 3.4e17 (gamma2 1.30, 1.21, -0.33);
+  - alpha 0.71, +0.18, 0.70 (gamma3 0.31). AlN's alpha is the owner's sign correction of the source's -0.18.
+- Holes: constant mobility 170, 14, 220.
+- Saturation velocity: electrons 2.5e7, 3.7e7, 5.0e7 cm/s (beta 1.0, 0.45, 1.0); holes 7.0e6 cm/s, beta 1.0.
+- SRH lifetimes: tau_n 10, 5, 10 ns; tau_p 20, 10, 20 ns.
+- Auger: C_n 1.25e-31, 5e-32, 7e-30; C_p 5e-32, 5e-32, 6e-30 cm^6/s.
+- Models: BGN off. Band-to-band tunnelling off. Impact ionization on for GaN only: Chynoweth
+  4.48e8 exp(-3.39e7/E) for electrons, 7.13e6 exp(-1.46e7/E) for holes.
+- Thermal-conductivity exponent delta: -0.6, -1.2, 0. NiTCAD's `conductivity_exponent` is -delta.
+- Alloys:
+  - gap bowing: AlGaN 0.8, InGaN 1.4 eV;
+  - Q_c: AlGaN 0.70, InGaN 0.58;
+  - permittivity linear;
+  - electron mass linear, plus 4.8e-3 bowing for AlGaN;
+  - mobility 1/mu = (1-x)/mu_A + x/mu_B + x(1-x)/C_mu, C_mu 40 (AlGaN) and 1e6 (InGaN);
+  - range 0 <= x <= 1.
+- Polarization:
+  - P_sp: GaN -0.034, AlN -0.090, InN -0.042 C/m^2;
+  - P_sp bowing (minus-sign form): AlGaN -0.021, InGaN -0.037;
+  - e31/e33: GaN -0.49/0.73, AlN -0.60/1.46, InN -0.57/0.97;
+  - c13/c33: GaN 106/398, AlN 108/373, InN 92/224 GPa.
+- Model rulings:
+  - partial relaxation allowed (default pseudomorphic);
+  - free-surface bound charge on;
+  - AlGaN/GaN transport thermionic;
+  - MAC10 gate barrier 0.83 eV (Ni);
+  - scalar hole DOS mass, AlN 2.7 m0.
+
+Rulings the engineer chose as recommended (the owner chooses recommended). Each is reported to the owner.
+1. Names. `aln` is free: the slice-5 dielectric is `aln_dielectric`. Slice 2 adds `gan`, `aln`, `inn`,
+   `algan <x>` and `ingan <x>`.
+2. Affinity of the alloys. Items 18 and 19 disagree: linear chi would make the AlGaN/GaN dEc 2.1x, while Q_c
+   gives 0.70 dEg(x). Q_c wins, because the 2DEG (MAC10) depends on dEc. So chi(x) = chi_GaN - Q_c [Eg(x) -
+   Eg_GaN]. The binaries keep their own chi. `algan 1` therefore has chi 2.133 eV against `aln` 2.00, and
+   `ingan 1` has 5.714 eV against `inn` 5.80. This is recorded, not hidden.
+3. AlN gap. The book's table gives 6.2 eV at 300 K. Its Guo-Yoshida Varshni (1.799e-3 eV/K, 1462 K, fitted
+   for 0-300 K) gives a lower curve. Eg(300) = 6.2 eV is used, with Guo-Yoshida's temperature shape.
+4. Caughey-Thomas temperature exponents. The engine's model lets only mu_max vary with T. New optional
+   exponents for mu_min, N_ref and alpha are added; 0 keeps every existing set bit-identical (MAC1).
+5. Alloy mobility. The reciprocal rule applies to electron mu_max and mu_min. Hole mobility follows the
+   reciprocal rule without the alloy term. N_ref, alpha and the exponents are linear.
+6. DOS masses. Electrons: GaN 0.20, AlN 0.40, InN 0.11 (book). Holes: GaN 1.5 (book), AlN 2.7 (owner),
+   InN 1.65 (from the book's Nv = 5.3e19 cm^-3). All are linear in x.
+7. Interface transport. Thermionic is declared by the deck's `[interface]` section, as today. The library HEMT
+   deck declares it, and the engine default is unchanged.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a
