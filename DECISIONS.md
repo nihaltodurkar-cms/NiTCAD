@@ -5200,6 +5200,8 @@ gate swept 0-0.6 V forward: no current at 0 V, the terminal currents cancel to 1
 bias; the library HEMT now declares its interface thermionic (ruling 7 as first written): I_D at V_G = 0,
 V_D = 0.1 V is 0.6297 A/cm against 0.6299 continuous (-0.03 %), currents conserved; MAC10 unchanged
 (equilibrium). The assembler test that asserted the refusal now asserts the device assembles.
+Owner 2026-11-27, "choose recommended" for the rest: the HEMT deck keeps `polarization_surface = off` (surface
+donors fully compensating the bare barrier surface) and the lightly p-type buffer over a substrate contact.
 
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
