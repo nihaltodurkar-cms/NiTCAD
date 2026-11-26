@@ -51,7 +51,7 @@
 //   [region <name>]   (repeatable, in order: region k is the k-th section, also for a generated
 //                     mesh and a mesh file, whose node regions are indices)
 //                     material = silicon | silicon_legacy | germanium | gaas | ingaas | sic_4h
-//                                | algaas <x> [<share>] | sio2 | insulator
+//                                | algaas <x> [<share>] | sio2 | insulator | <a [material] name>
 //                       (silicon: Couderc et al.'s band set, Unit 35; silicon_legacy: the legacy's)
 //                     <parameter> = <value>   (a material parameter by its C++ member path, e.g.
 //                       eps_r, electron_mobility.mu_max, thermal.conductivity_W_cmK,
@@ -61,7 +61,12 @@
 //                       is the background, at most one; later regions override earlier ones, DK8)
 //                     generate2d: polygon = <x y>, ... (repeatable)
 //                     generate3d with planes: seed = <x y z>, a point inside its slab
-//   [doping]          profile = <donor|acceptor> <constant|gaussian|erfc> <peak> [axis=x|y|z]
+//   [material <name>] (repeatable; Unit 68 MAD4) a user material, named by a region's material
+//                     base = <registry material> [<composition>]
+//                     <parameter> = <value>   (as in [region], applied to the base and checked)
+//                     include = <file.nitmat> (relative to the deck: those lines from a file; then
+//                       nothing else here); its name is not a registry name
+//   [doping]         profile = <donor|acceptor> <constant|gaussian|erfc> <peak> [axis=x|y|z]
 //                       [center=<l>] [width=<l>] [x=<lo>:<hi>] [y=...] [z=...] [lateral=<l>]
 //                       (repeatable; device/doping_profiles.hpp)
 //   [contact <name>]  (repeatable) kind = ohmic | gate | electrode; patch = <boundary patch>;

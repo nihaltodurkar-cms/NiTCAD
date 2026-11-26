@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -202,6 +204,13 @@ private:
     }
 
     std::expected<void, base::Error> check_sections() const;
+    // A material parameter by its member path (DK7) set from `e`; true when `e` was one.
+    std::expected<bool, base::Error> parameter(physics::MaterialParameters& params, const Entry& e) const;
+    // The registry material `e` names, with its composition arguments (Unit 68, MAD1).
+    std::expected<physics::MaterialParameters, base::Error> registry_material(const Entry& e) const;
+    // Unit 68 (MAD4): the [material <name>] sections, inline or from their include file.
+    std::expected<void, base::Error> user_materials();
+    std::expected<physics::MaterialParameters, base::Error> user_material(const Section& s) const;
     std::expected<RegionSpec, base::Error> region(const Section& s) const;
     std::expected<std::vector<double>, base::Error> axis(int line, std::string_view value) const;
     std::expected<std::vector<double>, base::Error> axis(const Entry& e) const { return axis(e.line, e.value); }
@@ -243,6 +252,7 @@ private:
     std::expected<Box, base::Error> box(const Entry& e, int dim) const;
 
     const Deck& d_;
+    std::map<std::string, physics::MaterialParameters, std::less<>> user_materials_;
     std::vector<RegionSpec> regions_;
     MeshType type_ = MeshType::tensor;
     std::string type_name_;  // the [mesh] type as written (extrude3d for a file mesh from a complex)
@@ -260,7 +270,7 @@ std::expected<void, base::Error> Builder::check_sections() const {
                                                  "sweep",        "transient", "small_signal",
                                                  "trace",        "output",    "adapt"};
     static const std::set<std::string_view> many{"region", "contact", "interface", "heavy_ion",
-                                                 "thermal_contact"};
+                                                 "thermal_contact", "material"};
     std::set<std::string> seen;
     for (const Section& s : d_.sections) {
         if (once.contains(s.kind)) {
@@ -285,6 +295,120 @@ std::expected<void, base::Error> Builder::check_sections() const {
     return {};
 }
 
+std::expected<bool, base::Error> Builder::parameter(physics::MaterialParameters& params, const Entry& e) const {
+    if (auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
+        if (e.key == "band_to_band.direct_gap") {
+            NITCAD_DECK_TRY(v, flag(e));
+            sp->band_to_band.direct_gap = v;
+            return true;
+        }
+        if (double* target = semiconductor_parameter(*sp, e.key)) {
+            NITCAD_DECK_TRY(v, num(e));
+            *target = v;
+            return true;
+        }
+        return false;
+    }
+    if (double* target = insulator_parameter(std::get<physics::InsulatorParameters>(params), e.key)) {
+        NITCAD_DECK_TRY(v, num(e));
+        *target = v;
+        return true;
+    }
+    return false;
+}
+
+std::expected<physics::MaterialParameters, base::Error> Builder::registry_material(const Entry& e) const {
+    const auto words = tokens(e.value);
+    const std::string_view kind = words.front();
+    const physics::MaterialEntry* entry = physics::find_material(kind);
+    if (!entry) return std::unexpected(at(e.line, "unknown material '" + std::string(kind) + "'"));
+    const std::size_t count = words.size() - 1;
+    if (count < entry->arguments_min || count > entry->arguments_max) {
+        if (entry->arguments_max == 0) return std::unexpected(at(e.line, "'" + std::string(kind) + "' takes no arguments"));
+        return std::unexpected(at(e.line, std::string(entry->usage)));
+    }
+    std::vector<double> arguments;
+    for (std::size_t i = 1; i < words.size(); ++i) {
+        NITCAD_DECK_TRY(v, lift(e.line, number(words[i])));
+        arguments.push_back(v);
+    }
+    auto made = entry->make(arguments);
+    if (!made) return std::unexpected(located(e.line, "material", std::move(made.error())));
+    return std::move(*made);
+}
+
+// A [material] section's own entries: base = <registry material> and member-path overrides,
+// validated as a region's material is (the error names the parameter).
+std::expected<physics::MaterialParameters, base::Error> Builder::user_material(const Section& s) const {
+    const Entry* base = nullptr;
+    for (const Entry& e : s.entries) {
+        if (e.key != "base") continue;
+        if (base) return std::unexpected(at(e.line, "a second 'base'"));
+        base = &e;
+    }
+    if (!base) return std::unexpected(at(s.line, "[material " + s.name + "] has no 'base'"));
+    NITCAD_DECK_TRY(params, registry_material(*base));
+    for (const Entry& e : s.entries) {
+        if (&e == base) continue;
+        if (e.key == "include") return std::unexpected(at(e.line, "an included material file cannot include another"));
+        NITCAD_DECK_TRY(taken, parameter(params, e));
+        if (!taken) {
+            return std::unexpected(at(e.line, "unknown key '" + e.key + "' in [material " + s.name +
+                                                  "] (not a parameter of its base)"));
+        }
+    }
+    const std::string where = "[material " + s.name + "]";
+    if (const auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
+        if (auto m = physics::Semiconductor::create(*sp); !m) {
+            return std::unexpected(located(base->line, where, std::move(m.error())));
+        }
+    } else if (auto m = physics::Insulator::create(std::get<physics::InsulatorParameters>(params)); !m) {
+        return std::unexpected(located(base->line, where, std::move(m.error())));
+    }
+    return params;
+}
+
+std::expected<void, base::Error> Builder::user_materials() {
+    for (const Section& s : d_.sections) {
+        if (s.kind != "material") continue;
+        if (physics::find_material(s.name)) {
+            return std::unexpected(at(s.line, "[material " + s.name + "]: '" + s.name +
+                                                  "' is a registry material; a user material needs a name of its own"));
+        }
+        if (user_materials_.contains(s.name)) return std::unexpected(at(s.line, "a second [material " + s.name + "]"));
+        const Entry* include = nullptr;
+        for (const Entry& e : s.entries) {
+            if (e.key == "include") include = &e;
+        }
+        if (!include) {
+            NITCAD_DECK_TRY(params, user_material(s));
+            user_materials_.emplace(s.name, std::move(params));
+            continue;
+        }
+        if (s.entries.size() != 1) {
+            return std::unexpected(at(include->line, "a [material] with 'include' takes no other key"));
+        }
+        // The file holds the section's key lines; parsed under the section's header, its lines
+        // renumbered to the file's own, and built by a builder whose messages name the file.
+        const std::filesystem::path path = file(*include);
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return std::unexpected(at(include->line, "cannot open the material file '" + path.string() + "'"));
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string_view body = text;
+        if (body.starts_with("\xEF\xBB\xBF")) body.remove_prefix(3);
+        auto parsed = parse("[material " + s.name + "]\n" + std::string(body), path.filename().string(),
+                            path.parent_path());
+        if (!parsed) return std::unexpected(located(include->line, "include", std::move(parsed.error())));
+        if (parsed->sections.size() != 1) {
+            return std::unexpected(at(include->line, "include: a material file holds key lines only, no section"));
+        }
+        for (Entry& e : parsed->sections.front().entries) --e.line;
+        NITCAD_DECK_TRY(params, Builder(*parsed, nullptr).user_material(parsed->sections.front()));
+        user_materials_.emplace(s.name, std::move(params));
+    }
+    return {};
+}
+
 std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
     RegionSpec spec;
     spec.section = &s;
@@ -296,25 +420,17 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         }
     }
     if (!material) return std::unexpected(at(s.line, "[region " + s.name + "] has no 'material'"));
+    physics::MaterialParameters params;
     const auto words = tokens(material->value);
-    const std::string_view kind = words.front();
-    const physics::MaterialEntry* entry = physics::find_material(kind);
-    if (!entry) return std::unexpected(at(material->line, "unknown material '" + std::string(kind) + "'"));
-    const std::size_t count = words.size() - 1;
-    if (count < entry->arguments_min || count > entry->arguments_max) {
-        if (entry->arguments_max == 0) {
-            return std::unexpected(at(material->line, "'" + std::string(kind) + "' takes no arguments"));
+    if (const auto user = user_materials_.find(words.front()); user != user_materials_.end()) {
+        if (words.size() != 1) {
+            return std::unexpected(at(material->line, "'" + std::string(words.front()) + "' takes no arguments"));
         }
-        return std::unexpected(at(material->line, std::string(entry->usage)));
+        params = user->second;
+    } else {
+        NITCAD_DECK_TRY(made, registry_material(*material));
+        params = std::move(made);
     }
-    std::vector<double> arguments;
-    for (std::size_t i = 1; i < words.size(); ++i) {
-        NITCAD_DECK_TRY(v, lift(material->line, number(words[i])));
-        arguments.push_back(v);
-    }
-    auto made = entry->make(arguments);
-    if (!made) return std::unexpected(located(material->line, "material", std::move(made.error())));
-    physics::MaterialParameters params = std::move(*made);
     for (const Entry& e : s.entries) {
         if (&e == material) continue;
         if (e.key == "box") { spec.boxes.push_back(&e); continue; }
@@ -329,22 +445,8 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
             spec.fill = e.value == "fill";
             continue;
         }
-        if (auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
-            if (e.key == "band_to_band.direct_gap") {
-                NITCAD_DECK_TRY(v, flag(e));
-                sp->band_to_band.direct_gap = v;
-                continue;
-            }
-            if (double* target = semiconductor_parameter(*sp, e.key)) {
-                NITCAD_DECK_TRY(v, num(e));
-                *target = v;
-                continue;
-            }
-        } else if (double* target = insulator_parameter(std::get<physics::InsulatorParameters>(params), e.key)) {
-            NITCAD_DECK_TRY(v, num(e));
-            *target = v;
-            continue;
-        }
+        NITCAD_DECK_TRY(taken, parameter(params, e));
+        if (taken) continue;
         return std::unexpected(at(e.line, "unknown key '" + e.key + "' in [region " + s.name +
                                               "] (not a parameter of its material)"));
     }
@@ -2245,6 +2347,7 @@ std::expected<Plan, base::Error> Builder::run() {
             d.temperature_K = v;
         }
     }
+    NITCAD_DECK_CHECK(user_materials());
     for (const Section& s : d_.sections) {
         if (s.kind != "region") continue;
         NITCAD_DECK_TRY(spec, region(s));

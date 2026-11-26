@@ -96,6 +96,12 @@ constexpr std::array<KeyInfo, 8> region_keys{{
     {"band_to_band.direct_gap", 0, false, "off", "direct-gap band-to-band tunnelling", on_off, {}, {}},
 }};
 
+// Unit 68 (MAD4): a user material.
+constexpr std::array<KeyInfo, 2> material_keys{{
+    {"base", 0, false, "silicon", "the registry material it starts from (with its composition)", materials, {}, {}},
+    {"include", 0, false, "<file.nitmat>", "its keys from a file, relative to the deck (nothing else here)", {}, {}, {}},
+}};
+
 constexpr std::array<KeyInfo, 1> doping_keys{{
     {"profile", 0, true, "donor constant <peak>",
      "<donor|acceptor> <constant|gaussian|erfc> <peak> [axis=] [center=] [width=] [x=lo:hi] [lateral=]", dopants,
@@ -313,10 +319,11 @@ constexpr std::array<KeyInfo, 10> heavy_ion_keys{{  // Unit 65 (HD9): no default
     {"sigma", 0, false, "<time>", "the pulse's width", {}, {}, {}},
 }};
 
-constexpr std::array<SectionInfo, 17> sections{{
+constexpr std::array<SectionInfo, 18> sections{{
     {"device", 0, false, "the device's temperature", device_keys, {}},
     {"mesh", 0, false, "the mesh: tensor, generated or from a file", mesh_keys, "type"},
     {"region", 1, true, "a region: its material and where it is", region_keys, {}},
+    {"material", 1, true, "a user material: a registry base and its overrides (Unit 68)", material_keys, {}},
     {"doping", 0, false, "doping profiles", doping_keys, {}},
     {"contact", 1, true, "a contact on a boundary patch", contact_keys, "kind"},
     {"interface", 2, true, "the interface between two regions", interface_keys, {}},

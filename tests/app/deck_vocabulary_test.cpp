@@ -77,6 +77,7 @@ Base base_for(std::string_view kind, std::string_view context) {
         return {diode, "contact anode"};
     }
     if (kind == "region") return {diode, "region silicon"};
+    if (kind == "material") return {diode + "\n[material mysi]\nbase = silicon\n", "material mysi"};
     if (kind == "interface") return {app_test::mosfet2d + "\n[interface silicon oxide]\n", "interface silicon oxide"};
     if (kind == "thermal_contact") {
         return {diode_with("\n[models]\nelectrothermal = on\n\n[thermal_contact sink]\npatch = x_min\nkind = isothermal\n"

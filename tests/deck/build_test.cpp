@@ -1399,3 +1399,93 @@ patch = body
           "[contact b]\nkind = ohmic\npatch = x_max\n[equilibrium]\n",
           ":6: overlap is for a layered mesh");
 }
+
+// Unit 68 (MAD4, MAC5): user materials, inline and from a .nitmat file.
+TEST_CASE("deck build: [material] user materials (MAC5)", "[deck][unit68]") {
+    const std::string head = "[mesh]\ntype = tensor\nx = 0, 1um\n";
+    const auto region_parameters = [](const deck::Plan& p) {
+        return std::get<physics::Semiconductor>(p.device.regions()[0].material).parameters();
+    };
+    // A deck that must build: an ohmic contact added before its analysis.
+    const auto built = [](std::string text, const fs::path& dir = {}) {
+        text.insert(text.find("[equilibrium]"), "[contact a]\nkind = ohmic\npatch = x_min\n");
+        return must(text, dir);
+    };
+    SECTION("a copy of silicon with no overrides is silicon bit for bit") {
+        const deck::Plan p = built(head + "[material mysi]\nbase = silicon\n[region si]\nmaterial = mysi\n[equilibrium]\n");
+        const deck::Plan q = built(head + "[region si]\nmaterial = silicon\n[equilibrium]\n");
+        CHECK(region_parameters(p) == region_parameters(q));
+        CHECK(region_parameters(p) == physics::silicon_parameters);
+    }
+    SECTION("an override changes exactly that member; a region may override again") {
+        const deck::Plan p = built(head + "[material mysi]\nbase = silicon\neps_r = 12.0\nhole_mobility.mu_max = 400\n"
+                                         "[region si]\nmaterial = mysi\nlifetime.tau_n0 = 1e-7\n[equilibrium]\n");
+        physics::SemiconductorParameters want = physics::silicon_parameters;
+        want.eps_r = 12.0;
+        want.hole_mobility.mu_max = 400;
+        want.lifetime.tau_n0 = 1e-7;
+        CHECK(region_parameters(p) == want);
+    }
+    SECTION("a base with composition, and an insulator base") {
+        const deck::Plan p = built(head + "[material barrier]\nbase = algaas 0.3\n[region a]\nmaterial = barrier\n[equilibrium]\n");
+        CHECK(region_parameters(p) == *physics::algaas_parameters(0.3));
+        const deck::Plan q = built("[mesh]\ntype = tensor\nx = 0, 1um, 2um\n[material hk]\nbase = insulator\neps_r = 22\n"
+                                  "[region si]\nmaterial = silicon\nbox = 0 1um\n[region ox]\nmaterial = hk\nbox = 1um 2um\n"
+                                  "[equilibrium]\n");
+        CHECK(std::get<physics::Insulator>(q.device.regions()[1].material).parameters().eps_r == 22.0);
+    }
+    SECTION("an include file equals the inline section") {
+        const fs::path dir = scratch("user_material");
+        {
+            std::ofstream f(dir / "mysi.nitmat", std::ios::binary);
+            f << "\xEF\xBB\xBF# a user material\nbase = silicon\neps_r = 12.0\nhole_mobility.mu_max = 400\n";
+        }
+        const deck::Plan p = built(head + "[material mysi]\ninclude = mysi.nitmat\n[region si]\nmaterial = mysi\n[equilibrium]\n", dir);
+
+        const deck::Plan q = built(head + "[material mysi]\nbase = silicon\neps_r = 12.0\nhole_mobility.mu_max = 400\n"
+                                         "[region si]\nmaterial = mysi\n[equilibrium]\n");
+        CHECK(region_parameters(p) == region_parameters(q));
+        {
+            std::ofstream f(dir / "bad.nitmat", std::ios::binary);
+            f << "base = silicon\n\nbogus = 1\n";
+        }
+        CHECK(failure(head + "[material m]\ninclude = bad.nitmat\n[region si]\nmaterial = m\n[equilibrium]\n", dir)
+                  .find("bad.nitmat:3: unknown key 'bogus' in [material m]") != std::string::npos);
+        {
+            std::ofstream f(dir / "nested.nitmat", std::ios::binary);
+            f << "base = silicon\ninclude = mysi.nitmat\n";
+        }
+        CHECK(failure(head + "[material m]\ninclude = nested.nitmat\n[region si]\nmaterial = m\n[equilibrium]\n", dir)
+                  .find("nested.nitmat:2: an included material file cannot include another") != std::string::npos);
+        {
+            std::ofstream f(dir / "sections.nitmat", std::ios::binary);
+            f << "base = silicon\n[region x]\n";
+        }
+        CHECK(failure(head + "[material m]\ninclude = sections.nitmat\n[region si]\nmaterial = m\n[equilibrium]\n", dir)
+                  .find("t.deck:5: include: a material file holds key lines only") != std::string::npos);
+        CHECK(failure(head + "[material m]\ninclude = none.nitmat\n[region si]\nmaterial = m\n[equilibrium]\n", dir)
+                  .find("t.deck:5: cannot open the material file") != std::string::npos);
+    }
+    SECTION("refusals name the key or section") {
+        const auto expect = [](const std::string& message, const std::string& what) {
+            INFO(message);
+            CHECK(message.find(what) != std::string::npos);
+        };
+        const std::string tail = "[region si]\nmaterial = m\n[equilibrium]\n";
+        expect(failure(head + "[material silicon]\nbase = silicon\n[region si]\nmaterial = silicon\n[equilibrium]\n"),
+               "t.deck:4: [material silicon]: 'silicon' is a registry material");
+        expect(failure(head + "[material m]\nbase = silicon\n[material m]\nbase = gaas\n" + tail), "t.deck:6: a second [material m]");
+        expect(failure(head + "[material m]\neps_r = 3\n" + tail), "t.deck:4: [material m] has no 'base'");
+        expect(failure(head + "[material m]\nbase = silicon\nbase = gaas\n" + tail), "t.deck:6: a second 'base'");
+        expect(failure(head + "[material m]\nbase = m2\n" + tail), "t.deck:5: unknown material 'm2'");
+        expect(failure(head + "[material m]\nbase = silicon\nbox = 0 1um\n" + tail),
+               "t.deck:6: unknown key 'box' in [material m] (not a parameter of its base)");
+        expect(failure(head + "[material m]\nbase = silicon\neps_r = -1\n" + tail), "t.deck:5: [material m]: ");
+        expect(failure(head + "[material m]\nbase = silicon\neps_r = -1\n" + tail), "eps_r");
+        expect(failure(head + "[material m]\nbase = silicon\ninclude = a.nitmat\n" + tail),
+               "t.deck:6: a [material] with 'include' takes no other key");
+        expect(failure(head + "[material m]\nbase = silicon\n[region si]\nmaterial = m 0.3\n[equilibrium]\n"),
+               "t.deck:7: 'm' takes no arguments");
+        expect(failure(head + "[material]\nbase = silicon\n" + tail), "t.deck:4: [material] needs a name");
+    }
+}
