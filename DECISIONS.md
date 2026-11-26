@@ -4948,7 +4948,10 @@ registry material Unit 68 adds (`MaterialEntry::recorded`); the nine earlier nam
 write no record, so every existing result file stays byte-identical. Decks differing only in x already differ in
 `input_identity` (it digests the parameters). Per-parameter citations: the nine earlier sets cite the whole set
 (MAD3's limitation); every set Unit 68 adds must cite every parameter (test in place, vacuous until slice 5).
-Not run: the full Release suite and the MAC1 byte-comparison of every bundled deck's result files against main.
+MAC1 checked (2026-11-26, owner word) on the 36 tracked 1D and 2D decks (examples, benchmarks, decks), run by
+main 5904b83 and this branch: 48 of 71 output files byte-identical; the other 23 (every .nitsweep, .nitac, .nittran)
+differ only in provenance (identical byte for byte once it is cleared and the file re-saved). The 14 3D decks were not
+run (hours each, owner). Not run: the full Release suite.
 
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
