@@ -100,6 +100,17 @@ struct ViewCube {
 };
 
 [[nodiscard]] ViewCube view_cube(const FieldScene& scene, int width, int height);
+
+// The band surface's plane inset (Unit 26o, BSD6): in the view's top right corner (opposite the view cube, left of
+// the colour bar), a 140 px frame holding the device's bounding box (its 12 edges) and the plane's quad, both seen
+// from the main camera's direction (its right and up applied to the device's x, y, z), fitted to the frame. Empty
+// (no edges) unless the scene is 3D with a plane_inset.
+struct InsetFigure {
+    std::array<float, 4> frame{};  // left, top, right, bottom, pixels
+    std::vector<std::array<std::array<float, 2>, 2>> edges;
+    std::array<std::array<float, 2>, 4> plane{};
+};
+[[nodiscard]] InsetFigure plane_inset_figure(const FieldScene& scene, int width, int height);
 [[nodiscard]] std::optional<CameraPreset> view_cube_hit(const FieldScene& scene, int width, int height, float x,
                                                         float y);
 

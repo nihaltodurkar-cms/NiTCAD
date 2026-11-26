@@ -216,6 +216,33 @@ TEST_CASE("render axes3d: no z axis for a box of zero thickness; none in 2D (Uni
     CHECK(none.axes.empty());
 }
 
+TEST_CASE("render axes3d: value-mapped axes tick in their own units (Unit 26o, BSD3)") {
+    // Scene y = 0.5 + 2 E: the energy axis over E in [-1, 1] spans y in [-1.5, 2.5].
+    FieldScene s = box_scene();
+    s.lo[1] = -1.5f;
+    s.hi[1] = 2.5f;
+    s.camera.target[1] = 0.5f;
+    s.axes = std::array<SceneAxis, 3>{SceneAxis{"x (\xC2\xB5m)", 0.0, 1.0}, SceneAxis{"E (eV)", 0.5, 2.0},
+                                      SceneAxis{"y (\xC2\xB5m)", 0.0, 1.0}};
+    const AxisBox box = axis_box(s, W, H);
+    const auto it = std::ranges::find_if(box.axes, [](const BoxAxis& a) { return a.axis == 1; });
+    REQUIRE(it != box.axes.end());
+    CHECK(it->title == "E (eV)");
+    const std::vector<Tick> expected = linear_ticks(-1.0, 1.0, 5);
+    REQUIRE(it->ticks.size() == expected.size());
+    for (std::size_t k = 0; k < expected.size(); ++k) {
+        const AxisLabel& l = it->ticks[k];
+        CHECK(l.value >= -1.0 - 1e-12);
+        CHECK(l.value <= 1.0 + 1e-12);
+        CHECK(l.text == expected[k].label);
+        CHECK(std::abs(l.position[1] - (0.5 + 2.0 * l.value)) < 1e-6);
+    }
+    // The other axes keep their titles from the map too.
+    const auto z = std::ranges::find_if(box.axes, [](const BoxAxis& a) { return a.axis == 2; });
+    REQUIRE(z != box.axes.end());
+    CHECK(z->title == "y (\xC2\xB5m)");
+}
+
 namespace {
 
 // The camera's right and up, as make_view builds them (+y up; -z up when looking straight down or up).

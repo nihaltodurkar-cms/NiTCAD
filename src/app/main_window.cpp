@@ -121,8 +121,17 @@ constexpr int label_arrows = MainWindow::id_first_label + 9, label_lines = label
 constexpr int label_time = label_arrows + 7, label_clip_x = label_arrows + 8;
 // Unit 26d (ZD3): the colour range's label, after the three of the clipping box's sliders.
 constexpr int label_range = label_clip_x + 3;
+// Unit 26o (BSD5): the band surface's height scale and opacity labels, after the range's.
+constexpr int label_exaggeration = label_range + 1, label_band_opacity = label_range + 2;
 
 std::string format_um(double v) { return std::format("{:.3g}", v); }
+
+// The plane the slice controls show (Unit 26o, BSD5): the band surface's on that view, else the first slice.
+std::optional<ViewSettings::Slice> shown_plane(const ViewSettings& s) {
+    if (s.kind == ViewKind::band_surface) return s.band_plane;
+    if (s.slices.empty()) return std::nullopt;
+    return s.slices.front();
+}
 
 // The numbers of a comma-separated list; empty when any is not a number.
 std::vector<double> numbers(std::string_view text) {
@@ -384,6 +393,22 @@ bool MainWindow::create_children() {
     HWND after = child(id_colormap);
     for (const int id : {label_range, static_cast<int>(id_range_min), static_cast<int>(id_range_max),
                          static_cast<int>(id_range_auto)}) {
+        SetWindowPos(child(id), after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        after = child(id);
+    }
+    // Unit 26o (BSD5): the band surface's levels and colour by level (with the other check boxes), its height
+    // scale and opacity (after the range).
+    for (const auto& [id, text] : {std::pair{id_band_ec, L"Ec"}, std::pair{id_band_ev, L"Ev"},
+                                   std::pair{id_band_efn, L"EFn"}, std::pair{id_band_efp, L"EFp"},
+                                   std::pair{id_by_level, L"Colour by level"}, std::pair{id_band_fit, L"Fit this point"}}) {
+        make(L"BUTTON", text, WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id);
+    }
+    make(L"STATIC", L"Height ×", WS_VISIBLE | SS_CENTERIMAGE, inspector_, label++);
+    make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_exaggeration, WS_EX_CLIENTEDGE);
+    make(L"STATIC", L"Opacity", WS_VISIBLE | SS_CENTERIMAGE, inspector_, label++);
+    make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_band_opacity, WS_EX_CLIENTEDGE);
+    for (const int id : {label_exaggeration, static_cast<int>(id_exaggeration), label_band_opacity,
+                         static_cast<int>(id_band_opacity)}) {
         SetWindowPos(child(id), after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         after = child(id);
     }
@@ -674,9 +699,11 @@ const std::array<std::vector<int>, MainWindow::section_count>& section_members()
     static const std::array<std::vector<int>, MainWindow::section_count> m{
         std::vector<int>{first_label + 0, M::id_view, first_label + 1, M::id_field, first_label + 2, M::id_point},
         std::vector<int>{first_label + 3, M::id_scale, first_label + 4, M::id_colormap, label_range, M::id_range_min,
-                         M::id_range_max, M::id_range_auto, first_label + 7, M::id_levels},
+                         M::id_range_max, M::id_range_auto, first_label + 7, M::id_levels, label_exaggeration,
+                         M::id_exaggeration, label_band_opacity, M::id_band_opacity},
         std::vector<int>{M::id_contours, M::id_edges, M::id_contacts, M::id_opaque, M::id_perspective, M::id_enhanced,
-                         M::id_axis_box},
+                         M::id_axis_box, M::id_band_ec, M::id_band_ev, M::id_band_efn, M::id_band_efp,
+                         M::id_by_level, M::id_band_fit},
         std::vector<int>{first_label + 5, M::id_slice_axis, first_label + 6, M::id_slice_at, M::id_clip, M::id_clip_box,
                          label_clip_x, M::id_clip_x0, M::id_clip_x1, label_clip_x + 1, M::id_clip_y0, M::id_clip_y1,
                          label_clip_x + 2, M::id_clip_z0, M::id_clip_z1},
@@ -826,7 +853,11 @@ void MainWindow::draw_section_header(const DRAWITEMSTRUCT& d) {
     SetTextColor(dc, RGB(80, 87, 98));
     HGDIOBJ old = SelectObject(dc, bold_);
     RECT text{r.left + scaled(10, dpi_), r.top, r.right - scaled(24, dpi_), r.bottom};
-    DrawTextW(dc, section_titles[static_cast<std::size_t>(section)], -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    // Unit 26o: on the band surface the slice controls set its plane, so the section says so.
+    const wchar_t* title = section == sec_slice && settings().kind == ViewKind::band_surface
+                               ? L"PLANE AND CLIP"
+                               : section_titles[static_cast<std::size_t>(section)];
+    DrawTextW(dc, title, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, font_);
     RECT chevron{r.right - scaled(24, dpi_), r.top, r.right - scaled(8, dpi_), r.bottom};
     DrawTextW(dc, section_folded(section) ? L"▸" : L"▾", 1, &chevron, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
@@ -915,6 +946,8 @@ void MainWindow::layout_inspector() {
                 y += row + gap;
             }
             field(first_label + 7, id_levels, false);
+            if (used(id_exaggeration)) field(label_exaggeration, id_exaggeration, false);  // Unit 26o (BSD5)
+            if (used(id_band_opacity)) field(label_band_opacity, id_band_opacity, false);
             break;
         case sec_show: {
             std::vector<int> boxes;
@@ -1891,9 +1924,19 @@ void MainWindow::sync_inspector() {
     check(id_enhanced, s.enhanced);
     check(id_axis_box, s.axis_box);
     check(id_clip, s.clip.has_value());
-    SendMessageW(child(id_slice_axis), CB_SETCURSEL, s.slices.empty() ? 0 : static_cast<WPARAM>(s.slices.front().axis + 1), 0);
+    // The slice controls show the band surface's plane on that view (Unit 26o, BSD5).
+    {
+        const auto plane = shown_plane(s);
+        SendMessageW(child(id_slice_axis), CB_SETCURSEL, plane ? static_cast<WPARAM>(plane->axis + 1) : 0, 0);
+    }
+    for (std::size_t k = 0; k < 4; ++k) check(id_band_ec + static_cast<int>(k), s.band_levels[k]);
+    check(id_by_level, s.by_level);
+    check(id_band_fit, s.band_fit_point);
     // The boxes (ZD1); a clipping box's text stays while there is none, to be checked again.
-    for (const int id : {id_slice_at, id_levels, id_cut, id_arrow_count, id_line_count, id_seeds, id_gap}) show_box(id);
+    for (const int id : {id_slice_at, id_levels, id_cut, id_arrow_count, id_line_count, id_seeds, id_gap,
+                         id_exaggeration, id_band_opacity}) {
+        show_box(id);
+    }
     if (s.clip) show_box(id_clip_box);
     sync_range();
     // Unit 26c (YD1-YD3).
@@ -1949,15 +1992,15 @@ void MainWindow::sync_playback() {
     const std::size_t k = n == 0 ? 0 : std::min(s.point.value_or(n - 1), n - 1);
     SendMessageW(child(id_time), TBM_SETRANGE, FALSE, MAKELPARAM(0, n == 0 ? 0 : n - 1));
     SendMessageW(child(id_time), TBM_SETPOS, TRUE, static_cast<LPARAM>(k));
-    win32::set_text(child(id_time_text), can_play() ? render::time_label(workspace_->transient->snapshots[k].time_s) +
-                                                          std::format(" ({} of {})", k + 1, n)
-                                                    : std::string());
+    win32::set_text(child(id_time_text), can_play() ? playback_label(*workspace_, k) : std::string());
     win32::set_text(child(id_play), playing_ ? "Pa&use" : "Pla&y");
     SendMessageW(child(id_point), CB_SETCURSEL, static_cast<WPARAM>(k), 0);
 }
 
 bool MainWindow::can_play() const {
-    return workspace_ && takes_film(*workspace_, device_view_) && workspace_->points.size() >= 2;
+    // A transient's field view (YD5), or the band surface over any run's points (Unit 26o, BSD11).
+    return workspace_ && (takes_film(*workspace_, device_view_) || takes_band_playback(*workspace_, device_view_)) &&
+           workspace_->points.size() >= 2;
 }
 
 void MainWindow::play(bool on) {
@@ -1972,7 +2015,7 @@ void MainWindow::play(bool on) {
         playing_ = true;
         show_snapshot(play_from_);
         SetTimer(hwnd_, playback_timer, playback_tick_ms, nullptr);
-        set_status(status_state, "Playing the snapshots.");
+        set_status(status_state, workspace_->transient ? "Playing the snapshots." : "Playing the bias points.");
     } else if (playing_) {
         KillTimer(hwnd_, playback_timer);
         playing_ = false;
@@ -2064,9 +2107,19 @@ void MainWindow::show_inspector_groups() {
     show({label_arrows, id_arrows, id_arrow_count, label_lines, id_lines, id_line_count, label_from, id_from, id_seeds}, vectors);
     show({label_axis, id_axis, id_gap, id_exploded_field}, exploded);
     // ZD3: the colour range on the views drawn on a colour scale of the field.
+    // Unit 26o (BSD5): the band surface's controls with that view; its energy range on the range's boxes.
+    const bool band = tab_ == tab_view && workspace_ && s.kind == ViewKind::band_surface;
+    show({id_band_ec, id_band_ev, id_band_efn, id_band_efp, id_by_level, id_band_fit, label_exaggeration, id_exaggeration,
+          label_band_opacity, id_band_opacity},
+         band);
     show({label_range, id_range_min, id_range_max, id_range_auto},
          tab_ == tab_view && workspace_ &&
-             (s.kind == ViewKind::field || s.kind == ViewKind::slice || s.kind == ViewKind::iso || exploded));
+             (s.kind == ViewKind::field || s.kind == ViewKind::slice || s.kind == ViewKind::iso || exploded || band));
+    // Unit 26o: the slice controls set the band surface's plane on that view; their labels and header say "Plane".
+    const bool band_plane = s.kind == ViewKind::band_surface;
+    win32::set_text(GetDlgItem(inspector_, id_first_label + 5), band_plane ? "Plane" : "Slice plane");
+    win32::set_text(GetDlgItem(inspector_, id_first_label + 6), band_plane ? "Plane at (µm)" : "Slice at (µm)");
+    InvalidateRect(GetDlgItem(inspector_, id_section_first + sec_slice), nullptr, TRUE);
     win32::set_text(GetDlgItem(inspector_, label_swept), s.kind == ViewKind::current ? "Contact" : "Swept contact");
     show({label_swept, id_swept, id_log}, curves);
     show({label_sensed, id_sensed}, curves && s.kind != ViewKind::current);
@@ -2090,15 +2143,19 @@ bool MainWindow::pickable() const {
 // A slice view starts with a plane through the middle of the device along z, an iso view with a level.
 void MainWindow::view_defaults(ViewSettings& s) {
     if (!workspace_) return;
-    if (s.kind == ViewKind::slice && s.slices.empty()) {
-        const auto& m = workspace_->device->mesh();
+    const auto& m = workspace_->device->mesh();
+    const auto middle_z = [&]() -> ViewSettings::Slice {
         double lo = 1e300, hi = -1e300;
         for (const auto& p : m.points()) {
             lo = std::min(lo, p[2]);
             hi = std::max(hi, p[2]);
         }
-        s.slices = {{2, 0.5 * (lo + hi) * 1e4}};
-    }
+        return {2, 0.5 * (lo + hi) * 1e4};
+    };
+    // Unit 26o (BSD6): the Slice view's plane and the band surface's are one: the band surface takes the slice
+    // plane, and a slice view without one takes the band surface's.
+    if (s.kind == ViewKind::slice && s.slices.empty()) s.slices = {s.band_plane ? *s.band_plane : middle_z()};
+    if (s.kind == ViewKind::band_surface && m.dimension() == 3) s.band_plane = s.slices.empty() ? middle_z() : s.slices.front();
     if (s.kind == ViewKind::iso && s.levels.empty()) s.levels = {1e16};
 }
 
@@ -2125,8 +2182,9 @@ void MainWindow::on_inspector(int id, int code) {
         s.range.reset();
         sync_inspector();
     } else if (id == id_point && selection) {
-        if (&s == &device_view_) play(false);
+        // The entry chosen is read before playback stops: stopping selects the shown point in the list again.
         const int k = combo_index(child(id_point));
+        if (&s == &device_view_) play(false);
         s.point = k >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(k)) : std::nullopt;
     } else if (id == id_scale && selection) {
         const int k = combo_index(child(id_scale));
@@ -2167,6 +2225,13 @@ void MainWindow::on_inspector(int id, int code) {
         s.frequency = k >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(k)) : std::nullopt;
     } else if (id == id_axis && selection) {
         s.axis = std::clamp(combo_index(child(id_axis)), 0, 2);
+    } else if (clicked && id == id_band_fit) {
+        s.band_fit_point = Button_GetCheck(child(id)) == BST_CHECKED;  // BSD8
+    } else if (clicked && id >= id_band_ec && id <= id_by_level) {
+        // Unit 26o (BSD5): a level shown or not, or colour by level.
+        const bool on = Button_GetCheck(child(id)) == BST_CHECKED;
+        if (id == id_by_level) s.by_level = on;
+        else s.band_levels[static_cast<std::size_t>(id - id_band_ec)] = on;
     } else if (clicked && (id == id_exploded_field || id == id_log)) {
         (id == id_log ? s.log : s.exploded_field) = Button_GetCheck(child(id)) == BST_CHECKED;
     } else if (id == id_clip && clicked) {
@@ -2202,6 +2267,8 @@ bool MainWindow::is_box(int id) noexcept {
     case id_cut:
     case id_arrow_count:
     case id_line_count:
+    case id_exaggeration:
+    case id_band_opacity:
     case id_seeds:
     case id_gap:
     case id_range_min:
@@ -2220,8 +2287,14 @@ std::string MainWindow::box_text(int id) const {
         return t;
     };
     switch (id) {
-    case id_slice_at:
-        return s.slices.empty() ? std::string() : std::format("{}", s.slices.front().at_um);
+    case id_slice_at: {
+        const auto plane = shown_plane(s);
+        return plane ? std::format("{}", plane->at_um) : std::string();
+    }
+    case id_exaggeration:
+        return std::format("{}", s.exaggeration);
+    case id_band_opacity:
+        return std::format("{}", s.band_opacity);
     case id_clip_box: {
         if (!s.clip) return {};
         const auto& c = *s.clip;
@@ -2308,16 +2381,33 @@ void MainWindow::commit_box(int id) {
         }
         break;
     case id_slice_at: {
-        // The plane along the axis chosen; no axis or no position: none.
+        // The plane along the axis chosen; no axis or no position: none. On the band surface it is that view's
+        // plane, and the Slice view's too (Unit 26o, BSD6).
         const int axis = combo_index(child(id_slice_axis)) - 1;
+        const bool band = s.kind == ViewKind::band_surface;
         if (axis < 0 || blank(t)) {
-            s.slices.clear();
+            if (band) s.band_plane.reset();
+            else s.slices.clear();
         } else if (v.size() == 1) {
             s.slices = {{axis, v[0]}};
+            if (band) s.band_plane = s.slices.front();
         } else {
             error = "A slice plane is at one position in µm.";
         }
-        SendMessageW(child(id_slice_axis), CB_SETCURSEL, s.slices.empty() ? 0 : static_cast<WPARAM>(s.slices.front().axis + 1), 0);
+        const auto plane = shown_plane(s);
+        SendMessageW(child(id_slice_axis), CB_SETCURSEL, plane ? static_cast<WPARAM>(plane->axis + 1) : 0, 0);
+        break;
+    }
+    case id_exaggeration:
+    case id_band_opacity: {
+        // Unit 26o (BSD5): the band surface's height scale [0.1, 10] and opacity [0.2, 1].
+        const bool height = id == id_exaggeration;
+        if (v.size() == 1 && v[0] >= (height ? 0.1 : 0.2) && v[0] <= (height ? 10.0 : 1.0)) {
+            if (height) s.exaggeration = v[0];
+            else s.band_opacity = static_cast<float>(v[0]);
+        } else {
+            error = height ? "The height scale is from 0.1 to 10." : "The opacity is from 0.2 to 1.";
+        }
         break;
     }
     case id_clip_box: {
@@ -3508,6 +3598,21 @@ void MainWindow::viewport_hover(float x, float y) {
         std::ranges::replace(line, '\n', ' ');
         set_status(status_cursor, line);
         show_readout(text, hit->screen_x, hit->screen_y);
+        return;
+    }
+    // Unit 26o (BSD7): on the band surface, the surface under the cursor and every shown level there.
+    if (const ViewSettings& v = tab_ == tab_curves ? curve_view_ : device_view_;
+        v.kind == ViewKind::band_surface && workspace_ && std::holds_alternative<render::FieldScene>(*scene_)) {
+        const auto hit = band_pick(*workspace_, v, std::get<render::FieldScene>(*scene_), w, h, x, y);
+        if (!hit) {
+            set_status(status_cursor, {});
+            return hide_readout();
+        }
+        const std::string text = band_hover_text(*hit, workspace_->device->mesh().dimension());
+        const std::string position = std::format("x {}  y {}  z {} µm", format_um(hit->position_um[0]),
+                                                 format_um(hit->position_um[1]), format_um(hit->position_um[2]));
+        set_status(status_cursor, text.substr(0, text.find('\n')) + "     " + position);
+        show_readout(text, x, y);
         return;
     }
     if (!pickable()) return hide_readout();

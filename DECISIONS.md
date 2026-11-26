@@ -2640,6 +2640,273 @@ owner's word ("after slice 2 is done, start slice 4 (choose recommended for deci
   `app_window.analysis_window`) pass in Debug, and the changed tests pass in Release. Limitation: unlocking the library FinFET in
   the app sets off that long background mesh build (the window stays responsive).
 
+### Unit 26o — band surface: Ec, Ev, EFn and EFp as energy-height surfaces (proposed 2026-11-25; on `app/band-surface`)
+
+**Owner request (2026-11-25):** asked whether 3D devices have a 3D bands view; shown that bands are plotted only
+along a cut line (26b) and as colour fields, the owner chose "option 2": "Objects should have 3D Energy levels, check
+research papers and websearch". Then gave a written specification: a first-class **Band Surface** mode beside Field,
+Slice and Iso; Ec and Ev (and EFn, EFp) as height surfaces over the whole 2D mesh, or over a cut plane of a 3D device
+synchronised with the 3D viewer; band offsets and discontinuities kept; no band-edge physics in the renderer; energy
+axis, energy colouring, rotate/zoom/pan, Ec-only/Ev-only/combined, opacity, energy range, vertical exaggeration, local
+probing; the selected converged point first, with bias-sweep navigation and consistent references and colour ranges;
+Field, Slice and Iso unchanged; validation on a 2D MOSFET, a 3D FinFET channel-depth cut, a surface line against the
+1D band diagram, band offsets, bias changes, and degenerate and missing data; tests and documentation. "Just make a
+proposal."
+
+**Prior art (searched 2026-11-25).** Sentaurus Visual plots band diagrams only from 1D cut lines and puts fields on
+3D cut planes (Synopsys training, `sv_5`); no raised band surface was found in Sentaurus or Silvaco material. The
+raised "potential landscape" (Ec(x, y) as a surface over a 2D section, the source–channel barrier a ridge) is a
+figure of the short-channel and multigate literature: 2D self-consistent short-channel studies (arXiv
+cond-mat/9910258), Ec profiles at several depths (NYCU thesis, L = 20 nm), the FinFET corner effect seen as a lower
+Ec along the fin edges (Collaert (ed.), *CMOS Nanoelectronics*, 2013). So the surface is a research-figure view,
+not a copy of a commercial one.
+
+**Where things stand (found while proposing).**
+- The solver writes one band set per mesh node and bias point: `results::BandDiagram` (`conduction_eV`,
+  `valence_eV`, `electron_fermi_eV`, `hole_fermi_eV`), through the derived-field table (`solve/fields.hpp`
+  `band_diagram`, Unit 57 GE4); insulator nodes are NaN. Energies share the solver's one reference (the
+  equilibrium Fermi level, that of a contact at 0 V, at 0 eV; `assemble/band_edges.hpp`), so points of a sweep are already comparable.
+- Each node lies in one material; a heterointerface sits at the **midpoint** of an edge between nodes of
+  different materials, the band shift `s` carrying the offsets (`assemble/scaled_device.hpp`, Unit 15). The step
+  is between two nodes, so linear interpolation over an element (what Field, Slice and the 26b cut line do) draws
+  a heterojunction's step as a slope one element wide.
+- `render::Geometry::slice(Plane)` cuts the 3D mesh by any plane into convex polygons, each inside one element with
+  per-vertex interpolants (`render/geometry.hpp`); `slice_view` (`render/scene.cpp:872`) colours them.
+  `Geometry::owner_pieces` already splits any such polygon into each node's control-volume piece (tensor cells at
+  their mid-planes, simplices by largest barycentric weight); the views draw regions with it and `shown_pieces`
+  uses it to hide regions on slices. Its boundaries cross each mixed edge at its midpoint, as the solver's do. The app's
+  slice settings are axis-aligned only (`ViewSettings::Slice`: axis and position in um).
+- `cut_band_plot` (26b) plots the four levels along a cut line; `axis_box` (26h) draws ticked axes in um on 3D
+  scenes; the probe (26e, `app/probe.cpp`) reads a field under the cursor; `film_scale` (26c YD5) fits one colour
+  scale over all snapshots of a transient run; `ViewSettings::point` already chooses the bias point.
+- No view draws a height surface. Every app view is also a `nitcad plot --view` (self_test, 26a).
+- No shipped deck has a heterojunction; `tests/assemble/heterojunction_test.cpp` builds its devices in code.
+  `render.image` already solves small versions of `examples/mosfet_2d.deck` and `mosfet_3d.deck` (26b's cut-band
+  images). The solved FinFET (`decks/finfet_3d.nitsweep`, 59 MB, 18 min to solve) is local and git-ignored, so it
+  can be a recorded check, not a test.
+
+**Approaches considered:** (A, chosen) a new render scene, `band_surface_view`, that takes the 2D mesh's elements
+or `Geometry::slice`'s polygons for one plane, splits each into the control-volume pieces the views already use (BSD2) and lifts the vertices by
+energy, drawn by the existing 3D renderer with an energy axis; (B) a "warp by value" option on the existing Field and
+Slice views — less code, but it changes those views (the owner wants them unchanged), lifts only one field at a time
+and cannot show the steps; (C) a separate 2D-section dataset (resample the plane on a regular grid, then a surface
+from the grid) — familiar from ParaView, but it adds a second interpolation and blurs the steps and the mesh's own
+resolution, and duplicates the slicing the geometry already does.
+
+**Standing conditions:** as Units 26a–26n. Field, Slice, Iso and every existing view draw the same images
+(reference images unchanged). No band-edge physics in `render` or `app`: the surface reads `BandDiagram` and the
+node materials only. Win32 + D3D12 + Direct2D only, no new dependency, no Python; models without Win32 types.
+Criteria fixed before code. Targeted Release tests per slice; full suites and Debug only on the owner's word; builds
+`-j 6`, runs on 6 threads. No screen automation. Nothing pushed or merged without authorization.
+
+**Left out:** the bands inside insulators (the solver leaves them NaN; computing an oxide's Ec from its affinity is
+solver work, a later unit if wanted, BSQ3); arbitrary oblique planes in the app (the render function takes any
+plane; the app keeps axis-aligned planes, BSQ2); animation of a sweep (stepping points is in, playback later);
+surfaces over curved or several planes at once; band structure E(k); new physics.
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| BSD1 | 0 | **The scene.** `render::band_surface_view(device, geometry, bands, BandSurfaceOptions)` → `FieldScene`. The base: a 2D device's elements, or for a 3D device the polygons of `Geometry::slice(plane)` (one plane; refused, with the reason, if it misses the device or lies in no semiconductor). Each base point (u, v) in the plane's own axes (2D: x, y; a 3D plane normal to axis k: the other two, in order) is drawn at height h = k_v · E, E in eV, as scene-y; the base plane's axes are scene-x and scene-z. One `TriangleBatch` per level shown (Ec, Ev, EFn, EFp), lit, `Shading::field`. | No new mesh processing: elements and `slice()` as Field and Slice use them. |
+| BSD2 | 0 | **Steps kept.** In an element whose nodes are not all of one material (or have a NaN, i.e. an insulator), the polygon is split by `Geometry::owner_pieces` — the same control-volume pieces every view already draws regions with (a tensor cell's mid-plane sub-boxes, a simplex's barycentric dual), so the step sits exactly where the Solid view's region boundary is. Pieces are grouped by their owner node's material (`node_region`); a piece takes the value interpolated over its material's nodes in the element only (weights renormalised). Each side is drawn to the boundary; a vertical wall joins the two heights along it (same colour rule, shaded darker), so a heterojunction's ΔEc is a cliff at the interface. Insulator sides are not drawn (a gap, as in the 1D band plot). Single-material elements are plain linear, exactly as Field/Slice. | Degenerate (zero-area) pieces and pieces with a non-finite value are dropped and counted (`dropped` on the scene, shown in the status line). |
+| BSD3 | 0 | **Energy axis.** `axis_box` gains an energy axis: the box's vertical edge ticked in eV (1-2-5) on the energy range shown, the two base axes in um as now. The default k_v makes the shown energy span 0.6 × the base's larger extent; `exaggeration` multiplies it (0.1–10). An energy range (lo, hi) clips the surfaces (pieces clipped, not dropped) and sets the axis. The length axes are named for the plane's axes (e.g. "x (µm)" and "y (µm)" on a z-plane), not the scene's, since energy takes the scene's vertical. The builder also exposes the energy at any (u, v) in double (the value function BSC2 and the probe read), so the drawn floats are never the reference. | 26h's layout rules unchanged for the two length axes. |
+| BSD4 | 0 | **Colour.** Each surface coloured by its own energy on one shared colour scale and colormap (viridis default, the app's), the colourbar in eV; option `by_level`: Ec blue, Ev red, EFn green, EFp orange (the 1D band plot's colours) with energy shown by shading only. Opacity 0.2–1 per scene (transparent batches below 1, the existing order-independent transparency). | |
+| BSD5 | 1 | **App view.** `ViewKind::band_surface` ("band surface", `nitcad plot --view band-surface`), offered on 2D and 3D devices with results. Its panel: levels (Ec, Ev, EFn, EFp check boxes; default Ec + Ev), plane (3D: axis x/y/z and position in um, default the plane through the device centre normal to z — the source–drain × depth section of the shipped MOSFET and FinFET decks (x source–drain, y height/depth, z width); a plane normal to x through the gate centre gives the across-the-fin section where the corner effect shows), exaggeration, opacity, energy range (auto or lo/hi), colour by energy or by level, bias point (the existing point control). Settings round-trip through `plot_arguments` as every view's do. | |
+| BSD6 | 1 | **Plane in the device.** A corner inset in the band surface view (the corner opposite 26h's view cube): the device's outline shell from the main camera's direction with the plane drawn as a translucent quad, updated as the plane moves; and the Solid, Field and Slice views draw the band-surface plane's outline when the cut is set (as 26b draws a cut line). Picking a slice plane in the Slice view and choosing Band surface keeps that plane. | Inset drawn as a second small scene in the same frame; no second window. |
+| BSD7 | 1 | **Probe.** Hover over a surface: the readout gives the level, E (eV), the 3D position (x, y, z um) and the material; with several levels shown, the nearest surface under the cursor answers, and the readout lists all shown levels at that (u, v). Values read through the same BSD2 rule as drawn. | New pick code: 26e's probe picks nodes (2D map nodes, 3D boundary-surface nodes), not points on a lifted surface; this is a ray–triangle pick on the drawn batches, the readout's layout reused. |
+| BSD8 | 2 | **Bias points.** Stepping the bias point redraws from that point's `BandDiagram`. The energy range and colour scale default to one fitted over all points of the run (`film_scale`'s approach, extended to band levels) so steps do not rescale; "fit this point" is an option. The plane, camera and settings are kept across points. | The data path is point-indexed, so a later playback is a timer over the same call. |
+| BSD9 | 2 | **Line on the surface.** A cut line (26b) lying in the band-surface plane is drawn on the surfaces as a polyline at its band heights, so the 1D diagram in the Curves tab and the surface can be read together. | |
+| BSD10 | — | **Commits:** this proposal, a commit per slice, then ARCHITECTURE (the views chapter, 6.x) and the user guide (band surface, with one image of the 2D MOSFET and one of the FinFET section), and the records. The owner may stop after any slice. | |
+
+**Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
+
+| # | Criterion |
+|---|---|
+| BSC1 | **Nothing else moves:** every existing reference image and the render, app and app_window suites pass unchanged; `nitcad plot` for every existing view writes the same bytes. |
+| BSC2 | **The line agrees with the 1D diagram:** for the 2D and 3D MOSFETs `render.image` solves (the 3D on the source–drain × depth plane through the gate centre), for 4 cut lines in the plane and 200 points each, the surface's energy at each point (read in double from the scene builder's value function, BSD1, before the float vertices) equals `cut_band_plot`'s Ec, Ev, EFn, EFp there to 1e-9 eV absolute wherever the point's element is single-material; at nodes, equal to the node's `BandDiagram` value to 1e-12 eV. The drawn float vertices agree with those values to float rounding (relative 1e-6 of the energy span). |
+| BSC3 | **Steps kept:** on a 2D device built in the test (two semiconductors with ΔEc ≠ 0, as `heterojunction_test`'s), the surface has a wall along the `owner_pieces` region boundary (the same segments the Solid view draws) whose top and bottom equal the two sides' renormalised Ec there to 1e-9 eV; on a fine uniform mesh the wall's height converges to ΔEc of the two materials (within 5 % at h = L_D / 4); no drawn triangle has vertices from both materials. Same on a Si/SiO2 edge: the semiconductor side reaches the region boundary and nothing is drawn on the oxide side. |
+| BSC4 | **Physics comes from the solver only:** `render` and the band-surface code in `app` include no `physics` header and read no material parameter other than the node's material identity (checked by an include test, as 26n's DC12 layering check). |
+| BSC5 | **Bias:** for the 2D MOSFET's sweep, the surface at point i equals one built from point i's `BandDiagram` alone (bit-identical vertices); stepping i → j → i gives bit-identical scenes; the default energy range is the same at every point. |
+| BSC6 | **Bad input:** a band vector of the wrong size, all-NaN bands, a plane missing the device or only in oxide, a zero-area element, and ±inf values each give a refusal naming the reason or a scene with the piece dropped and counted — never a crash, never a non-finite vertex (checked over all vertices). |
+| BSC7 | **Resolution:** on BSC3's 2D heterojunction device (cheap to solve) at three mesh densities (h, h/2, h/4), the BSC2 agreement holds at each; the scene's triangle count grows linearly with the base's elements (within 10 %). |
+| BSC8 | **Images:** reference images `bandsurface_mosfet2d` (Ec + Ev, viridis), `bandsurface_mosfet3d` (source–drain × depth plane), `bandsurface_hetero` (BSC3's device, by level) and the inset, compared as every reference image is, in a new `render.band_surface` test (Release only, as 26n's slow tests; not added to `render.image`, whose memory flake is open). **FinFET (recorded, not a test):** the solved `decks/finfet_3d.nitsweep` opened in the app on two planes — source–drain × height through the fin centre (z = 7 nm) and across the fin (normal to x, x = 42.5 nm): BSC2's agreement on 4 lines each, and both images saved to the records. |
+| BSC9 | **Speed:** building the scene ≤ 150 ms median for the 2D MOSFET and ≤ 400 ms for the 3D MOSFET plane in Release (the FinFET's recorded); a camera move stays within 26i's redraw budget. |
+| BSC10 | **Interaction:** by window messages only — open the 2D MOSFET, choose Band surface, uncheck Ev, set exaggeration 2, step the bias point, hover a known node: the readout's Ec equals the node's to the shown digits; open the 3D MOSFET, set the plane, and the Slice view shows the same plane. |
+| BSC11 | **Mutants:** at least 8 per slice caught (e.g. a piece given its neighbour's material; renormalising over all nodes; the energy axis off by k_v; the colour scale refitted per point; the plane axis order swapped; NaN pieces drawn at 0). |
+| BSC12 | **Layering:** `render` without `app` or Win32; the model and settings in `app` without Win32 headers; no new dependency. |
+
+**Questions (each with a recommendation; ruled by the standing "choose recommended" rule, 2026-11-11):**
+
+- **BSQ1 — what a heterojunction looks like.** (a) A vertical wall on the control-volume boundary between the
+  two materials' nodes (BSD2), where the box method places the interface and the Solid view draws it. (b) Plain linear interpolation (a one-element slope, as Field and the cut line show it).
+  (c) Flat tiles per control volume (exact box-method values, but a terraced look everywhere). **Recommended (a)**:
+  it is the owner's "preserve discontinuities" and the solver's own geometry; the 26b cut line keeps (b) (BSC1), and
+  BSC2 compares away from mixed elements. Ruled (a).
+- **BSQ2 — which planes.** (a) Axis-aligned planes in the app (as Slice), any plane in the render function and
+  `nitcad plot --plane-normal`. (b) A draggable oblique plane in the app now. **Recommended (a)**: every shipped
+  device is axis-aligned and the slice settings already are; (b) is a gizmo on its own. Ruled (a).
+- **BSQ3 — insulators.** (a) A gap over oxide (NaN, as the 1D plot). (b) Draw the oxide's Ec/Ev from its affinity and
+  gap — that is band-edge physics, which belongs in the solver's band diagram, not the renderer. **Recommended (a)**,
+  with (b) as a later solver unit if the owner wants the oxide barrier shown. Ruled (a).
+- **BSQ4 — default colour.** (a) By energy on one shared scale (the specification). (b) By level. **Recommended
+  (a)** with (b) a toggle. Ruled (a).
+- **BSQ5 — the energy range across bias points.** (a) One range fitted over the run's points (stepping keeps the
+  scale). (b) Refit per point. **Recommended (a)**, "fit this point" an option. Ruled (a).
+
+**Risks:** BSD2 runs `owner_pieces` on `slice()` polygons, which carry their element, so the pieces stay convex
+(as `shown_pieces` already does for hidden regions); but a plane lying exactly on an interface (a face of mixed elements)
+gives two candidate sides — the plane is nudged by 1e-9 of the extent toward the lower-index region and that is
+recorded. The energy axis on 26h's axis box is a new kind of axis (eV, not um); if its label layout fights the length
+axes, the energy ticks go on a separate vertical scale at the left of the view instead (recorded). The FinFET
+check needs the local solved file; if it is gone, it is re-solved (18 min) only on the owner's word.
+
+**Slice 0 record (2026-11-26; owner: "Start").** Commits a83d4f0 (value-mapped scene axes, `SceneAxis` /
+`FieldScene::axes`, scene helpers shared through `src/render/scene_detail.hpp`), 566b1dd (`band_material_keys`,
+`band_value`), 8c6b528 (`band_surface_view`, `band_energy_at`, 2D), 0c839a2 (3D planes, range clipping, reference
+images; the image tests' renderer, `check_image` and solved MOSFETs moved unchanged to
+`tests/render/image_check.hpp`), 451cc49 (a range flat to rounding widened). Tests run: `render.axes3d`,
+`render.scene`, `render.image`, `render.cut_line`, `render.band_surface` (15 cases, 61 906 assertions) and
+`render_layering`, all passing in Release; no full suite, no Debug (owner rules). BSD1–BSD4 met; BSC2 (1e-9 eV
+against `cut_band_plot` on 2D and 3D, 4 lines each), BSC3 (wall at the region boundary, each side's own value; no
+wall between same-material regions; oxide a gap), BSC6 (each refusal; NaN and ±inf pieces dropped and counted; no
+non-finite vertex), BSC8 (`bandsurface_mosfet2d`, `bandsurface_mosfet3d`, `bandsurface_hetero`) and BSC9 (median
+build 7.3 ms 2D, 9.6 ms 3D plane, limits 150 / 400 ms; Release only) checked. BSC11: 8 of 10 mutants caught at
+first; M10 (a flat range not widened) exposed a real defect — renormalised weights differ from 1 by an ulp, so one
+Ec everywhere gave a 1e-16 eV span and a 1e16 µm/eV height scale — fixed (a span under 1e-9 eV counts as one
+value) and its test now kills it; M3 (the fallback returning 0) survives: no test mesh reaches the fallback.
+Calls made while coding: scene axes x = u, y = E, z = v; `band_energy_at` takes the element (Geometry has no point
+location); no plane nudge (a plane on a node plane between materials already gives the right side's pieces, pinned
+by a test, so the Risks paragraph's nudge was not needed); BSC4 read as material identity by equal semiconductor
+parameters, the solver's own test, with `render_layering` keeping physics headers out. The 3D MOSFET reference is
+byte-identical to the 2D one (that test device is z-invariant). Limitation: `render.image`'s NG5 window-memory check
+(image_test.cpp, ratio 1.0137 against 1.01) fails intermittently on this machine at the base commit too (1 of 8;
+3 of 8 at slice 0's head) — the known flake, not this slice; gates re-ran it. Deferred: hidden regions are checked
+but not hidden; `band_energy_at` rebuilds the material keys per call; the enhanced look's feature edges draw stray
+lines on steep junction slopes (`set_look`, shared code).
+
+**Slice 1 record (2026-11-26; owner: "start slice 1").** Commits 23cc567 (BSD5 model and command: `ViewKind::
+band_surface` "band-surface", settings `band_levels`, `exaggeration`, `band_opacity`, `by_level`, `band_plane`, the
+energy range on `range`; `nitcad plot --view band-surface --band-levels --exaggeration --opacity --by-level
+--plane`; the app's images equal the command's byte for byte, 2D and 3D), f6a14ef (BSD6: `FieldScene::plane_inset`
+and `plane_inset_figure`, drawn top right in Direct2D; `add_plane_outline` on a 3D device's solid, field and slice
+views, `--plane` there too; references `bandsurface_inset` new and `bandsurface_mosfet3d` rewritten with its
+inset), 7beaaa7 (BSD7: `app::band_pick`, a ray–triangle pick on the drawn levels, read back through
+`render::band_energy_at`; `band_hover_text`; `render::band_owner`), 2f47556 (the window: Ec, Ev, EFn, EFp, Colour by
+level, Height × and Opacity in the inspector; the plane on the Slice plane / Slice at controls, one plane with the
+Slice view's; the hover readout), f3a5102 (a pick-from-above test). Tests run (Release): `app.view_settings`,
+`app.probe`, `app.layout`, `app.app_state`, `app_layering`, `app_window.window`, `app_window.analysis_window`,
+`app_window.hover_window`, `render.band_surface`, `render.axes3d`, `render.scene`, `render.image`,
+`render.cut_line`, `render_layering`: 14 of 14 pass; no full suite, no Debug. BSC10 checked by window messages (2D:
+Band surface chosen, Ev off, height 2, opacity refused out of range, point 0 stepped to, a substrate node hovered:
+the readout is `band_pick`'s and its Ec within 2e-3 eV of the node's, the cursor landing within a pixel; 3D: the
+plane set to x = 1 µm, the Slice view shows it, the Solid view outlines it, a Slice plane chosen there is the band
+surface's). BSC11: 10 mutants, one did not build; 7 of 9 caught at first, M6 (the farthest surface answering) then
+killed by a pick from above; M8 (the plane not copied to the slices) is equivalent, the Slice view's default taking
+the band plane. **Found and fixed:** choosing a bias point in the View tab's Point list snapped back to the shown
+point (stopping playback re-selected it before the choice was read) — a defect since Unit 26c. Calls made: the
+inset shows the device's bounding box (every shipped device is a box) seen with the camera applied to the device's
+x, y, z; the readout names the region, not the material (the material is a physics type, BSC4); a cut line is not
+passed to the band surface until BSD9. Deferred: the slice controls keep their "Slice" labels on the band surface;
+`band_pick` builds a `Locator` per hover (the HG7 budget not measured on the FinFET); the FinFET check (BSC8) waits
+for the solved file.
+
+**Slice 2 record (2026-11-26; owner: "start slice 2 use max 3 cores").** Commits 7e18331 (render:
+`band_energy_range`, the shown levels' lowest and highest finite semiconductor value over every point, widened as a
+flat surface is; `BandSurfaceOptions::cut`, a cut line in the base plane drawn on each shown level as an on-top black
+line with a white core, "band cut", its segments split in 16 so a step lands within 1/32 of an element and stands
+vertical; a line off a 3D plane is not drawn), 6cd5dc4 (BSD8 and BSD9 in the app model, `nitcad plot --fit-point`
+and `--cut` on the band-surface view, and the window's Fit this point box; the cut line on that view is drawn on the
+surfaces, not on the base), af7819e (the --fit-point image check moved to where the point's range differs). Precedence:
+a range set wins, then Fit this point, else the run's range. Tests run (Release, 3 cores): `render.band_surface`
+21/21 cases, `app views 26o*`, `app window 26o*`, and build\rt2.cmd's 14 tests (window, app, render, layering):
+all pass; no full suite, no Debug. BSC5 checked: on the 2D MOSFET's sweep every point's scene has the run's range
+and vertices bit-identical to one built from that point's bands alone on that range; stepping 0 → i → 0 gives the
+same scene; the app's images equal nitcad plot's byte for byte with and without Fit this point and with a cut line.
+BSC11: 10 mutants, one did not build; 8 of 9 caught at first, M2 (`--fit-point` ignored by nitcad plot) then killed
+— on this run Ec and Ev move little (the first point's range is the run's to 1e-7 eV) and EFn, EFp stay flat, so the
+check now uses the last point, 2e-4 eV off. Calls made: drawing a cut line still opens its band diagram on the Curves
+tab, as on every view (the window test returns to the View tab); the cut line is not drawn on the base under the
+surfaces. Deferred: playback over the run's points (BSD8 keeps the call point-indexed for it); BSC8 (FinFET) waits
+for the solved file.
+
+**Docs record (2026-11-26; owner: "The closing docs commit (BSD10) go ahead").** ARCHITECTURE 6.14 gains the
+"As built, Unit 26o" block and the 11.3 visualization row its entry; the README (the user guide) gains a Band surface
+section with its options and `docs/images/mosfet_2d_band_surface.png` (`nitcad plot examples\mosfet_2d.deck --view
+band-surface --size 1200x800`, the last point, VG = 1.5 V). Its two example commands were run on the
+Release build (the 3D one on `examples/mosfet_3d.deck`, plane z = 0.5 µm). Not done: the FinFET section image BSD10
+names, which waits with BSC8 for a solved FinFET run. No code changed; no tests run.
+
+**Labels (2026-11-26; owner: "fix it").** On the band surface the slice controls set its plane, so there they read
+"Plane" and "Plane at (µm)" and the section "PLANE AND CLIP"; on every other view "Slice plane", "Slice at (µm)" and
+"SLICE AND CLIP" as before (`main_window.cpp`). The 26o window test checks both labels on the band surface and back
+on the Slice view. Tests run (Release, 3 cores): the 14 tests of `build\rt2.cmd`, all pass; no full suite, no Debug.
+
+**Slice 3 — playback and the FinFET check (proposed 2026-11-26; owner: "playback and the FinFET check go ahead,
+check research paper find a legit FinFET computation check on it"; recommended options taken, standing rule).**
+Criteria fixed here, before code and before the FinFET is solved.
+
+| # | Change | Notes |
+|---|---|---|
+| BSD11 | **Playback.** The band surface plays any run with two or more points (a DC sweep's bias points, a trace's, a transient's snapshots) with 26c's controls (YD5): the slider, Play/Pause, the step keys, `playback_fps`. The label is the snapshot's time on a transient, else the point's bias label from `point_labels`, with "(k of n)". Frames use the run's energy range (BSD8) unless Fit this point; the plane, camera and levels are kept. | `takes_band_playback(w, s)` in `app` (pure), `can_play` takes either. Field playback unchanged. |
+| BSD12 | **FinFET check, a hidden test.** `[.finfet]` in `app.view_settings`, run on a solved `decks/finfet_3d.deck` named by `NITCAD_FINFET_DECK`; not in any suite (the solve takes 30+ min). It checks BSC14 and BSC15 and prints the numbers for the record. | The solved file stays git-ignored. |
+
+| # | Criterion |
+|---|---|
+| BSC13 | **Playback (window test, 2D MOSFET sweep):** the controls are shown on the band surface and not on its Solid view; the step keys land on the point asked for, the label reading "(1 of n)" on the first; Play from the first reaches the last in order, no point before its time (as YD5), each shown point's scene the same as `build_scene` for that point, the message loop under `wg1_limit_ms`; Pause holds. The transient field playback test passes unchanged. |
+| BSC14 | **FinFET planes (completes BSC8):** the deck solved on this branch's code. On z = 7 nm (lines along x at y = 25, 32, 40, 48 nm) and on x = 42.5 nm (lines along z at the same y), `band_energy_at` agrees with `cut_band_plot` within 1e-9 eV at every sample in a silicon-only element, all four levels, at the first and last points. Both images saved for the record and the user guide; the FinFET plane's build time recorded (BSC9). |
+| BSC15 | **Physics check against published theory.** In subthreshold, the drain current of a MOSFET is thermionic emission over the source–channel barrier, I_D ∝ exp(−E_b/kT) (the top-of-the-barrier model: Lundstrom and Guo, *Nanoscale Transistors*, Springer 2006; Taur and Ning, *Fundamentals of Modern VLSI Devices*, the subthreshold current), so the barrier falls with gate bias at dE_b/dV_G = −kT ln 10 / S, S the subthreshold swing. Sellier et al. (Appl. Phys. Lett. 90, 073502, 2007) measured this gate coupling, α = 0.68, on tri-gate SOI FinFETs (1.4 nm SiO₂, 1e18 cm⁻³). Here E_b is read from the band surface's data: for each mesh plane x = const under the gate, the lowest Ec over the fin's silicon nodes; E_b is the highest of those (the top of the lowest path). S comes from the run's own I_D. **Pass:** for every gate step whose both ends have I_D < 1e-7 A, \|α / (kT ln 10 / S) − 1\| ≤ 0.10, with α = −ΔE_b/ΔV_G and S = ΔV_G / Δlog₁₀ I_D. Recorded beside it: α against Sellier's 0.68, and Ec at the top corner against the fin centre on x = 42.5 nm at V_G = 0.1 V (the corner effect, which they observed; report only, no pass/fail). |
+
+**Slice 3 record (2026-11-26; owner: "use 6 cores" during the slice).** Playback: `app::takes_band_playback` and
+`app::playback_label` (`view_settings`), `MainWindow::can_play` takes either view, the status says "Playing the bias
+points." on a sweep. FinFET: `decks/finfet_3d.deck` solved on this branch's build (PARDISO 2026.2, 6 threads, 510 s,
+17/17 points; the 20 Nov results no longer matched the mesh the deck builds now, so they were not used), outside
+the repository. Tests run (Release, 6 cores): the 14 tests of `build\rt2.cmd`, all pass (a first run, alongside the
+FinFET solve, failed 26h's JG8 smooth-move frame at 81 ms; it passed once the solve had ended); the hidden
+`[.finfet]` case passes (5,415 assertions). No full suite, no Debug, no mutants this slice.
+- **BSC13 met:** the new window test (2D MOSFET sweep, 16 points) plays every point in order, none early, each scene
+  vertex-identical to `build_scene`'s, the message loop under the WG1 limit; Pause holds; the transient playback test
+  passes unchanged.
+- **BSC14 met:** 1,096 level samples along x on z = 7 nm and 240 across on x = 42.5 nm, at points 0 and 16, all
+  within 1e-9 eV of `cut_band_plot`. Scene builds: 36.7 ms (z = 7 nm), 9.2 ms (x = 42.5 nm). Images:
+  `docs/images/finfet_band_surface.png` (z = 7 nm, V_G = 0.1 V) and `finfet_ec_across_fin.png` (Ec, fitted to the
+  point); BSD10's FinFET image is the first.
+- **BSC15 met:** subthreshold steps (I_D < 1e-7 A at both ends):
+
+  | V_G (V) | S (mV/dec) | α = −ΔE_b/ΔV_G | α / (kT ln 10 / S) |
+  |---|---|---|---|
+  | 0.00–0.05 | 65.0 | 0.8996 | 0.9819 |
+  | 0.05–0.10 | 65.2 | 0.8967 | 0.9818 |
+  | 0.10–0.15 | 65.7 | 0.8836 | 0.9758 |
+
+  The barrier top lies at x = 41–42.5 nm (the gate spans 30–55 nm). Above threshold the relation stops holding, as
+  it should: at 0.25–0.30 V the ratio is 1.49 and the barrier top moves toward the source; from 0.55 V the highest
+  lowest-Ec plane is the source contact's (x = 0), no barrier left. α ≈ 0.90 against Sellier et al.'s measured 0.68:
+  stronger gate control from the 0.77 nm EOT and the 1e16 fin (their 1.4 nm SiO₂, 1e18), as expected.
+  Corner effect at x = 42.5 nm, V_G = 0.1 V: Ec 0.2458 eV at the top corner, 0.2423 top centre, 0.2372 side middle,
+  0.2252 fin centre: the corner is 20.7 meV *above* the centre, so subthreshold conduction is in the fin's middle
+  (volume inversion), not along its edges. Sellier et al. saw edge channels in a heavily doped (1e18) fin and
+  advised lower doping against them; this fin is 1e16.
+
+**Closing the open items (2026-11-26; owner: "What's still open on 26o is small: go ahead and finish it").**
+- **Hidden regions:** `band_surface_view` leaves out the pieces of hidden regions' nodes (a gap, no wall); the cut
+  line skips them; `band_energy_range` takes `hidden_regions` and the app and `nitcad plot` pass the view's, so the
+  run's range is the shown surfaces'. Test: a hidden right half of the heterojunction device draws only the left
+  (no vertex past the interface, each at its own value), its outline 3.75 µm in the base; both hidden is refused
+  ("no band values"); the range drops the hidden region's 0.5 eV.
+- **Stray lines:** the shared feature-edge rule drew every crease over 30 degrees, and a lifted band surface creases
+  at every mesh step on a steep junction slope. Rather than change the rule (every other view's images would move,
+  BSC1), `TriangleBatch` gains `feature_edges` (default true) and the band surface's batches set it false; the
+  band surface draws its own "band outline" (the rims: per material key, edge parts covered by one piece, collinear
+  edges swept along their base line). Test: on a curved heterojunction surface set_look adds no feature edges; the
+  outline lies on x = 0, 0.875, 2 µm or y = 0, 1 µm and its base length is 16 µm (two levels × 8 µm of rims,
+  the step counted on each side); a field batch still takes feature edges. The three reference images
+  (`bandsurface_mosfet2d`, `_mosfet3d`, `_hetero`) were re-written with NITCAD_UPDATE_REFERENCES and looked at:
+  the stray creases are gone, the rims and step edges are drawn; the three guide images were re-rendered.
+- Tests run (Release, 6 cores): the 14 tests of `build\rt2.cmd`, all pass (`render.image`, every other view's
+  references, unchanged); `[.finfet]` passes again (FinFET plane builds 38.1 and 10.7 ms). No full suite, no
+  Debug, no mutants.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays

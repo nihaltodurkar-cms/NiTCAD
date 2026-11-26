@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <format>
+#include <limits>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -357,4 +359,125 @@ TEST_CASE("app probe 26e: the curve point nearest a pixel (HG2)", "[app]") {
     hit = app::pick_curve(one, W, H, pa.x, pa.y);
     REQUIRE(hit);
     CHECK(app::curve_text(one, *hit) == "VG (V) = 0.5\nI (A) = 0.5");
+}
+
+namespace {
+
+// A workspace with one point whose bands are known: Ec = 0.1 + 0.2 x (x in um), Ev = Ec - 1.12, EFn = -0.05,
+// EFp = 0; NaN on insulator nodes.
+app::Workspace banded(const std::string& name, const std::string& deck) {
+    app::Workspace w = unrun(name, deck);
+    const auto& m = w.device->mesh();
+    results::BiasPoint p;
+    p.fields.potential_V.assign(m.node_count(), 0.0);
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    for (std::size_t i = 0; i < m.node_count(); ++i) {
+        const bool oxide = w.device->is_insulator(static_cast<mesh::NodeId>(i));
+        const double ec = 0.1 + 0.2 * m.points()[i][0] * 1e4;
+        p.bands.conduction_eV.push_back(oxide ? nan : ec);
+        p.bands.valence_eV.push_back(oxide ? nan : ec - 1.12);
+        p.bands.electron_fermi_eV.push_back(oxide ? nan : -0.05);
+        p.bands.hole_fermi_eV.push_back(oxide ? nan : 0.0);
+    }
+    w.points.push_back(std::move(p));
+    return w;
+}
+
+}  // namespace
+
+TEST_CASE("app probe 26o: the band surface under a pixel, every shown level there (BSD7)", "[app]") {
+    const app::Workspace w = banded("probe_band2d", app_test::mosfet2d);
+    app::ViewSettings s;
+    s.kind = app::ViewKind::band_surface;
+    auto built = app::build_scene(w, s);
+    REQUIRE(built);
+    const auto& scene = std::get<render::FieldScene>(*built);
+    constexpr int W = 640, H = 480;
+    const double k = (*scene.axes)[1].per_unit;
+    // The pixel where Ec is drawn over (x, y) = (1.2, 0.5) um.
+    const double ec = 0.1 + 0.2 * 1.2;
+    const render::ScreenPoint at = render::screen_position(scene, W, H, {1.2f, static_cast<float>(k * ec), 0.5f});
+    const auto hit = app::band_pick(w, s, scene, W, H, at.x, at.y);
+    REQUIRE(hit);
+    CHECK(hit->level == 0);
+    const double tol = 2.0 * render::um_per_pixel(scene, W, H, {1.2, k * ec, 0.5});
+    CHECK_THAT(hit->position_um[0], WithinAbs(1.2, tol));
+    CHECK_THAT(hit->position_um[1], WithinAbs(0.5, tol));
+    CHECK(hit->position_um[2] == 0.0);
+    REQUIRE(hit->energy_eV[0]);
+    CHECK_THAT(*hit->energy_eV[0], WithinAbs(0.1 + 0.2 * hit->position_um[0], 1e-9));  // read exactly, not drawn
+    REQUIRE(hit->energy_eV[1]);
+    CHECK_THAT(*hit->energy_eV[1], WithinAbs(*hit->energy_eV[0] - 1.12, 1e-9));
+    CHECK_FALSE(hit->energy_eV[2]);  // not shown
+    CHECK_FALSE(hit->energy_eV[3]);
+    CHECK(hit->region == "silicon");
+    const std::string text = app::band_hover_text(*hit, 2);
+    CHECK(text == std::format("Ec = {:.4g} eV\nEv = {:.4g} eV\nx {:.3g}  y {:.3g} \xC2\xB5m\nsilicon", *hit->energy_eV[0],
+                              *hit->energy_eV[1], hit->position_um[0], hit->position_um[1]));
+    // Ev alone: the pixel over its surface answers with Ev.
+    s.band_levels = {false, true, false, false};
+    auto ev_only = app::build_scene(w, s);
+    REQUIRE(ev_only);
+    const auto& ev_scene = std::get<render::FieldScene>(*ev_only);
+    const double kv = (*ev_scene.axes)[1].per_unit;
+    const render::ScreenPoint ev_at = render::screen_position(ev_scene, W, H, {1.2f, static_cast<float>(kv * (ec - 1.12)), 0.5f});
+    const auto ev_hit = app::band_pick(w, s, ev_scene, W, H, ev_at.x, ev_at.y);
+    REQUIRE(ev_hit);
+    CHECK(ev_hit->level == 1);
+    CHECK_FALSE(ev_hit->energy_eV[0]);
+    CHECK(app::band_hover_text(*ev_hit, 2).starts_with("Ev = "));
+    // Off every surface: nothing.
+    CHECK_FALSE(app::band_pick(w, s, ev_scene, W, H, 3.0f, 3.0f));
+    // Other views: nothing.
+    app::ViewSettings field;
+    field.kind = app::ViewKind::field;
+    CHECK_FALSE(app::band_pick(w, field, ev_scene, W, H, ev_at.x, ev_at.y));
+}
+
+TEST_CASE("app probe 26o: the band surface of a 3D plane under a pixel (BSD7)", "[app]") {
+    const app::Workspace w = banded("probe_band3d", app_test::mosfet3d);
+    app::ViewSettings s;
+    s.kind = app::ViewKind::band_surface;
+    s.band_plane = app::ViewSettings::Slice{2, 0.4};
+    auto built = app::build_scene(w, s);
+    REQUIRE(built);
+    const auto& scene = std::get<render::FieldScene>(*built);
+    constexpr int W = 640, H = 480;
+    const double k = (*scene.axes)[1].per_unit;
+    const double ec = 0.1 + 0.2 * 1.2;
+    // The z plane's base: scene x is x, scene z is y.
+    const render::ScreenPoint at = render::screen_position(scene, W, H, {1.2f, static_cast<float>(k * ec), 0.5f});
+    const auto hit = app::band_pick(w, s, scene, W, H, at.x, at.y);
+    REQUIRE(hit);
+    CHECK(hit->level == 0);
+    CHECK(hit->position_um[2] == 0.4);
+    const double tol = 2.0 * render::um_per_pixel(scene, W, H, {1.2, k * ec, 0.5});
+    CHECK_THAT(hit->position_um[0], WithinAbs(1.2, tol));
+    CHECK_THAT(hit->position_um[1], WithinAbs(0.5, tol));
+    REQUIRE(hit->energy_eV[0]);
+    CHECK_THAT(*hit->energy_eV[0], WithinAbs(0.1 + 0.2 * hit->position_um[0], 1e-9));
+    CHECK(app::band_hover_text(*hit, 3).find("  z 0.4 \xC2\xB5m") != std::string::npos);
+}
+
+TEST_CASE("app probe 26o: seen from above, the nearest surface answers (BSD7)", "[app]") {
+    const app::Workspace w = banded("probe_band_above", app_test::mosfet2d);
+    app::ViewSettings s;
+    s.kind = app::ViewKind::band_surface;
+    s.elevation = 89.0f;  // Ec over Ev under one pixel
+    auto built = app::build_scene(w, s);
+    REQUIRE(built);
+    const auto& scene = std::get<render::FieldScene>(*built);
+    constexpr int W = 640, H = 480;
+    const double k = (*scene.axes)[1].per_unit;
+    const double ec = 0.1 + 0.2 * 1.2;
+    const render::ScreenPoint at = render::screen_position(scene, W, H, {1.2f, static_cast<float>(k * ec), 0.5f});
+    const auto hit = app::band_pick(w, s, scene, W, H, at.x, at.y);
+    REQUIRE(hit);
+    CHECK(hit->level == 0);
+    s.band_levels = {false, true, false, false};
+    auto ev = app::build_scene(w, s);
+    REQUIRE(ev);
+    const auto below = app::band_pick(w, s, std::get<render::FieldScene>(*ev), W, H, at.x, at.y);
+    REQUIRE(below);
+    CHECK(below->level == 1);
 }

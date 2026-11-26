@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "NiTCAD/app/view_settings.hpp"
 #include "NiTCAD/app/workspace.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/render/scene.hpp"
@@ -78,5 +79,25 @@ struct CurveHit {
 // The readout of a curve hit: the series name when the plot has more than one, then "<x label> = <x>" and
 // "<y label> = <y>", each value as {:.4g}.
 [[nodiscard]] std::string curve_text(const render::PlotScene& scene, const CurveHit& hit);
+
+// --- band surface readout (Unit 26o, BSD7) ---------------------------------------------------------------
+
+// The band surface drawn under a pixel: the nearest shown surface the pixel's ray meets (a ray-triangle pick on
+// its drawn batches), the device point under it (on a 3D view, in the plane), and every shown level there read
+// in double as the surface draws them (render::band_energy_at; nullopt where a level has no value or is not
+// shown), with the region whose control volume holds the point.
+struct BandHit {
+    int level = 0;  // Ec, Ev, EFn, EFp (render::BandLevel order)
+    std::array<std::optional<double>, 4> energy_eV{};
+    std::array<double, 3> position_um{};
+    std::string region;
+};
+// Nothing off every surface, or when the settings are not a band surface view.
+[[nodiscard]] std::optional<BandHit> band_pick(const Workspace& w, const ViewSettings& s,
+                                               const render::FieldScene& scene, int width, int height, float x,
+                                               float y);
+// "<level> = <E> eV" for the level under the cursor, then the other shown levels in order ("<level>: no value"
+// where none), "x <x>  y <y> µm" (with "  z <z>" in 3D), and the region. E as {:.4g}, positions as {:.3g}.
+[[nodiscard]] std::string band_hover_text(const BandHit& hit, int dimension);
 
 }  // namespace NiTCAD::app

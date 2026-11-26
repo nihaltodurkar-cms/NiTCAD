@@ -1,5 +1,6 @@
 #include "NiTCAD/render/scene.hpp"
 #include "NiTCAD/render/vectors.hpp"
+#include "scene_detail.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1611,5 +1612,21 @@ std::expected<PlotScene, base::Error> quality_plot(std::span<const double> angle
     p.series = {std::move(bins), std::move(threshold)};
     return p;
 }
+
+// Unit 26o: the shared helpers (scene_detail.hpp), forwarding to this file's own.
+namespace detail {
+
+void fan(TriangleBatch& batch, std::vector<Point> pts, const std::vector<float>& values, const Rgba& color,
+         const Point& normal) {
+    render::fan(batch, std::move(pts), values, color, normal);
+}
+
+void frame(FieldScene& s, const ViewOptions& o) { render::frame(s, o); }
+
+std::expected<void, base::Error> check_view(const device::Device& d, const Geometry& g, const ViewOptions& o) {
+    return render::check_view(d, g, o);
+}
+
+}  // namespace detail
 
 }  // namespace NiTCAD::render

@@ -62,6 +62,9 @@ struct TriangleBatch {
     bool transparent = false;  // drawn with order-independent transparency (alpha below 1)
     std::vector<SceneVertex> vertices;  // three per triangle, counterclockwise from the front
     Finish finish = Finish::matte;
+    // Whether set_look's enhanced look draws this batch's feature edges (Unit 26f). The band surface (Unit 26o)
+    // draws its own outline instead: on a lifted surface the 30-degree creases mark every steep mesh step.
+    bool feature_edges = true;
 };
 
 struct LineBatch {
@@ -84,6 +87,21 @@ struct Colorbar {
     Colormap map = Colormap::turbo;
     ColorScale scale;
     std::string title;  // the field and its unit, e.g. "n (cm⁻³)"
+};
+
+// Unit 26o (BSD3): a scene axis that measures something other than um: scene coordinate = origin + per_unit *
+// value, ticked in value's units under `title` (e.g. a band surface's height, "E (eV)").
+struct SceneAxis {
+    std::string title;
+    double origin = 0.0;
+    double per_unit = 1.0;
+};
+
+// Unit 26o (BSD6): an axis-aligned plane (normal along `axis`, at at_um) in a device's bounding box, um.
+struct PlaneInset {
+    std::array<double, 3> lo_um{}, hi_um{};
+    int axis = 2;
+    double at_um = 0.0;
 };
 
 // How a 3D FieldScene is shaded (Unit 26f, KD1): classic, one light and ambient on white, as since Unit 25a;
@@ -128,6 +146,10 @@ struct FieldScene {
     bool ground_shadow = true;
     // Unit 26h (JD1, JQ3): the enhanced look's axis box with um ticks (axes3d.hpp); classic never draws it.
     bool show_axis_box = true;
+    // Unit 26o (BSD3): what each scene axis measures, for the axis box's ticks and titles; empty, x, y and z in um.
+    std::optional<std::array<SceneAxis, 3>> axes;
+    // Unit 26o (BSD6): a 3D band surface's plane in its device, drawn in a corner inset (plane_inset_figure).
+    std::optional<PlaneInset> plane_inset;
 };
 
 // --- fields -------------------------------------------------------------------------------------

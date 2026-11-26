@@ -83,7 +83,8 @@ std::vector<Segment> feature_edges(const TriangleBatch& batch, float angle_deg) 
 }
 
 bool takes_feature_edges(const TriangleBatch& batch) noexcept {
-    return batch.lit && batch.name != "arrows" && batch.name != "isosurface" && batch.name != "outline";
+    return batch.feature_edges && batch.lit && batch.name != "arrows" && batch.name != "isosurface" &&
+           batch.name != "outline";
 }
 
 void set_look(FieldScene& scene, Look look) {
