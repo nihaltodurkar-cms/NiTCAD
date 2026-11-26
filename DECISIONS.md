@@ -4890,6 +4890,71 @@ suites) waits for the owner's word.
 - **Slice 2: docs and suites.** ARCHITECTURE.md as-built block and the 11.3 row; this record completed; TAC11 on the
   owner's word.
 
+### Unit 69 — total-dose oxide charge, opt-in (proposed 2026-11-26; on `physics/total-dose`)
+
+**Owner request (2026-11-26):** "what next to implement?", then "start Total-dose oxide charge" — the radiation row's
+next step in ARCHITECTURE.md 11.3 after Unit 65. Ionizing dose leaves holes trapped in the gate oxide (N_ot) and
+builds interface traps (N_it); both shift the threshold and the sub-threshold slope of an MOS device. The figure of
+merit is the threshold or flat-band shift against dose.
+
+**Standing conditions.** Opt-in. A deck without the dose keys builds the same device as on `main`, so everything is
+bit-identical. Criteria are fixed before code and never loosened after a run (TVM2). Release and Debug suites with
+`/W4 /WX`, run only on the owner's word. Commits stay local; no push, PR or merge without the owner's word. TDQ1–TDQ6
+ruled as recommended under the owner's standing instruction (2026-11-11, "always choose recommended").
+
+**Model.** Dose turns into charges the solver already has (Unit 15b's fixed charge and trap bands); nothing in
+assembly changes.
+- Trapped holes, as a sheet at the semiconductor–oxide interface (TDQ1):
+  N_ot = f_ot · f_y(E_ox) · g₀ · D · t_ox, added to the fixed charge Q_f.
+  D the dose [rad(SiO₂)], t_ox the oxide thickness [cm], f_ot the hole trapping fraction (0..1), g₀ = 8.1e12
+  pairs cm⁻³ rad⁻¹ (SiO₂: 2.2 g/cm³ · 6.2415e13 eV g⁻¹ rad⁻¹ / 17 eV = 8.08e12, the literature's rounded 8.1e12).
+- Charge yield (Co-60, TDQ3): f_y(E) = ((E + E₀)/(E + E₁))^m, E₀ = 0.1 MV/cm, E₁ = 1.35 MV/cm, m = 0.9, E the
+  oxide field magnitude during irradiation [V/cm], given in the deck (TDQ2). Holes are taken to reach the
+  semiconductor interface (positive gate bias, the worst case).
+- Interface traps (TDQ4, meshed interfaces only): ΔN_it = k_it · D [cm⁻²], uniform over ±0.5 eV about E_i as two
+  trap bands of D_it = ΔN_it / 1 eV each: donor-like over [−0.5, 0] eV, acceptor-like over [0, 0.5] eV, capture
+  cross-sections 1e-15 cm² (the deck's default). Their charge follows their occupancy, as any trap band's.
+
+**Sources.** The yield form and constants are Oldham and McLean, IEEE Trans. Nucl. Sci. 50(3), 2003, quoted from
+memory; the paper is not in hand (no papers in the repo). Recorded open: the owner to supply it and confirm the
+constants. No published threshold-shift data compared (as KQ7).
+
+**Design (TDD1–TDD4).**
+
+| # | Design |
+|---|---|
+| TDD1 | Physics: new `include/NiTCAD/physics/total_dose.hpp` and `src/physics/total_dose.cpp`: `charge_yield(field_V_cm)` and `oxide_trapped_charge_cm2(dose_rad, field_V_cm, thickness_cm, trapping_fraction)`, the constants beside them. Inputs validated by the deck (TDD2); the functions assert their preconditions. |
+| TDD2 | Deck keys, on a gate contact and on `[interface]`: `dose` (rad, > 0), `dose_field` (V/cm, ≥ 0), `hole_trapping` (0..1, required with `dose`, TDQ6); on `[interface]` also `dose_oxide_thickness` (a length, required with `dose`; a gate uses its `oxide_thickness`) and `interface_trap_yield` (cm⁻² rad⁻¹, ≥ 0, default 0). After the section is read, N_ot is added to `fixed_charge` and, for k_it > 0, the two bands are appended to the traps. |
+| TDD3 | Refused (`invalid_input`, at the key's line): `dose` ≤ 0 or not finite; another dose key without `dose`; `dose` without `hole_trapping` (or, on an interface, without `dose_oxide_thickness`); `hole_trapping` outside [0, 1]; `dose_field` < 0; `interface_trap_yield` < 0 or on a gate. An interface between two semiconductors is refused by the existing rule. |
+| TDD4 | App: the keys in `src/app/deck_vocabulary.cpp`. ARCHITECTURE.md: an as-built block and the radiation row of 11.3. |
+
+**Questions (ruled as recommended, 2026-11-26, standing instruction).**
+
+| # | Question | Options | Ruling |
+|---|---|---|---|
+| TDQ1 | Where the trapped holes sit | (a) a sheet at the semiconductor–oxide interface, added to Q_f (thin gate oxides: centroid near the interface; no new assembly); (b) a volume charge with a centroid in meshed insulators (new insulator charge assembly; compact gates cannot hold it) | **(a)**; (b) recorded as a follow-up |
+| TDQ2 | The oxide field during irradiation | (a) given in the deck; (b) solved from an irradiation bias first (the trapped charge changes the field it depends on: an outer iteration) | **(a)** |
+| TDQ3 | The yield | (a) Oldham–McLean's Co-60 form, constants in code, source recorded open; (b) the constants as deck keys; (c) wait for the paper | **(a)**: no second source to choose between; keys added if X-ray or proton yields are wanted |
+| TDQ4 | Interface traps | (a) ΔN_it = k_it D as two bands about E_i, meshed interfaces only; (b) N_ot only; (c) also on compact gates (needs traps on `GateStack`, new gate physics) | **(a)** |
+| TDQ5 | Annealing, dose rate (ELDRS), border traps | (a) out of scope, recorded follow-ups; (b) built now | **(a)** |
+| TDQ6 | Default f_ot | (a) none: required with `dose` (it is the oxide's hardness, no universal value); (b) 1, the worst case | **(a)** |
+
+**Criteria (TDC1–TDC6), fixed before code.**
+
+| # | Criterion |
+|---|---|
+| TDC1 | Off: every existing test passes unchanged; decks without the keys build equal `DeviceDescription`s (by construction: the deck path is untouched when no key is present). |
+| TDC2 | Formula: g₀ = 8.1e12; f_y(0) = (E₀/E₁)^m, f_y(1 MV/cm) = (1.1/2.35)^0.9 and f_y → 1 at 1e12 V/cm, each to 1e-12 relative; N_ot linear in D, t_ox and f_ot; N_ot = 0 at f_ot = 0. |
+| TDC3 | Gate equivalence: a MOS-capacitor deck with `dose` builds a device equal to the same deck with `fixed_charge` = Q_f + N_ot (the value printed `%.17g`), and their solved C–V points are bit-identical. |
+| TDC4 | Interface equivalence: a meshed-oxide MOS deck with `dose` and `interface_trap_yield` builds a device equal to the deck with that `fixed_charge` and the two `trap_band` lines written out. |
+| TDC5 | Refusals: each TDD3 case refused at its line, with the message naming the key. |
+| TDC6 | Suites: the deck vocabulary test passes with the new keys; Release `/W4 /WX` full suite on the owner's word; Debug only on the owner's word. |
+
+No flat-band physics check is added: TDC3/TDC4 reduce the feature to Unit 15b's fixed charge and trap bands, whose
+flat-band shift (−q Q_f / C_ox to 6e-13) and trap tests already pass.
+
+**Slices.** Slice 0: TDD1 with TDC2. Slice 1: TDD2–TDD3 with TDC3–TDC5. Slice 2: TDD4, docs and TDC6.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
