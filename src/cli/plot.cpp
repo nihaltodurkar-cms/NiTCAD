@@ -1109,7 +1109,7 @@ int plot(int argc, char** argv) {
         b.exaggeration = o.exaggeration;
         b.opacity = o.opacity;
         b.range_eV = o.range;
-        if (!o.range && !o.fit_point) b.range_eV = band_energy_range(*device, points, o.band_levels);
+        if (!o.range && !o.fit_point) b.range_eV = band_energy_range(*device, points, o.band_levels, view.hidden_regions);
         b.cut = cut;
         b.by_level = o.by_level;
         b.map = *colormap;

@@ -2888,6 +2888,25 @@ FinFET solve, failed 26h's JG8 smooth-move frame at 81 ms; it passed once the so
   (volume inversion), not along its edges. Sellier et al. saw edge channels in a heavily doped (1e18) fin and
   advised lower doping against them; this fin is 1e16.
 
+**Closing the open items (2026-11-26; owner: "What's still open on 26o is small: go ahead and finish it").**
+- **Hidden regions:** `band_surface_view` leaves out the pieces of hidden regions' nodes (a gap, no wall); the cut
+  line skips them; `band_energy_range` takes `hidden_regions` and the app and `nitcad plot` pass the view's, so the
+  run's range is the shown surfaces'. Test: a hidden right half of the heterojunction device draws only the left
+  (no vertex past the interface, each at its own value), its outline 3.75 µm in the base; both hidden is refused
+  ("no band values"); the range drops the hidden region's 0.5 eV.
+- **Stray lines:** the shared feature-edge rule drew every crease over 30 degrees, and a lifted band surface creases
+  at every mesh step on a steep junction slope. Rather than change the rule (every other view's images would move,
+  BSC1), `TriangleBatch` gains `feature_edges` (default true) and the band surface's batches set it false; the
+  band surface draws its own "band outline" (the rims: per material key, edge parts covered by one piece, collinear
+  edges swept along their base line). Test: on a curved heterojunction surface set_look adds no feature edges; the
+  outline lies on x = 0, 0.875, 2 µm or y = 0, 1 µm and its base length is 16 µm (two levels × 8 µm of rims,
+  the step counted on each side); a field batch still takes feature edges. The three reference images
+  (`bandsurface_mosfet2d`, `_mosfet3d`, `_hetero`) were re-written with NITCAD_UPDATE_REFERENCES and looked at:
+  the stray creases are gone, the rims and step edges are drawn; the three guide images were re-rendered.
+- Tests run (Release, 6 cores): the 14 tests of `build\rt2.cmd`, all pass (`render.image`, every other view's
+  references, unchanged); `[.finfet]` passes again (FinFET plane builds 38.1 and 10.7 ms). No full suite, no
+  Debug, no mutants.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays

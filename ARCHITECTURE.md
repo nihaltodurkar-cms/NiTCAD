@@ -3312,8 +3312,14 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   every subthreshold step (bound 10%). The gate coupling α ≈ 0.90 (Sellier et al., APL 90, 073502, measured 0.68 on
   a 1.4 nm-oxide, 1e18 cm⁻³ tri-gate). Across the fin at V_G = 0.1 V, Ec is lowest at the fin centre and 20.7 meV
   higher at the top corner: no corner effect in this lightly doped (1e16) fin.
-- **Not done:** hidden regions are checked but not hidden; the enhanced look's feature edges draw stray lines on
-  steep junction slopes (shared `set_look` code).
+- **Hidden regions (YD4):** a hidden region's pieces are left out, a gap as an insulator's, with no wall to it; the
+  run's energy range (`band_energy_range`'s `hidden_regions`) and a cut line skip them too.
+- **Outline:** the band surface's batches set `TriangleBatch::feature_edges = false`, so the enhanced look's
+  30-degree creases (which marked every mesh step on a steep junction slope) are not drawn on them; every other
+  view's batches keep the default and draw as before. Instead the view draws "band outline" in the feature edges'
+  ink, in both looks: per material, the parts of the pieces' edges covered once, found by sweeping collinear edges
+  along each base line so a split element's half-edges cancel its neighbour's whole edge. That is the device's
+  edge, the insulator and hidden-region gaps, and both sides of each step.
 
 ## 7. Language placement (D6: C and Fortran deferred)
 

@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <variant>
 
 #include "scene_detail.hpp"
@@ -169,6 +170,81 @@ Point lerp(const Point& a, const Point& b, double t) noexcept {
     return {a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t};
 }
 
+// A part of the outline: a stretch of piece `piece`'s edge in the base plane.
+struct Rim {
+    std::size_t piece;
+    Point a, b;
+};
+
+// The rims: per material key, the parts of the pieces' edges that one piece covers, not two. Collinear edges are
+// grouped by their base line (direction and offset rounded far below a mesh spacing) and swept along it, so an
+// element split into pieces and its unsplit neighbour cancel along their shared edge although the one has two
+// halves where the other has one edge. What is left is each material's rim: the device's edge, an insulator's or
+// a hidden region's gap, and each side of a step between materials.
+std::vector<Rim> rims_of(const std::vector<Piece>& pieces, const Base& base) {
+    double ulo = std::numeric_limits<double>::infinity(), uhi = -ulo, vlo = ulo, vhi = uhi;
+    for (const Piece& p : pieces) {
+        for (const Point& x : p.points) {
+            ulo = std::min(ulo, dot(x, base.u));
+            uhi = std::max(uhi, dot(x, base.u));
+            vlo = std::min(vlo, dot(x, base.v));
+            vhi = std::max(vhi, dot(x, base.v));
+        }
+    }
+    const double tol = 1e-9 * std::max({uhi - ulo, vhi - vlo, 1e-30});
+    struct Seg {
+        double t0, t1;
+        std::size_t piece;
+        Point p0, p1;
+    };
+    std::map<std::tuple<std::int32_t, std::int64_t, std::int64_t, std::int64_t>, std::vector<Seg>> lines;
+    for (std::size_t i = 0; i < pieces.size(); ++i) {
+        const Piece& p = pieces[i];
+        for (std::size_t j = 0; j < p.points.size(); ++j) {
+            Point p0 = p.points[j], p1 = p.points[(j + 1) % p.points.size()];
+            const double u0 = dot(p0, base.u), v0 = dot(p0, base.v), u1 = dot(p1, base.u), v1 = dot(p1, base.v);
+            const double len = std::hypot(u1 - u0, v1 - v0);
+            if (len <= tol) continue;
+            double du = (u1 - u0) / len, dv = (v1 - v0) / len;
+            if (du < 0.0 || (du == 0.0 && dv < 0.0)) du = -du, dv = -dv;
+            const double offset = du * v0 - dv * u0;
+            double t0 = du * u0 + dv * v0, t1 = du * u1 + dv * v1;
+            if (t0 > t1) std::swap(t0, t1), std::swap(p0, p1);
+            lines[{p.key, std::llround(du * 1e8), std::llround(dv * 1e8), std::llround(offset / tol / 16.0)}].push_back(
+                {t0, t1, i, p0, p1});
+        }
+    }
+    std::vector<Rim> rims;
+    for (auto& [line, segs] : lines) {
+        // Events along the line: an end (-1) before a start (+1) at one place.
+        std::vector<std::pair<double, std::ptrdiff_t>> events;
+        for (std::size_t s = 0; s < segs.size(); ++s) {
+            events.push_back({segs[s].t0, static_cast<std::ptrdiff_t>(s) + 1});
+            events.push_back({segs[s].t1, -static_cast<std::ptrdiff_t>(s) - 1});
+        }
+        std::ranges::sort(events);
+        std::vector<std::size_t> active;
+        std::size_t e = 0;
+        while (e < events.size()) {
+            const double at = events[e].first;
+            for (; e < events.size() && events[e].first <= at + tol; ++e) {
+                const std::ptrdiff_t id = events[e].second;
+                if (id > 0) {
+                    active.push_back(static_cast<std::size_t>(id - 1));
+                } else {
+                    std::erase(active, static_cast<std::size_t>(-id - 1));
+                }
+            }
+            if (e == events.size() || active.size() != 1) continue;
+            const double next = events[e].first;
+            const Seg& s = segs[active.front()];
+            const double span = s.t1 - s.t0;
+            rims.push_back({s.piece, lerp(s.p0, s.p1, (at - s.t0) / span), lerp(s.p0, s.p1, (next - s.t0) / span)});
+        }
+    }
+    return rims;
+}
+
 // A lifted polygon: base points and an energy each; clipped to lo <= E <= hi (Sutherland-Hodgman, E linear).
 struct Lifted {
     std::vector<Point> points;
@@ -274,6 +350,15 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
     }
     const Base base = base_of(o.plane);
     const auto keys = band_material_keys(device);
+    // Hidden regions (YD4): their nodes' pieces are left out, a gap as an insulator's.
+    std::vector<bool> hidden(nodes, false);
+    if (!o.view.hidden_regions.empty()) {
+        const auto region = device.node_region();
+        for (std::size_t i = 0; i < nodes; ++i) {
+            hidden[i] = std::ranges::find(o.view.hidden_regions, static_cast<std::int32_t>(region[i])) !=
+                        o.view.hidden_regions.end();
+        }
+    }
 
     BandSurfaceScene out;
     std::vector<Piece> pieces;
@@ -289,7 +374,8 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
         const std::size_t first = pieces.size();
         for (OwnedPolygon& owned : geometry.owner_pieces(p)) {
             const std::int32_t key = keys[static_cast<std::size_t>(owned.owner)];
-            if (key < 0 || owned.points.size() < 3) continue;  // insulator: a gap
+            // An insulator or a hidden region: a gap.
+            if (key < 0 || hidden[static_cast<std::size_t>(owned.owner)] || owned.points.size() < 3) continue;
             Piece piece{std::move(owned.points), owned.owner, p.element, key, {}};
             bool finite = true;
             for (const std::size_t k : shown) {
@@ -336,6 +422,7 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
     if (pieces.empty()) {
         return std::unexpected(invalid(dim == 2 ? "no band values on the device" : "no band values on the plane"));
     }
+    const std::vector<Rim> rims = rims_of(pieces, base);
 
     // The range, the height scale and the colours.
     double lo = std::numeric_limits<double>::infinity(), hi = -lo;
@@ -379,6 +466,7 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
     for (const std::size_t k : shown) {
         TriangleBatch b{std::string(level_names[k]), o.by_level ? Shading::flat : Shading::field, true,
                         o.opacity < 1.0f, {}};
+        b.feature_edges = false;  // the outline below instead
         const Rgb c = level_colors[k];
         const Rgba color = o.by_level ? Rgba{c.r, c.g, c.b, o.opacity} : Rgba{0.0f, 0.0f, 0.0f, o.opacity};
         const auto emit = [&](const Lifted& l, const Point& normal) {
@@ -411,6 +499,32 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
         }
         if (!b.vertices.empty()) s.triangles.push_back(std::move(b));
     }
+    // The outline: each rim on each shown level at its piece's heights, the part inside the energy range.
+    LineBatch outline{"band outline", {0.08f, 0.09f, 0.11f, 0.85f}, 1.7f, false, {}};
+    for (const std::size_t k : shown) {
+        for (const Rim& r : rims) {
+            const Piece& p = pieces[r.piece];
+            double ea = band_value(geometry, p.element, r.a, p.owner, keys, values(k));
+            double eb = band_value(geometry, p.element, r.b, p.owner, keys, values(k));
+            if (!std::isfinite(ea) || !std::isfinite(eb)) continue;
+            double t0 = 0.0, t1 = 1.0;
+            if (ea != eb) {
+                const double ta = (lo - ea) / (eb - ea), tb = (hi - ea) / (eb - ea);
+                t0 = std::max(t0, std::min(ta, tb));
+                t1 = std::min(t1, std::max(ta, tb));
+            } else if (ea < lo || ea > hi) {
+                continue;
+            }
+            if (!(t1 > t0)) continue;
+            const double e0 = ea + (eb - ea) * t0, e1 = ea + (eb - ea) * t1;
+            for (const auto& [x, e] : {std::pair{lerp(r.a, r.b, t0), e0}, std::pair{lerp(r.a, r.b, t1), e1}}) {
+                const Point q = lift(x, e);
+                outline.points.push_back(Float3{static_cast<float>(q[0] * um_per_cm), static_cast<float>(q[1] * um_per_cm),
+                                                static_cast<float>(q[2] * um_per_cm)});
+            }
+        }
+    }
+    if (!outline.points.empty()) s.lines.push_back(std::move(outline));
     // BSD9: a cut line in the base plane, drawn on each shown level at its heights; a step where the owner's
     // material changes (each segment split in 16, its owner at the part's middle: within 1/32 of an element).
     if (o.cut && o.cut->samples.size() >= 2) {
@@ -455,7 +569,7 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
                             continue;
                         }
                         const NodeId owner = band_owner(geometry, hit->element, pm);
-                        if (keys[static_cast<std::size_t>(owner)] < 0) {
+                        if (keys[static_cast<std::size_t>(owner)] < 0 || hidden[static_cast<std::size_t>(owner)]) {
                             last.reset();
                             continue;
                         }
@@ -515,8 +629,16 @@ std::expected<BandSurfaceScene, base::Error> band_surface_view(const device::Dev
 
 std::optional<std::pair<double, double>> band_energy_range(const device::Device& device,
                                                            std::span<const results::BiasPoint> points,
-                                                           const std::array<bool, 4>& levels) {
-    const auto keys = band_material_keys(device);
+                                                           const std::array<bool, 4>& levels,
+                                                           std::span<const std::int32_t> hidden_regions) {
+    auto keys = band_material_keys(device);
+    // Hidden regions' nodes count as insulators here: the range is the shown surfaces' (YD4).
+    if (!hidden_regions.empty()) {
+        const auto region = device.node_region();
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            if (std::ranges::find(hidden_regions, static_cast<std::int32_t>(region[i])) != hidden_regions.end()) keys[i] = -1;
+        }
+    }
     double lo = std::numeric_limits<double>::infinity(), hi = -lo;
     for (const results::BiasPoint& p : points) {
         for (std::size_t k = 0; k < 4; ++k) {

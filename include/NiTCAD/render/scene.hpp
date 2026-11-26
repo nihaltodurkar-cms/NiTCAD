@@ -62,6 +62,9 @@ struct TriangleBatch {
     bool transparent = false;  // drawn with order-independent transparency (alpha below 1)
     std::vector<SceneVertex> vertices;  // three per triangle, counterclockwise from the front
     Finish finish = Finish::matte;
+    // Whether set_look's enhanced look draws this batch's feature edges (Unit 26f). The band surface (Unit 26o)
+    // draws its own outline instead: on a lifted surface the 30-degree creases mark every steep mesh step.
+    bool feature_edges = true;
 };
 
 struct LineBatch {

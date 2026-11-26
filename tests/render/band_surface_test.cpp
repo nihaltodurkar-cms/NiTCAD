@@ -831,3 +831,102 @@ TEST_CASE("band surface: the cut line steps with the bands at a heterojunction (
     }
     CHECK(step);
 }
+
+namespace {
+
+const LineBatch* line_batch(const FieldScene& s, std::string_view name) {
+    for (const LineBatch& l : s.lines) {
+        if (l.name == name) return &l;
+    }
+    return nullptr;
+}
+
+// The outline's length in the base plane (scene x and z, um), and whether every point lies on one of the given
+// lines x = const or z = const (um).
+struct Outline {
+    double base_length = 0.0;
+    bool on_lines = true;
+};
+
+Outline measure(const LineBatch& l, const std::vector<double>& xs, const std::vector<double>& zs) {
+    Outline o;
+    for (std::size_t i = 0; i + 1 < l.points.size(); i += 2) {
+        const Float3& a = l.points[i];
+        const Float3& b = l.points[i + 1];
+        o.base_length += std::hypot(double(b[0]) - a[0], double(b[2]) - a[2]);
+        for (const Float3& p : {a, b}) {
+            const bool on = std::ranges::any_of(xs, [&](double x) { return std::abs(p[0] - x) < 1e-4; }) ||
+                            std::ranges::any_of(zs, [&](double z) { return std::abs(p[2] - z) < 1e-4; });
+            o.on_lines = o.on_lines && on;
+        }
+    }
+    return o;
+}
+
+}  // namespace
+
+TEST_CASE("band surface: its own outline, not the look's creases (Unit 26o, the stray-lines fix)") {
+    const Dev h = hetero();
+    const Geometry g = geometry_of(h.device);
+    // A curved Ec, so the enhanced look's 30-degree creases would mark it.
+    const auto b = bands_of(h.device, [](double x, double y, std::int32_t k) {
+        return 0.4 + 0.8 * std::sin(3.0 * x) * y + (k == 1 ? 0.2 : 0.0);
+    });
+    auto s = band_surface_view(h.device, g, b);
+    REQUIRE(s.has_value());
+    for (const TriangleBatch& t : s->scene.triangles) CHECK_FALSE(t.feature_edges);
+    set_look(s->scene, Look::enhanced);
+    CHECK(line_batch(s->scene, "feature edges") == nullptr);
+    // The outline: each material's rim on Ec and Ev, the step at the interface (x = 0.875 um) drawn on both sides.
+    // Base length per level: left 2 x (0.875 + 1) plus right 2 x (1.125 + 1) = 8 um; two levels.
+    const LineBatch* outline = line_batch(s->scene, "band outline");
+    REQUIRE(outline != nullptr);
+    const Outline o = measure(*outline, {0.0, 0.875, 2.0}, {0.0, 1.0});
+    CHECK(o.on_lines);
+    CHECK(std::abs(o.base_length - 16.0) < 1e-3);
+    // The classic look keeps the outline (it is the view's, not the look's).
+    set_look(s->scene, Look::classic);
+    CHECK(line_batch(s->scene, "band outline") != nullptr);
+    // Other views still take feature edges (BSC1).
+    TriangleBatch other{"field", Shading::field, true, false, {}};
+    CHECK(takes_feature_edges(other));
+}
+
+TEST_CASE("band surface: hidden regions are left out, a gap, and out of the run's range (Unit 26o, YD4)") {
+    const Dev h = hetero();
+    const Geometry g = geometry_of(h.device);
+    const auto b = bands_of(h.device, [](double x, double, std::int32_t k) { return 0.4 + 0.05 * x + (k == 1 ? 0.5 : 0.0); });
+    BandSurfaceOptions o;
+    o.levels = {true, false, false, false};
+    o.view.hidden_regions = {1};  // "right"
+    const auto s = band_surface_view(h.device, g, b, o);
+    REQUIRE(s.has_value());
+    const TriangleBatch* ec = batch(s->scene, "Ec");
+    REQUIRE(ec != nullptr);
+    for (const SceneVertex& v : ec->vertices) CHECK(v.position[0] <= 0.875f + 1e-4f);
+    // No wall: every vertex sits at its own (left) value, no step up to the right's. In the element the interface
+    // cuts, the left piece reads the left nodes only (BSD2): flat at the x = 0.75 um node's value.
+    for (const SceneVertex& v : ec->vertices) {
+        CHECK(std::abs(v.position[1] / s->um_per_eV - (0.4 + 0.05 * std::min(double(v.position[0]), 0.75))) < 1e-5);
+    }
+    const LineBatch* outline = line_batch(s->scene, "band outline");
+    REQUIRE(outline != nullptr);
+    CHECK(std::abs(measure(*outline, {0.0, 0.875}, {0.0, 1.0}).base_length - 3.75) < 1e-3);
+    // Hiding the left too leaves nothing to draw.
+    o.view.hidden_regions = {0, 1};
+    const auto none = band_surface_view(h.device, g, b, o);
+    REQUIRE_FALSE(none.has_value());
+    CHECK(none.error().message.find("no band values") != std::string::npos);
+    // The run's range over the shown region only.
+    results::BiasPoint p;
+    p.bands = b;
+    const std::vector<results::BiasPoint> run{p};
+    const auto all = band_energy_range(h.device, run, {true, false, false, false});
+    const std::vector<std::int32_t> right{1};
+    const auto left = band_energy_range(h.device, run, {true, false, false, false}, right);
+    REQUIRE(all);
+    REQUIRE(left);
+    CHECK(all->second > 0.9);
+    CHECK(std::abs(left->first - 0.4) < 1e-12);
+    CHECK(left->second < 0.45);
+}

@@ -77,10 +77,12 @@ struct BandSurfaceScene {
 
 // One energy range over a run's points (BSD8): the lowest and highest finite value of the levels set, over the
 // semiconductor nodes of every point (a level of the wrong size skipped), widened by 0.5 eV each side about its
-// middle when it is one value (span under 1e-9 eV). Nothing when no value is finite.
+// middle when it is one value (span under 1e-9 eV). Nothing when no value is finite. The nodes of hidden regions
+// (ViewOptions::hidden_regions) are left out, as the surface leaves them out.
 [[nodiscard]] std::optional<std::pair<double, double>> band_energy_range(const device::Device& device,
                                                                          std::span<const results::BiasPoint> points,
-                                                                         const std::array<bool, 4>& levels);
+                                                                         const std::array<bool, 4>& levels,
+                                                                         std::span<const std::int32_t> hidden_regions = {});
 
 // The plane's outline on a device view (BSD6): the outer edges of the device's section by the plane (each edge of
 // Geometry::slice's polygons that no other polygon shares), as one on-top line batch "band plane" in dark orange.

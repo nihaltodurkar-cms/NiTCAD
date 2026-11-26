@@ -696,7 +696,9 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         bo.opacity = o.band_opacity;
         // BSD8: one range over the run unless the point's own is asked for; a range set wins.
         bo.range_eV = o.range;
-        if (!o.range && !o.band_fit_point) bo.range_eV = band_energy_range(device, w.points, o.band_levels);
+        if (!o.range && !o.band_fit_point) {
+            bo.range_eV = band_energy_range(device, w.points, o.band_levels, view.hidden_regions);
+        }
         bo.cut = cut;
         bo.by_level = o.by_level;
         bo.map = *colormap;
