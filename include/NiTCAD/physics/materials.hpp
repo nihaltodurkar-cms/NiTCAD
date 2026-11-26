@@ -9,7 +9,9 @@
 #include <expected>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/physics/insulator.hpp"
@@ -46,5 +48,13 @@ struct MaterialEntry {
 
 // The entry named `name`, or nullptr.
 [[nodiscard]] const MaterialEntry* find_material(std::string_view name) noexcept;
+
+// A parameter of a set by its C++ member path (DK7: eps_r, electron_mobility.mu_max, ...), or
+// nullptr. The density-of-states mass fits are not reachable this way.
+[[nodiscard]] double* semiconductor_parameter(SemiconductorParameters& p, std::string_view path) noexcept;
+[[nodiscard]] double* insulator_parameter(InsulatorParameters& p, std::string_view path) noexcept;
+
+// Every member path of the set a deck can set, with its value, in that order (`nitcad materials`).
+[[nodiscard]] std::vector<std::pair<std::string_view, double>> parameter_values(const MaterialParameters& p);
 
 }  // namespace NiTCAD::physics

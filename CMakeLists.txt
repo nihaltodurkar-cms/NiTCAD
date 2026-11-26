@@ -1099,6 +1099,14 @@ foreach(_id TVB-01 TVB-03)
 endforeach()
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
   "^nitcad ${PROJECT_VERSION} \\(revision ([0-9a-f]+|unknown)(, modified)?, ${CMAKE_BUILD_TYPE}, MSVC [0-9.]+, Eigen [0-9]")
+# Unit 68 (MAD12, MAC6): the material registry from the command line.
+add_test(NAME cli_materials COMMAND nitcad materials)
+set_tests_properties(cli_materials PROPERTIES PASS_REGULAR_EXPRESSION "algaas +semiconductor +Al\\(x\\)Ga")
+add_test(NAME cli_materials_one COMMAND nitcad materials algaas 0.3)
+set_tests_properties(cli_materials_one PROPERTIES PASS_REGULAR_EXPRESSION
+  "algaas: semiconductor.*source: legacy materials\\.algaas.*eps_r = 12\\.12\n")
+add_test(NAME cli_materials_unknown COMMAND nitcad materials unobtainium)
+set_tests_properties(cli_materials_unknown PROPERTIES WILL_FAIL TRUE)
 
 # --- app layer (the Windows application; Unit 26, DECISIONS.md VA1-VA9, AQ1-AQ4, WG1-WG8) ---------
 # The logic, plain C++ under test (26-1): documents, the run controller, the workspace, view settings,

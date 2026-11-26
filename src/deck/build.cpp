@@ -47,57 +47,6 @@ namespace {
 
 using namespace detail;
 
-// --- material parameters by name (DK7) ---------------------------------------------------------
-
-#define NITCAD_THERMAL_PARAMETERS(X)                                                           \
-    X(thermal.conductivity_W_cmK) X(thermal.conductivity_exponent) X(thermal.heat_capacity_J_cm3K) \
-    X(thermal.thermopower_exponent_n) X(thermal.thermopower_exponent_p)
-
-#define NITCAD_SEMICONDUCTOR_PARAMETERS(X)                                                     \
-    X(eps_r) X(Eg0_eV) X(varshni_alpha_eV_per_K) X(varshni_beta_K) X(Nc300) X(Nv300)           \
-    X(electron_affinity_eV) X(electron_mobility.mu_min) X(electron_mobility.mu_max)            \
-    X(electron_mobility.N_ref) X(electron_mobility.alpha) X(electron_mobility.T_exponent)      \
-    X(hole_mobility.mu_min) X(hole_mobility.mu_max) X(hole_mobility.N_ref)                     \
-    X(hole_mobility.alpha) X(hole_mobility.T_exponent) X(lifetime.tau_n0) X(lifetime.tau_p0)   \
-    X(lifetime.N_ref) X(auger.Cn) X(auger.Cp) X(bandgap_narrowing.E0_eV)                       \
-    X(bandgap_narrowing.N0) X(electron_saturation.v_sat_cm_s) X(electron_saturation.beta)      \
-    X(hole_saturation.v_sat_cm_s) X(hole_saturation.beta) X(radiative_cm3_s)                   \
-    X(ionization.donor_eV) X(ionization.acceptor_eV) X(ionization.donor_degeneracy)            \
-    X(ionization.acceptor_degeneracy) X(richardson.electron) X(richardson.hole)                \
-    X(impact_ionization.electron.A_low_per_cm) X(impact_ionization.electron.B_low_V_per_cm)    \
-    X(impact_ionization.electron.A_high_per_cm) X(impact_ionization.electron.B_high_V_per_cm)  \
-    X(impact_ionization.electron.switch_V_per_cm) X(impact_ionization.hole.A_low_per_cm)       \
-    X(impact_ionization.hole.B_low_V_per_cm) X(impact_ionization.hole.A_high_per_cm)           \
-    X(impact_ionization.hole.B_high_V_per_cm) X(impact_ionization.hole.switch_V_per_cm)        \
-    X(impact_ionization.phonon_energy_eV) X(band_to_band.A_per_cm3_s)                          \
-    X(band_to_band.B_V_per_cm) X(band_to_band.electron_mass) X(band_to_band.hole_mass)         \
-    X(passler_gap.alpha_eV_per_K) X(passler_gap.Theta_K) X(passler_gap.Delta)                  \
-    X(energy_relaxation.tau_n_s) X(energy_relaxation.tau_p_s)                                  \
-    NITCAD_THERMAL_PARAMETERS(X)
-
-double* semiconductor_parameter(physics::SemiconductorParameters& p, std::string_view name) {
-#define NITCAD_X(path) \
-    if (name == #path) return &p.path;
-    NITCAD_SEMICONDUCTOR_PARAMETERS(NITCAD_X)
-#undef NITCAD_X
-    return nullptr;
-}
-
-double* insulator_parameter(physics::InsulatorParameters& p, std::string_view name) {
-#define NITCAD_X(path) \
-    if (name == #path) return &p.path;
-    NITCAD_X(eps_r)
-    NITCAD_THERMAL_PARAMETERS(NITCAD_X)
-    // Unit 51 (GD5, GD10): gate-tunnelling band data.
-    NITCAD_X(electron_affinity_eV)
-    NITCAD_X(band_gap_eV)
-    NITCAD_X(tunnel_mass_n)
-    NITCAD_X(tunnel_mass_p)
-    NITCAD_X(tunnel_mass_evb)
-#undef NITCAD_X
-    return nullptr;
-}
-
 // --- the builder -------------------------------------------------------------------------------
 
 enum class MeshType { tensor, generate2d, generate3d, extrude3d, file };
@@ -302,14 +251,14 @@ std::expected<bool, base::Error> Builder::parameter(physics::MaterialParameters&
             sp->band_to_band.direct_gap = v;
             return true;
         }
-        if (double* target = semiconductor_parameter(*sp, e.key)) {
+        if (double* target = physics::semiconductor_parameter(*sp, e.key)) {
             NITCAD_DECK_TRY(v, num(e));
             *target = v;
             return true;
         }
         return false;
     }
-    if (double* target = insulator_parameter(std::get<physics::InsulatorParameters>(params), e.key)) {
+    if (double* target = physics::insulator_parameter(std::get<physics::InsulatorParameters>(params), e.key)) {
         NITCAD_DECK_TRY(v, num(e));
         *target = v;
         return true;

@@ -297,3 +297,26 @@ TEST_CASE("material registry: names unique, arities and usage consistent", "[mat
         REQUIRE_FALSE(all[i].summary.empty());
     }
 }
+
+TEST_CASE("material registry: parameter paths and values agree (DK7)", "[materials][unit68]") {
+    SemiconductorParameters s = silicon_parameters;
+    const auto sv = parameter_values(MaterialParameters{s});
+    REQUIRE(sv.size() == 60);
+    for (const auto& [path, value] : sv) {
+        CAPTURE(path);
+        double* target = semiconductor_parameter(s, path);
+        REQUIRE(target != nullptr);
+        REQUIRE(*target == value);
+    }
+    REQUIRE(semiconductor_parameter(s, "eps_r") == &s.eps_r);
+    REQUIRE(semiconductor_parameter(s, "dos_mass") == nullptr);
+    InsulatorParameters i = silicon_dioxide_tunnelling_parameters;
+    const auto iv = parameter_values(MaterialParameters{i});
+    REQUIRE(iv.size() == 11);
+    for (const auto& [path, value] : iv) {
+        CAPTURE(path);
+        REQUIRE(insulator_parameter(i, path) != nullptr);
+        REQUIRE(*insulator_parameter(i, path) == value);
+    }
+    REQUIRE(insulator_parameter(i, "electron_mobility.mu_max") == nullptr);
+}
