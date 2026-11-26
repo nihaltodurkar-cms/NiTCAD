@@ -4896,6 +4896,12 @@ suites) waits for the owner's word.
 materials (Commercial)", then "write it as proposal and choose recommended for rulings (make rulings for commercial
 TCAD)". Worktree `nitcad-mat`, branch from `origin/main` 5a3285b.
 
+**Amendment 1 (owner, 2026-11-26), before code:** "plan to add Additional materials in Unit 68 such as: GaP, AlAs,
+GaSb, InSb, CdS, CdSe, CdTe, ZnSe, ZnO, SnO₂, In₂O₃, IGZO, Cu₂O, NiO, MgO, Ta₂O₅, SiON, sapphire (Al₂O₃), diamond (C),
+black phosphorus, MoSe₂, MoTe₂, WSe₂, WTe₂, ReS₂, ReSe₂, h-BN, InSe, GaSe, Bi₂Se₃, Bi₂Te₃, Pd, Co, Cr, Ru, TaN, NiSi,
+TiSi₂ and CoSi₂." Placed by MAD13–MAD16 and MAQ11–MAQ15 (ruled as recommended, owner's standing instruction); slices
+7 and 8 added; criteria MAC15–MAC17 added. TaN was already in MAD6. Nothing ruled before this amendment changes.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a
@@ -4911,7 +4917,7 @@ own materials without rebuilding.
 stay bit-identical: the existing parameter sets are not changed, only moved into the registry (MAC1). New materials
 and new keys are opt-in by name. Criteria are fixed before code and never loosened after a run (TVM2). Builds run
 `-j 6`, runs 6 threads at most. Release suite with `/W4 /WX` on the owner's word; Debug builds and runs on the
-owner's word. Commits stay local; no push, PR or merge without the owner's word. MAQ1–MAQ10 ruled as recommended
+owner's word. Commits stay local; no push, PR or merge without the owner's word. MAQ1–MAQ15 ruled as recommended
 for a commercial TCAD under the owner's instruction of 2026-11-26.
 
 **Sources (none in hand yet).** Every new parameter carries its source (MAD3). None of these papers is in
@@ -4929,26 +4935,45 @@ for a commercial TCAD under the owner's instruction of 2026-11-26.
 - (M8) Metal work functions: H. B. Michaelson, J. Appl. Phys. 48, 4729 (1977); TiN/TaN from M5's references.
 - (M9) β-Ga2O3: the owner names a review before slice 4b starts (MAQ8).
 - (M10) T. Hatakeyama et al., Appl. Phys. Lett. 85, 1380 (2004): 4H-SiC impact ionization coefficients (slice 4).
+- (M11) O. Madelung, Semiconductors: Data Handbook, 3rd ed. (Springer 2004): CdS, CdSe, CdTe, ZnSe, SnO2, In2O3
+  bulk sets; each value cited to the primary paper the handbook names (MAQ11).
+- (M12) Ü. Özgür et al., J. Appl. Phys. 98, 041301 (2005): ZnO.
+- (M13) T. Kamiya, K. Nomura, H. Hosono, Sci. Technol. Adv. Mater. 11, 044305 (2010): amorphous IGZO.
+- (M14) B. K. Meyer et al., Phys. Status Solidi B 249, 1487 (2012): Cu2O.
+- (M15) A. Laturia, M. L. Van de Put, W. G. Vandenberghe, npj 2D Mater. Appl. 2, 6 (2018): bulk permittivities of
+  h-BN and the transition-metal dichalcogenides.
+- (M16) G. Cassabois, P. Valvin, B. Gil, Nature Photon. 10, 262 (2016): h-BN band gap.
+- (M17) Diamond: C. J. H. Wort, R. S. Balmer, Mater. Today 11, 22 (2008), and J. Isberg et al., Science 297, 1670
+  (2002) for mobility.
+- (M18) Silicide Schottky barrier heights on Si: S. M. Sze, K. K. Ng, Physics of Semiconductor Devices, 3rd ed.
+  (Wiley 2007), and R. T. Tung, Appl. Phys. Rev. 1, 011304 (2014).
+- (M19) Owner names the source before its slice starts (MAQ15): NiO; MoSe2, MoTe2, WSe2, WTe2; ReS2, ReSe2; InSe,
+  GaSe; black phosphorus; Bi2Se3, Bi2Te3. M7 does not cover these, and there is no single agreed review.
+- M1 already covers GaP, AlAs, GaSb, InSb; M5 covers Ta2O5, MgO and SiON end members; M8 covers Pd, Co, Cr, Ru.
 
-**Scope.** Seven slices, each its own commit set on this branch, built and tested before the next starts (MAQ1
-order):
+**Scope.** Nine slices, each its own commit set on this branch, built and tested before the next starts (MAQ1
+order, amended: 0, 5, 1, 2, 3, 4, 7, 8, 6):
 
 | Slice | Content |
 |---|---|
 | 0 | Infrastructure: material registry, per-parameter provenance, user materials (deck section and `.nitmat` include), `nitcad materials`, GUI region picker list |
-| 5 | Dielectrics with band data and named metals; a true metal region (equipotential) |
+| 5 | Dielectrics with band data (MAD5 plus MAD13: MgO, Ta2O5, SiON, sapphire, h-BN) and named metals (MAD6 plus MAD14: Pd, Co, Cr, Ru, NiSi, TiSi2, CoSi2); a true metal region (equipotential) |
 | 1 | Group IV: Si(1-x)Ge(x), relaxed and pseudomorphic on Si |
 | 2 | III-N: GaN, AlN, InN, Al(x)Ga(1-x)N, In(x)Ga(1-x)N; automatic polarization charge; Mg/Si levels |
-| 3 | III-V RF: InP, InAs, In(x)Ga(1-x)As by composition, In(x)Al(1-x)As; tunnelling masses for GaAs and InGaAs |
-| 4 | Wide-gap power: 4H-SiC completed (impact ionization), β-Ga2O3 (4b, on M9) |
+| 3 | III-V: InP, InAs, In(x)Ga(1-x)As by composition, In(x)Al(1-x)As; GaP, AlAs, GaSb, InSb (MAD10); tunnelling masses for GaAs and InGaAs |
+| 4 | Wide-gap power: 4H-SiC completed (impact ionization), β-Ga2O3 (4b, on M9), diamond (4c, MAD15) |
+| 7 | II-VI and oxide semiconductors (MAD15): CdS, CdSe, CdTe, ZnSe, ZnO, SnO2, In2O3, IGZO, Cu2O, NiO |
+| 8 | Layered bulk semiconductors and semimetal (MAD16): black phosphorus, MoSe2, MoTe2, WSe2, ReS2, ReSe2, InSe, GaSe, Bi2Se3, Bi2Te3; WTe2 as a metal preset |
 | 6 | Validation tables and library decks: SiGe HBT, GaN HEMT, SiC power MOSFET, high-k/metal-gate MOSFET, and the CFET and forksheet re-tried on metal regions |
 
 **Out of scope.** Ferroelectrics (negative-capacitance FET: needs Landau-Khalatnikov polarization dynamics), 2D
-materials (MoS2, WS2, graphene: need sheet transport and contact models), organics, magnetic materials, anisotropic
+materials as monolayers or few layers (MoS2, WS2, graphene, and the monolayer forms of the slice-8 materials: need
+sheet transport and contact models; slice 8 gives bulk sets only, MAQ12), topological surface states of Bi2Se3/Bi2Te3,
+sub-gap tail and defect density of states for amorphous oxides (IGZO, MAQ14), organics, magnetic materials, anisotropic
 (tensor) mobility and permittivity (4H-SiC and wurtzite anisotropy recorded as a limitation; a follow-up unit), strain
 computed from mechanics (strain here is the pseudomorphic value from lattice mismatch only), k·p band structure.
 
-**Design (MAD1–MAD12).**
+**Design (MAD1–MAD16).**
 
 | ID | Decision | Reason | Limitation |
 |---|---|---|---|
@@ -4961,9 +4986,13 @@ computed from mechanics (strain here is the pseudomorphic value from lattice mis
 | MAD7 | SiGe (slice 1): `sige <x>` relaxed and `sige_strained <x>` pseudomorphic on (001) Si: gap, affinity (valence offset), DOS masses, permittivity, Caughey-Thomas mobility from M4 (alloy scattering as given there), Auger and SRH from M4/M7. Strained Si on relaxed SiGe: `si_strained <x_substrate>`. | SiGe HBTs and SiGe/strained-Si channels are the largest commercial use. | Strain mobility enhancement only as tabulated, no piezoresistance tensor |
 | MAD8 | Nitrides (slice 2): `gan`, `aln`, `inn`, `algan <x>`, `ingan <x>` (wurtzite, c-axis along the deck's chosen axis, MAQ6), gap with bowing, offsets and masses from M2, mobility from M6, Mg acceptor 0.17 eV and Si donor levels for incomplete ionization (Unit 37). | GaN HEMTs and power devices. | Wurtzite anisotropy ignored (MAD-limit, follow-up) |
 | MAD9 | Polarization: with `[models] polarization = on` (default off), every interface between two nitride regions gets a fixed sheet charge σ = P_sp,1 − P_sp,2 + P_pz (pseudomorphic strain of the thinner layer on the thicker, M3 linear-in-x P_sp with bowing, piezo from e31, e33, c13, c33), and the top and bottom free nitride surfaces their own bound charge. It adds to any `[interface] fixed_charge` already given; `polarization_scale = <0..1>` scales it (commercial practice to model surface compensation). Off: no change. | The 2DEG of an AlGaN/GaN HEMT exists only through this charge; computing it from composition avoids hand-entered charges. | Relaxation from thickness not modelled; Ga-face polarity only (N-face a follow-up) |
-| MAD10 | III-V RF (slice 3): `inp`, `inas`, `ingaas <x>` (the fixed-In0.53 set stays reachable as `ingaas` with no fraction, bit-identical), `inalas <x>`, `gaasp`/`ingap` not in this unit. Direct-gap tunnelling masses from M1 for `gaas`, `ingaas`, `inp`, `inas`, so `btbt_nonlocal = direct_wkb` runs (Unit 20). | InP HBTs/HEMTs; the Esaki peak in a direct-gap diode. | — |
+| MAD10 | III-V (slice 3): `inp`, `inas`, `ingaas <x>` (the fixed-In0.53 set stays reachable as `ingaas` with no fraction, bit-identical), `inalas <x>`; binaries `gap`, `alas`, `gasb`, `insb` from M1 (indirect-gap GaP and AlAs carry their X-valley gap and masses as the conduction minimum); `gaasp`/`ingap` and other alloys of the new binaries not in this unit. Direct-gap tunnelling masses from M1 for `gaas`, `ingaas`, `inp`, `inas`, so `btbt_nonlocal = direct_wkb` runs (Unit 20). | InP HBTs/HEMTs; the Esaki peak in a direct-gap diode. | — |
 | MAD11 | Wide-gap (slice 4): 4H-SiC impact ionization (M10) and incomplete ionization defaults kept; β-Ga2O3 only when M9 is in hand (4b); otherwise recorded as not done. | Power devices need breakdown in SiC. | Isotropic SiC (limitation above) |
 | MAD12 | Surfaces: `nitcad materials` (CLI) lists every registry entry with kind, composition range and sources; the GUI region picker shows the same list; deck vocabulary and help text learn the names and the `[material]` keys; ARCHITECTURE.md gets an as-built block and the 11.3 row. | Discoverability is part of a commercial library. | — |
+| MAD13 | More dielectrics (slice 5): `mgo`, `ta2o5` (M5), `sion <x>` (x = nitrogen fraction, 0 = `sio2`'s band data, 1 = `si3n4`; ε, gap and affinity linear in x, flagged "interpolated"), `sapphire` (crystalline Al2O3 substrate: its own set, not an alias of the amorphous gate `al2o3`; ε along the deck's `c_axis`), `hbn` (M15 out-of-plane ε, M16 gap; gate dielectric for layered channels). | Substrates and passivation layers of GaN-on-sapphire, oxide TFTs and layered-channel FETs. | Isotropic ε (sapphire, h-BN); SiON bowing not modelled |
+| MAD14 | More metals (slice 5): presets `pd`, `co`, `cr`, `ru` (M8) and silicides `nisi`, `tisi2` (C54), `cosi2` (M18). A silicide's cited value is its barrier height on n-Si; the preset stores φ_Bn + χ of `silicon`, flagged "derived". Contacts of `kind = schottky`, `gate` or `electrode` accept `metal = <preset>` in place of `work_function`; giving both is refused. | Silicided source/drain contacts and Schottky diodes need named silicides; one preset list serves regions and contacts. | Barrier pinning and image-force lowering beyond what the thermionic contact already models not added |
+| MAD15 | More semiconductors (slices 4c and 7): `diamond` (M17; B acceptor 0.37 eV and P donor 0.57 eV for incomplete ionization, Unit 37); `cds`, `cdse`, `cdte`, `znse` (M11), `zno` (M12, wurtzite, `c_axis` as nitrides), `sno2`, `in2o3` (M11), `igzo` (M13: amorphous In-Ga-Zn-O, band mobility only), `cu2o` (M14), `nio` (M19). Each is one fixed set; no alloys. | Solar cells (CdTe/CdS), oxide TFTs (IGZO), transparent contacts (SnO2, In2O3), p-type oxides (Cu2O, NiO), diamond power devices. | No polarization charge for ZnO interfaces (MAD9 stays nitride-only); no diamond impact ionization unless M17 gives it |
+| MAD16 | Layered materials (slice 8): bulk sets named with a `_bulk` suffix (`black_p_bulk`, `mose2_bulk`, `mote2_bulk` (2H), `wse2_bulk`, `res2_bulk`, `rese2_bulk`, `inse_bulk`, `gase_bulk`, `bi2se3_bulk`, `bi2te3_bulk`), so no deck can mistake them for monolayer data. Transport parameters are the in-plane values and ε the out-of-plane value (the lateral thick-flake FET geometry). WTe2 is a semimetal: preset `wte2` in the MAD6 metal list, not a semiconductor. | Multilayer-flake FETs and thermoelectric/narrow-gap stacks can be simulated now; the suffix keeps the name free for a later monolayer unit. | Isotropic tensors (vertical transport overstated); no topological surface states; no layer-number dependence |
 
 **Questions (ruled as recommended for a commercial TCAD, 2026-11-26, owner's instruction).**
 
@@ -4979,8 +5008,14 @@ computed from mechanics (strain here is the pseudomorphic value from lattice mis
 | MAQ8 | β-Ga2O3 | (a) in slice 4b only when the owner names a review (M9); (b) from the Ioffe archive now; (c) leave out | **(a)** |
 | MAQ9 | Existing names | (a) unchanged and bit-identical (`ingaas` without a fraction stays In0.53; `silicon` stays Unit 35's set); (b) re-cite and retune existing sets | **(a)**: results never move under a user |
 | MAQ10 | Material data licence | (a) only published values with citations, no copied vendor databases; user `.nitmat` files are the user's; (b) bundle a third-party database | **(a)** |
+| MAQ11 | II-VI and binary-oxide sources | (a) Madelung's handbook (M11), each value cited to the primary paper it names; (b) a primary paper per material only; (c) Ioffe M7 | **(a)**: one standard compilation keeps slice 7 bounded and every value still traces to a primary paper |
+| MAQ12 | Layered materials | (a) bulk sets only, `_bulk` names, in-plane transport and out-of-plane ε; (b) wait for a 2D sheet-transport unit; (c) monolayer parameters in the 3D continuum now | **(a)**: thick flakes are valid continuum devices; (c) is physically wrong in a 3D drift-diffusion mesh |
+| MAQ13 | WTe2 | (a) metal preset (semimetal, work function only); (b) a semiconductor set with near-zero gap | **(a)**: a zero-gap drift-diffusion set is ill-posed |
+| MAQ14 | IGZO | (a) band set now, sub-gap tail and defect DOS a follow-up unit, `nitcad materials igzo` and the run log state that the TFT subthreshold slope is not predictive; (b) wait for a bulk trap-DOS model; (c) leave out | **(a)**: on-state and C-V are usable now; the limit is stated where users see it |
+| MAQ15 | Materials with no named source (M19) | (a) each waits until the owner names a source, as β-Ga2O3 (MAQ8); a slice whose sources never arrive is recorded not done; (b) Ioffe or secondary data now | **(a)**: same rule as MAQ2 and MAQ8 |
 
-**Criteria (MAC1–MAC14), fixed before code.**
+**Criteria (MAC1–MAC17), fixed before code.** MAC2 and MAC4 apply to every material added by MAD13–MAD16; MAC3
+applies to `sion` with `sio2` and `si3n4` as its end members.
 
 | ID | Criterion |
 |---|---|
@@ -4998,10 +5033,13 @@ computed from mechanics (strain here is the pseudomorphic value from lattice mis
 | MAC12 | Library: SiGe HBT, GaN HEMT, SiC power MOSFET and high-k/metal-gate MOSFET decks pass the existing library tests (titled, every size a parameter, node limits, one-line edits) and run to completion at their defaults; CFET and forksheet are added only if they run to completion (owner, 2026-11-26: failing devices are not added). |
 | MAC13 | Refusals: unknown material names list the nearest registry names (deck vocabulary suggestion); every invalid composition, missing source-backed parameter or metal-region misuse is refused before solving with the key named. |
 | MAC14 | Suites: Release `/W4 /WX` full suite on the owner's word; Debug only on the owner's word. |
+| MAC15 | Silicide contacts: an n-Si Schottky diode with `metal = nisi`, `tisi2` and `cosi2` gives a reverse saturation current within 5 % of A* T² exp(−φ_B/kT) × area for the cited φ_B; `metal = pd` on a contact equals `work_function = <M8 value>` bit for bit; `metal` with `work_function` together is refused. |
+| MAC16 | Layered and semimetal: every `_bulk` set prints "bulk, in-plane transport, out-of-plane ε" in `nitcad materials`; `material = mose2` (no suffix) is refused and suggests `mose2_bulk`; `wte2` is accepted only as a metal preset. |
+| MAC17 | Oxides: a deck using `igzo` logs the MAQ14 subthreshold warning once; a CdS/CdTe p-n heterojunction and an n-IGZO bottom-gate TFT (test decks, not library decks) run to completion. |
 
 **Recorded limitations.** Isotropic transport and permittivity for SiC and nitrides; pseudomorphic strain only (no
 mechanics, no relaxation); Ga-face nitrides only; no metal resistance; no poly depletion in poly regions; ferroelectric
-and 2D materials out of scope; slices wait for their sources, so a slice whose papers never arrive is recorded as not
+and monolayer 2D materials out of scope; layered materials bulk and isotropic only; IGZO without sub-gap DOS; slices wait for their sources, so a slice whose papers never arrive is recorded as not
 done rather than filled from secondary data.
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
