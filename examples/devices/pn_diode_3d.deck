@@ -1,0 +1,50 @@
+# PN diode (3D)
+# A silicon pn diode with a square anode window on its top face: forward I-V and the current spreading in 3D.
+#
+# An n+ layer at the bottom (a diffused erfc profile, 50 % at the junction) under a p-type top; the cathode is the
+# whole bottom face, the anode a square window in a corner of the top face. The current crowds under the window
+# and spreads out below it in both lateral directions. Change a dimension in the Geometry tab's panel; run it (F5),
+# then look at the current density (slice it with Slice) and the I-V curve (Curves).
+
+[parameters]
+# group: Main
+Ln = 0.8um  # n side depth
+Lp = 1.2um  # p side depth
+W = 1.5um  # Width (both directions)
+Nd = 1e18  # n side donors (cm^-3)
+Na = 1e16  # p side acceptors (cm^-3)
+# group: Junction and contact
+wj = 50nm  # Junction grading width
+Wc = 0.5um  # Anode window side
+# group: Positions (derived)
+L = $Ln + $Lp  # Depth
+
+[mesh]
+type = tensor
+x = linspace(0, $Wc, 6) + linspace($Wc, $W, 9)
+y = linspace(0, $Ln, 17) + linspace($Ln, $L, 25)
+z = linspace(0, $Wc, 6) + linspace($Wc, $W, 9)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor erfc $Nd axis=y center=$Ln width=$wj
+profile = acceptor constant $Na
+
+[contact cathode]
+kind = ohmic
+patch = y_min
+
+[contact anode]
+kind = ohmic
+patch = y_max
+box = 0 $Wc  $L $L  0 $Wc
+
+[sweep]
+contact anode = 0 : 0.7 : 0.05
+
+[output]
+sweep = pn_diode_3d.nitsweep
+device = pn_diode_3d.nitdev
+table = pn_diode_3d.csv

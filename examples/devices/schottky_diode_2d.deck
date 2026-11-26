@@ -1,0 +1,54 @@
+# Schottky diode (2D)
+# A metal-silicon Schottky diode in cross-section with a top anode window: forward and reverse I-V and the
+# current spreading under the window.
+#
+# An n-type silicon layer; the anode is a Schottky contact (thermionic emission over the barrier) on a window of
+# the top face from the left edge, the cathode the whole bottom face (ohmic). The barrier sets the turn-on voltage:
+# lower than a pn junction's, with no minority-carrier storage. Change a dimension in the Geometry tab's panel;
+# run it (F5), then look at the current density and the I-V curve (Curves).
+
+[parameters]
+# group: Main
+D = 2um  # Silicon depth
+W = 2um  # Width
+Wa = 1um  # Anode window width
+Nd = 1e16  # Donors (cm^-3)
+phi_b = 0.7  # Electron barrier (eV)
+# group: Mesh
+Df = 0.2um  # Fine-mesh depth under the anode
+# group: Positions (derived)
+y_f = $D - $Df  # Fine mesh start
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, $Wa, 21) + linspace($Wa, $W, 21)
+y = linspace(0, $y_f, 31) + linspace($y_f, $D, 21)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant $Nd
+
+[contact anode]
+kind = schottky
+patch = y_max
+box = 0 $Wa  $D $D
+barrier = $phi_b
+richardson_n = 110
+richardson_p = 30
+
+[contact cathode]
+kind = ohmic
+patch = y_min
+
+[sweep]
+contact anode = -1 : 0.4 : 0.05
+
+[output]
+sweep = schottky_diode_2d.nitsweep
+device = schottky_diode_2d.nitdev
+table = schottky_diode_2d.csv

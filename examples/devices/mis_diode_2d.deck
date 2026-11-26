@@ -1,0 +1,57 @@
+# MIS tunnel diode (2D)
+# A metal-insulator-semiconductor diode: a metal gate on an ultrathin oxide over p-type silicon, with current by
+# tunnelling through the oxide.
+#
+# A p-type silicon layer under a thin oxide on a window of the top face; the gate is a metal on the oxide (lumped
+# oxide), the body contact the whole bottom face. The oxide is thin enough that electrons and holes tunnel through
+# it (WKB gate tunnelling), so unlike a MOS capacitor the structure conducts: in inversion it behaves like a diode,
+# and it is the basis of MIS solar cells and tunnel emitters. Change a dimension in the Geometry tab's panel; run it
+# (F5), then look at the gate current against bias (Curves).
+
+[parameters]
+# group: Main
+tox = 2nm  # Oxide thickness
+D = 2um  # Silicon depth
+W = 2um  # Width
+Wg = 1.5um  # Gate window width
+Na = 1e17  # Acceptors (cm^-3)
+# group: Mesh
+Df = 0.3um  # Fine-mesh depth under the gate
+# group: Positions (derived)
+y_f = $D - $Df  # Fine mesh start
+
+[mesh]
+type = tensor
+x = linspace(0, $Wg, 21) + linspace($Wg, $W, 11)
+y = linspace(0, $y_f, 21) + linspace($y_f, $D, 41)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant $Na
+
+[contact gate]
+kind = gate
+patch = y_max
+box = 0 $Wg  $D $D
+oxide_thickness = $tox
+electrode = metal
+work_function = 4.1
+tunnelling = on
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[solver]
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate = -1.5 : 1.5 : 0.1
+
+[output]
+sweep = mis_diode_2d.nitsweep
+device = mis_diode_2d.nitdev
+table = mis_diode_2d.csv

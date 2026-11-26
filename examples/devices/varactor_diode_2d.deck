@@ -1,0 +1,52 @@
+# Varactor diode (2D)
+# A reverse-biased p+/n silicon diode used as a voltage-controlled capacitor: the small-signal C-V at 1 MHz.
+#
+# An n-type layer with a p+ diffusion (a Gaussian from the top face) under an anode window; the cathode is the
+# whole bottom face. Reverse bias widens the depletion region, so its capacitance falls with voltage, which is
+# what tunes an oscillator or filter. The analysis is small-signal (AC) at each bias point. Change a dimension in
+# the Geometry tab's panel; run it (F5), then look at the capacitance against bias (Curves).
+
+[parameters]
+# group: Main
+D = 3um  # Silicon depth
+W = 2um  # Width
+Wa = 1.5um  # Anode window width
+Nd = 1e16  # n layer donors (cm^-3)
+Na = 1e19  # p+ diffusion acceptors (cm^-3)
+xj = 0.2um  # p+ diffusion depth (Gaussian width)
+# group: Diffusion and mesh
+lat = 0.1um  # Lateral spread of the diffusion
+Df = 1.5um  # Fine-mesh depth from the top
+# group: Positions (derived)
+y_f = $D - $Df  # Fine mesh start
+x_lo = 0 - $W  # Diffusion window start (past the edge)
+
+[mesh]
+type = tensor
+x = linspace(0, $Wa, 21) + linspace($Wa, $W, 11)
+y = linspace(0, $y_f, 16) + linspace($y_f, $D, 61)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant $Nd
+profile = acceptor gaussian $Na axis=y center=$D width=$xj x=$x_lo:$Wa lateral=$lat
+
+[contact anode]
+kind = ohmic
+patch = y_max
+box = 0 $Wa  $D $D
+
+[contact cathode]
+kind = ohmic
+patch = y_min
+
+[small_signal]
+contact anode = 0 : -5 : -0.25
+frequencies = 1e6
+
+[output]
+small_signal = varactor_diode_2d.nitac
+device = varactor_diode_2d.nitdev
+table = varactor_diode_2d.csv

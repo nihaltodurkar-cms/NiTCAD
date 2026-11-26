@@ -1,0 +1,57 @@
+# Tunnel diode (Esaki, 1D)
+# A degenerately doped silicon p++/n++ junction with nonlocal band-to-band tunnelling: the tunnelling current in
+# reverse and at small bias, then diffusion current forward.
+#
+# Both sides doped past degeneracy and the junction abrupt, so the depletion region is only a few nanometres thick
+# and electrons tunnel straight across the band gap (Kane nonlocal tunnelling along paths, Fermi-Dirac statistics).
+# Silicon is indirect and the model generates pairs only where the bands cross, so the forward tunnelling peak and
+# negative resistance of a real Esaki diode are not reproduced. Change a dimension in the Geometry tab's panel;
+# run it (F5), then look at the I-V curve.
+
+[parameters]
+# group: Main
+Lp = 100nm  # p++ side length
+Ln = 100nm  # n++ side length
+Na = 1e20  # p++ acceptors (cm^-3)
+Nd = 1e20  # n++ donors (cm^-3)
+# group: Junction
+wj = 1nm  # Junction grading width
+# group: Positions (derived)
+L = $Lp + $Ln  # Device length
+x_lo = 0 - $L  # p++ window start (past the end)
+x_hi = $L + $L  # n++ window end (past the end)
+
+[mesh]
+type = tensor
+x = linspace(0, $Lp, 201) + linspace($Lp, $L, 201)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant $Na x=$x_lo:$Lp lateral=$wj
+profile = donor constant $Nd x=$Lp:$x_hi lateral=$wj
+
+[contact anode]
+kind = ohmic
+patch = x_min
+
+[contact cathode]
+kind = ohmic
+patch = x_max
+
+[models]
+fermi_dirac = on
+btbt_nonlocal = kane
+
+[solver]
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact anode = -0.3 : 0.7 : 0.025
+
+[output]
+sweep = tunnel_diode_1d.nitsweep
+device = tunnel_diode_1d.nitdev
+table = tunnel_diode_1d.csv

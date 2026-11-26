@@ -1,0 +1,91 @@
+# SOI MOSFET (PD-SOI, 2D)
+# A partially depleted silicon-on-insulator n-MOSFET in cross-section: the transfer curve Id-Vg at 50 mV.
+#
+# A thick p-type silicon film on a buried oxide, under a thin gate oxide; n+ source and drain reaching down through
+# the film; a metal gate on top and a metal back gate under the buried oxide, held at 0 V. The film is thicker than
+# the gate's depletion depth, so a neutral floating body stays under the channel (partially depleted), unlike the
+# fully depleted SOI MOSFET where the whole film is depleted. Change a dimension in the Geometry tab's panel; run
+# it (F5), then look at the transfer curve (Curves) and the potential in the film.
+
+[parameters]
+# group: Main
+Lg = 100nm  # Gate length
+tsi = 100nm  # Silicon film thickness
+tbox = 100nm  # Buried oxide thickness
+tox = 2nm  # Gate oxide thickness
+Na = 5e17  # Film acceptors (cm^-3)
+Nsd = 1e20  # Source/drain donors (cm^-3)
+# group: Source, drain and contacts
+Lsd = 100nm  # Source/drain length
+xj = 80nm  # Source/drain depth
+ov = 10nm  # Source/drain overlap under the gate
+lat = 5nm  # Lateral spread of the source/drain
+# group: Positions (derived)
+x_gate = $Lsd + $Lg  # Gate end
+L = $Lsd + $Lg + $Lsd  # Device length
+x_s = $Lsd + $ov  # Source window end
+x_d = $Lsd + $Lg - $ov  # Drain window start
+y_si = $tbox + $tsi  # Film top
+y_ox = $tbox + $tsi + $tox  # Gate oxide top
+
+[mesh]
+type = tensor
+x = linspace(0, $Lsd, 11) + linspace($Lsd, $x_gate, 41) + linspace($x_gate, $L, 11)
+y = linspace(0, $tbox, 11) + linspace($tbox, $y_si, 41) + linspace($y_si, $y_ox, 5)
+straddle y = $tbox 0.2nm
+straddle y = $y_si 0.2nm
+
+[region silicon]
+material = silicon
+
+[region buried_oxide]
+material = sio2
+box = 0 $L  0 $tbox
+
+[region oxide]
+material = sio2
+box = 0 $L  $y_si $y_ox
+
+[doping]
+profile = acceptor constant $Na
+profile = donor gaussian $Nsd axis=y center=$y_si width=$xj x=0:$x_s lateral=$lat
+profile = donor gaussian $Nsd axis=y center=$y_si width=$xj x=$x_d:$L lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  $tbox $y_si
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = $L $L  $tbox $y_si
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = $Lsd $x_gate  $y_ox $y_ox
+electrode = metal
+work_function = 4.6
+
+[contact back_gate]
+kind = electrode
+patch = y_min
+electrode = metal
+work_function = 4.6
+
+[models]
+field_mobility = on
+
+[solver]
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate = 0 : 1.2 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = soi_pd_mosfet_2d.nitsweep
+device = soi_pd_mosfet_2d.nitdev
+table = soi_pd_mosfet_2d.csv

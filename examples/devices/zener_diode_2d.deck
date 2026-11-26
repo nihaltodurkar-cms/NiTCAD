@@ -1,0 +1,64 @@
+# Zener diode (2D)
+# A heavily doped silicon n+/p+ junction in cross-section: reverse breakdown by band-to-band (Zener) tunnelling.
+#
+# A p+ substrate with an abrupt n+ layer at the top under a cathode window; the anode is the
+# whole bottom face. With both sides heavily doped the depletion region is thin and the field high, so in reverse
+# electrons tunnel from the valence band on the p side into the conduction band on the n side (Kane nonlocal
+# tunnelling): the current rises sharply at a few volts, the Zener voltage. More doping, lower voltage. Change a
+# dimension in the Geometry tab's panel; run it (F5), then look at the reverse I-V (Curves) and the generation rate.
+
+[parameters]
+# group: Main
+D = 1um  # Silicon depth
+W = 1um  # Width
+Wc = 0.5um  # Cathode window width
+Na = 2e19  # p+ substrate acceptors (cm^-3)
+Nd = 1e20  # n+ diffusion donors (cm^-3)
+xj = 0.1um  # n+ layer depth
+# group: Diffusion and mesh
+lat = 2nm  # Junction grading width
+Wn = 0.6um  # n+ diffusion window width
+Df = 0.3um  # Fine-mesh depth from the top
+# group: Positions (derived)
+y_f = $D - $Df  # Fine mesh start
+x_lo = 0 - $W  # n+ window start (past the edge)
+y_j = $D - $xj  # Junction depth
+y_hi = $D + $D  # n+ window top (past the face)
+
+[mesh]
+type = tensor
+x = linspace(0, $Wc, 16) + linspace($Wc, $W, 21)
+y = linspace(0, $y_f, 21) + linspace($y_f, $y_j, 41) + linspace($y_j, $D, 21)
+straddle y = $y_j 0.5nm
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant $Na
+profile = donor constant $Nd x=$x_lo:$Wn y=$y_j:$y_hi lateral=$lat
+
+[contact cathode]
+kind = ohmic
+patch = y_max
+box = 0 $Wc  $D $D
+
+[contact anode]
+kind = ohmic
+patch = y_min
+
+[models]
+fermi_dirac = on
+btbt_nonlocal = kane
+
+[solver]
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact anode = 0 : -5 : -0.1
+
+[output]
+sweep = zener_diode_2d.nitsweep
+device = zener_diode_2d.nitdev
+table = zener_diode_2d.csv
