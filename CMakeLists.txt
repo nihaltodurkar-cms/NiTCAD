@@ -1216,3 +1216,18 @@ target_compile_definitions(nitcad_validation_test PRIVATE
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME validation COMMAND nitcad_validation_test)
 endif()
+
+# --- Fuzzing (the release-fuzz preset) ----------------------------------------------
+# libFuzzer through MSVC's /fsanitize=fuzzer, with ASan. The deck library carries the coverage
+# instrumentation the fuzzer steers by; only the fuzz targets link libFuzzer (it supplies main).
+# Run: nitcad_deck_syntax_fuzz <corpus dir> <seed dir>, e.g. a scratch corpus and decks/.
+option(NITCAD_FUZZ "Build the libFuzzer targets (needs NITCAD_ASAN)" OFF)
+if(NITCAD_FUZZ)
+  if(NOT NITCAD_ASAN)
+    message(FATAL_ERROR "NITCAD_FUZZ needs NITCAD_ASAN.")
+  endif()
+  target_compile_options(nitcad_deck PRIVATE /fsanitize=fuzzer)
+  add_executable(nitcad_deck_syntax_fuzz tests/fuzz/deck_syntax_fuzz.cpp)
+  target_compile_options(nitcad_deck_syntax_fuzz PRIVATE /fsanitize=fuzzer)
+  target_link_libraries(nitcad_deck_syntax_fuzz PRIVATE NiTCAD::deck)
+endif()
