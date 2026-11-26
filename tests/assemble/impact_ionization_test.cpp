@@ -285,9 +285,10 @@ TEST_CASE("impact ionization assemble: a field across the current does not ioniz
         const double area = d.mesh().edges()[k].coupling_area / s.L_D;
         j_max = std::max(j_max, s.J0 * std::abs(currents[k].first) / area);
     }
+    const physics::Semiconductor si = physics::silicon();
     const double alpha =
         physics::impact_ionization_coefficient(
-            physics::impact_ionization(physics::silicon(), physics::Carrier::electron), 1.0, 3e5)
+            physics::impact_ionization(si, physics::Carrier::electron), 1.0, 3e5)
             .alpha;
     const double V = d.mesh().volumes()[60] / (s.L_D * s.L_D);
     const double aligned = V * alpha * j_max / base::q_C / s.R0;

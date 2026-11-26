@@ -17,6 +17,7 @@
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/render/compare.hpp"
 #include "NiTCAD/render/edges.hpp"
+#include "NiTCAD/render/band_surface.hpp"
 #include "NiTCAD/render/quality.hpp"
 #include "NiTCAD/render/streamlines.hpp"
 #include "NiTCAD/render/vectors.hpp"
@@ -27,7 +28,7 @@ namespace {
 
 using namespace NiTCAD::render;
 
-constexpr std::array<std::pair<ViewKind, std::string_view>, 14> view_names{{{ViewKind::solid, "solid"},
+constexpr std::array<std::pair<ViewKind, std::string_view>, 15> view_names{{{ViewKind::solid, "solid"},
                                                                           {ViewKind::mesh, "mesh"},
                                                                           {ViewKind::field, "field"},
                                                                           {ViewKind::slice, "slice"},
@@ -40,7 +41,8 @@ constexpr std::array<std::pair<ViewKind, std::string_view>, 14> view_names{{{Vie
                                                                           {ViewKind::quality, "quality"},
                                                                           {ViewKind::quality_histogram, "quality-histogram"},
                                                                           {ViewKind::difference, "difference"},
-                                                                          {ViewKind::exploded, "exploded"}}};
+                                                                          {ViewKind::exploded, "exploded"},
+                                                                          {ViewKind::band_surface, "band-surface"}}};
 
 base::Error invalid(std::string message) { return {base::ErrorCode::invalid_input, std::move(message), std::nullopt}; }
 
@@ -83,6 +85,12 @@ std::optional<VectorField> vector_field(const std::string& name) {
     if (name == "Jn") return VectorField::electron_current;
     if (name == "Jp") return VectorField::hole_current;
     return std::nullopt;
+}
+
+// The views that take the band surface's plane (Unit 26o, BSD6): the band surface, and a 3D device's solid, field
+// and slice views, which draw its outline.
+bool takes_band_plane(ViewKind v) noexcept {
+    return v == ViewKind::band_surface || v == ViewKind::solid || v == ViewKind::field || v == ViewKind::slice;
 }
 
 std::string current_unit(int dimension) { return dimension == 1 ? "A/cm\xC2\xB2" : dimension == 2 ? "A/cm" : "A"; }
@@ -174,12 +182,23 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         }
         view.clip = box;
     }
+    // The band surface's plane (Unit 26o, BSD6): its outline on a 3D device's solid, field and slice views; the
+    // other views keep the setting and leave it out (as plot_arguments does).
+    std::optional<Plane> band_plane;
+    if (o.band_plane && takes_band_plane(o.kind)) {
+        if (m.dimension() != 3) return std::unexpected(invalid("--plane applies to a 3D device"));
+        if (o.band_plane->axis < 0 || o.band_plane->axis > 2) return std::unexpected(invalid("--plane is x=<um>, y=<um> or z=<um>"));
+        Plane p;
+        p.normal[static_cast<std::size_t>(o.band_plane->axis)] = 1.0;
+        p.offset = o.band_plane->at_um * 1e-4;
+        band_plane = p;
+    }
     // A cut line (Unit 26b, XD5): plotted along by the profile and bands views, drawn on 2D and 3D device views.
     std::optional<CutLine> cut;
     if (o.cut) {
         const bool device_view = o.kind == ViewKind::solid || o.kind == ViewKind::mesh || o.kind == ViewKind::field ||
                                  o.kind == ViewKind::slice || o.kind == ViewKind::iso || o.kind == ViewKind::quality ||
-                                 o.kind == ViewKind::difference;
+                                 o.kind == ViewKind::difference || o.kind == ViewKind::band_surface;
         if (o.kind != ViewKind::profile && o.kind != ViewKind::bands && !(device_view && m.dimension() >= 2)) {
             return std::unexpected(invalid("a cut line applies to the profile and bands views and to 2D and 3D device views"));
         }
@@ -411,7 +430,8 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         auto* f = std::get_if<FieldScene>(&scene);
         if (auto drawn = overlays(f); !drawn) return std::unexpected(std::move(drawn.error()));
         if (f) {
-            if (cut) add_cut_line(*f, *cut);
+            if (cut && o.kind != ViewKind::band_surface) add_cut_line(*f, *cut);  // BSD9: drawn on its surfaces
+            if (band_plane && o.kind != ViewKind::band_surface) add_plane_outline(*f, geometry, *band_plane);
             apply_camera(*f, o);
             set_look(*f, o.enhanced ? Look::enhanced : Look::classic);  // Unit 26f (KD5): after every overlay
             f->show_axis_box = o.axis_box;  // Unit 26h (JD1, JQ3)
@@ -650,6 +670,44 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         if (!f) return std::unexpected(std::move(f.error()));
         return wrap(exploded_view(device, geometry, o.axis, gap, *v, *f));
     }
+    case ViewKind::band_surface: {
+        // Unit 26o (BSD5): `nitcad plot --view band-surface`, with its messages.
+        if (m.dimension() < 2) return std::unexpected(invalid("the band surface needs a 2D or 3D device"));
+        if (o.band_plane && m.dimension() != 3) return std::unexpected(invalid("--plane applies to a 3D device"));
+        if (!o.band_plane && m.dimension() == 3) return std::unexpected(invalid("--view band-surface needs --plane in 3D"));
+        if (o.band_plane && (o.band_plane->axis < 0 || o.band_plane->axis > 2)) {
+            return std::unexpected(invalid("--plane is x=<um>, y=<um> or z=<um>"));
+        }
+        if (!(o.exaggeration >= 0.1 && o.exaggeration <= 10.0)) return std::unexpected(invalid("--exaggeration is from 0.1 to 10"));
+        if (!(o.band_opacity >= 0.2f && o.band_opacity <= 1.0f)) return std::unexpected(invalid("--opacity is from 0.2 to 1"));
+        if (std::ranges::none_of(o.band_levels, [](bool b) { return b; })) {
+            return std::unexpected(invalid("--band-levels needs a level: Ec, Ev, EFn or EFp"));
+        }
+        auto p = pick();
+        if (!p) return std::unexpected(std::move(p.error()));
+        BandSurfaceOptions bo;
+        bo.levels = o.band_levels;
+        if (o.band_plane) {
+            Plane plane;
+            plane.normal[static_cast<std::size_t>(o.band_plane->axis)] = 1.0;
+            plane.offset = o.band_plane->at_um * 1e-4;
+            bo.plane = plane;
+        }
+        bo.exaggeration = o.exaggeration;
+        bo.opacity = o.band_opacity;
+        // BSD8: one range over the run unless the point's own is asked for; a range set wins.
+        bo.range_eV = o.range;
+        if (!o.range && !o.band_fit_point) {
+            bo.range_eV = band_energy_range(device, w.points, o.band_levels, view.hidden_regions);
+        }
+        bo.cut = cut;
+        bo.by_level = o.by_level;
+        bo.map = *colormap;
+        bo.view = view;
+        auto s = band_surface_view(device, geometry, (*p)->bands, bo);
+        if (!s) return std::unexpected(std::move(s.error()));
+        return wrap(std::expected<FieldScene, base::Error>(std::move(s->scene)));
+    }
     }
     return std::unexpected(invalid("unknown view"));
 }
@@ -671,6 +729,7 @@ std::vector<ViewKind> available_views(const Workspace& w, const Workspace* b) {
     // Along a cut line (Unit 26b, XD5).
     if (dim >= 2 && elements) out.push_back(ViewKind::profile);
     if (dim >= 2 && elements && w.has_results()) out.push_back(ViewKind::bands);
+    if (dim >= 2 && elements && w.has_results()) out.push_back(ViewKind::band_surface);  // Unit 26o (BSD5)
     if (w.sweep && w.sweep->points.size() >= 2) out.push_back(ViewKind::iv);
     if (w.small_signal && w.small_signal->points.size() >= 2) out.push_back(ViewKind::cv);
     if (w.transient && w.transient->points.size() >= 2) out.push_back(ViewKind::current);
@@ -790,6 +849,25 @@ CameraPose camera_between(const CameraPose& from, const CameraPose& to, float t)
 bool takes_film(const Workspace& w, const ViewSettings& s) noexcept {
     return s.kind == ViewKind::field && w.device && w.geometry && w.device->mesh().dimension() >= 2 && w.transient &&
            !w.points.empty() && w.transient->snapshots.size() == w.points.size();
+}
+
+bool takes_band_playback(const Workspace& w, const ViewSettings& s) noexcept {
+    return s.kind == ViewKind::band_surface && w.device && w.geometry && w.device->mesh().dimension() >= 2 &&
+           w.points.size() >= 2;
+}
+
+std::string playback_label(const Workspace& w, std::size_t k) {
+    const std::size_t n = w.points.size();
+    if (n == 0) return {};
+    k = std::min(k, n - 1);
+    const std::string count = std::format("({} of {})", k + 1, n);
+    if (w.transient && k < w.transient->snapshots.size()) {
+        return render::time_label(w.transient->snapshots[k].time_s) + " " + count;
+    }
+    const std::string label = point_labels(w)[k];
+    constexpr std::string_view dot = " \xC2\xB7 ";  // "k · " before the biases
+    const std::size_t at = label.find(dot);
+    return at == std::string::npos ? count : label.substr(at + dot.size()) + " " + count;
 }
 
 std::expected<Film, base::Error> film_scale(const Workspace& w, const ViewSettings& s) {
@@ -980,6 +1058,25 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
     if (s.kind == ViewKind::exploded) {
         if (s.axis != 1) a.insert(a.end(), {"--axis", std::string(1, static_cast<char>('x' + s.axis))});
         if (s.gap_um) a.insert(a.end(), {"--gap", std::format("{}", *s.gap_um)});
+    }
+    // Unit 26o (BSD5): the band surface's options, the defaults left unnamed.
+    if (s.kind == ViewKind::band_surface) {
+        if (s.band_levels != std::array<bool, 4>{true, true, false, false}) {
+            constexpr std::array<std::string_view, 4> names{"Ec", "Ev", "EFn", "EFp"};
+            std::string l;
+            for (std::size_t k = 0; k < 4; ++k) {
+                if (s.band_levels[k]) l += (l.empty() ? "" : ",") + std::string(names[k]);
+            }
+            a.insert(a.end(), {"--band-levels", l.empty() ? std::string("none") : l});
+        }
+        if (s.exaggeration != 1.0) a.insert(a.end(), {"--exaggeration", std::format("{}", s.exaggeration)});
+        if (s.band_opacity != 1.0f) a.insert(a.end(), {"--opacity", std::format("{}", s.band_opacity)});
+        if (s.by_level) a.emplace_back("--by-level");
+        if (s.band_fit_point) a.emplace_back("--fit-point");
+    }
+    if (s.band_plane && takes_band_plane(s.kind)) {
+        a.insert(a.end(), {"--plane", std::string(1, static_cast<char>('x' + s.band_plane->axis)) + "=" +
+                                          std::format("{}", s.band_plane->at_um)});
     }
     // Unit 26c (YD4): the hidden regions on the device views (takes_hidden).
     if (takes_hidden(s.kind)) {

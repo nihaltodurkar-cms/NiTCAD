@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "NiTCAD/base/contract.hpp"
+#include "vec.hpp"
 
 namespace NiTCAD::render {
 
@@ -18,15 +19,13 @@ namespace {
 
 using Vec = Point;
 
-Vec sub(const Vec& a, const Vec& b) noexcept { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-Vec add(const Vec& a, const Vec& b) noexcept { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
-Vec scale(const Vec& a, double s) noexcept { return {a[0] * s, a[1] * s, a[2] * s}; }
-double dot(const Vec& a, const Vec& b) noexcept { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-Vec cross(const Vec& a, const Vec& b) noexcept {
-    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-}
-Vec lerp(const Vec& a, const Vec& b, double t) noexcept { return add(a, scale(sub(b, a), t)); }
-double norm(const Vec& a) noexcept { return std::sqrt(dot(a, a)); }
+using vec::add;
+using vec::cross;
+using vec::dot;
+using vec::lerp;
+using vec::norm;
+using vec::scale;
+using vec::sub;
 
 base::Error invalid(std::string message, std::size_t index) {
     return {base::ErrorCode::invalid_input, std::move(message),
@@ -502,37 +501,18 @@ std::vector<OwnedPolygon> Geometry::owner_pieces(const Polygon& polygon) const {
     // Barycentric: lambda = M^-1 (x - v0) for the element's vertices.
     const auto v = element(polygon.element);
     const auto points = mesh_->points();
-    const Vec p0 = points[static_cast<std::size_t>(v[0])];
     const std::size_t k = v.size();
-    std::array<Vec, 3> col{};
-    for (std::size_t i = 1; i < k; ++i) col[i - 1] = sub(points[static_cast<std::size_t>(v[i])], p0);
-    const auto bary = [&](const Point& x) {
-        const Vec r = sub(x, p0);
-        Bary l{};
-        if (k == 2) {
-            const double t = dot(r, col[0]) / dot(col[0], col[0]);
-            l = {1.0 - t, t, 0.0, 0.0};
-        } else if (k == 3) {
-            const double det = col[0][0] * col[1][1] - col[0][1] * col[1][0];
-            const double a = (r[0] * col[1][1] - r[1] * col[1][0]) / det;
-            const double b = (col[0][0] * r[1] - col[0][1] * r[0]) / det;
-            l = {1.0 - a - b, a, b, 0.0};
-        } else {
-            const double det = dot(col[0], cross(col[1], col[2]));
-            const double a = dot(r, cross(col[1], col[2])) / det;
-            const double b = dot(col[0], cross(r, col[2])) / det;
-            const double c = dot(col[0], cross(col[1], r)) / det;
-            l = {1.0 - a - b - c, a, b, c};
-        }
-        return l;
-    };
     struct BV {
         Point x;
         Bary l;
     };
     std::vector<BV> start;
     start.reserve(pts.size());
-    for (const Point& x : pts) start.push_back({x, bary(x)});
+    for (const Point& x : pts) {
+        const auto l = vec::barycentric(points, v, x);
+        if (!l) return out;  // a degenerate element owns nothing
+        start.push_back({x, *l});
+    }
     const auto bmix = [](const BV& a, const BV& b, double t) {
         BV r{lerp(a.x, b.x, t), {}};
         for (std::size_t i = 0; i < 4; ++i) r.l[i] = a.l[i] + t * (b.l[i] - a.l[i]);
@@ -678,26 +658,9 @@ Interpolant Geometry::interpolant(std::size_t e, const Point& x) const {
     for (std::size_t q = first; q < last; ++q) {
         const auto v = element(q);
         const std::size_t k = v.size();
-        const Vec p0 = points[static_cast<std::size_t>(v[0])];
-        const Vec r = sub(x, p0);
-        std::array<Vec, 3> col{};
-        for (std::size_t i = 1; i < k; ++i) col[i - 1] = sub(points[static_cast<std::size_t>(v[i])], p0);
-        Bary l{};
-        if (k == 2) {
-            const double t = dot(r, col[0]) / dot(col[0], col[0]);
-            l = {1.0 - t, t, 0.0, 0.0};
-        } else if (k == 3) {
-            const double det = col[0][0] * col[1][1] - col[0][1] * col[1][0];
-            const double a = (r[0] * col[1][1] - r[1] * col[1][0]) / det;
-            const double b = (col[0][0] * r[1] - col[0][1] * r[0]) / det;
-            l = {1.0 - a - b, a, b, 0.0};
-        } else {
-            const double det = dot(col[0], cross(col[1], col[2]));
-            const double a = dot(r, cross(col[1], col[2])) / det;
-            const double b = dot(col[0], cross(r, col[2])) / det;
-            const double c = dot(col[0], cross(col[1], r)) / det;
-            l = {1.0 - a - b - c, a, b, c};
-        }
+        const auto found = vec::barycentric(points, v, x);
+        if (!found) continue;  // a degenerate element has no weights
+        const Bary& l = *found;
         double lowest = l[0];
         for (std::size_t i = 1; i < k; ++i) lowest = std::min(lowest, l[i]);
         if (lowest > best_min) {

@@ -46,30 +46,47 @@ std::expected<void, base::Error> save_png(const Image& image, const std::filesys
     }
     auto f = wic();
     if (!f) return std::unexpected(file_error("creating WIC for", path, f.error()));
-    ComPtr<IWICStream> stream;
-    HRESULT hr = (*f)->CreateStream(&stream);
-    if (SUCCEEDED(hr)) hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
-    if (FAILED(hr)) return std::unexpected(file_error("opening", path, hr));
-    ComPtr<IWICBitmapEncoder> encoder;
-    hr = (*f)->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
-    if (SUCCEEDED(hr)) hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
-    ComPtr<IWICBitmapFrameEncode> frame;
-    if (SUCCEEDED(hr)) hr = encoder->CreateNewFrame(&frame, nullptr);
-    if (SUCCEEDED(hr)) hr = frame->Initialize(nullptr);
-    if (SUCCEEDED(hr)) hr = frame->SetSize(static_cast<UINT>(image.width), static_cast<UINT>(image.height));
-    // The PNG encoder takes BGRA, not RGBA.
-    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
-    if (SUCCEEDED(hr)) hr = frame->SetPixelFormat(&format);
-    if (SUCCEEDED(hr) && format != GUID_WICPixelFormat32bppBGRA) hr = WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
-    if (SUCCEEDED(hr)) {
-        std::vector<std::uint8_t> bgra(image.rgba);
-        for (std::size_t p = 0; p + 3 < bgra.size(); p += 4) std::swap(bgra[p], bgra[p + 2]);
-        hr = frame->WritePixels(static_cast<UINT>(image.height), static_cast<UINT>(image.width) * 4,
-                                static_cast<UINT>(bgra.size()), bgra.data());
+    // Written beside the target and moved over it once complete, so a failed write leaves the old file whole.
+    std::filesystem::path partial = path;
+    partial += L".partial";
+    bool opened = false;
+    // The stream is released (the file closed) when this returns, before the move.
+    const HRESULT hr = [&] {
+        ComPtr<IWICStream> stream;
+        HRESULT r = (*f)->CreateStream(&stream);
+        if (SUCCEEDED(r)) r = stream->InitializeFromFilename(partial.c_str(), GENERIC_WRITE);
+        if (FAILED(r)) return r;
+        opened = true;
+        ComPtr<IWICBitmapEncoder> encoder;
+        r = (*f)->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+        if (SUCCEEDED(r)) r = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+        ComPtr<IWICBitmapFrameEncode> frame;
+        if (SUCCEEDED(r)) r = encoder->CreateNewFrame(&frame, nullptr);
+        if (SUCCEEDED(r)) r = frame->Initialize(nullptr);
+        if (SUCCEEDED(r)) r = frame->SetSize(static_cast<UINT>(image.width), static_cast<UINT>(image.height));
+        // The PNG encoder takes BGRA, not RGBA.
+        WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+        if (SUCCEEDED(r)) r = frame->SetPixelFormat(&format);
+        if (SUCCEEDED(r) && format != GUID_WICPixelFormat32bppBGRA) r = WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
+        if (SUCCEEDED(r)) {
+            std::vector<std::uint8_t> bgra(image.rgba);
+            for (std::size_t p = 0; p + 3 < bgra.size(); p += 4) std::swap(bgra[p], bgra[p + 2]);
+            r = frame->WritePixels(static_cast<UINT>(image.height), static_cast<UINT>(image.width) * 4,
+                                   static_cast<UINT>(bgra.size()), bgra.data());
+        }
+        if (SUCCEEDED(r)) r = frame->Commit();
+        if (SUCCEEDED(r)) r = encoder->Commit();
+        return r;
+    }();
+    if (FAILED(hr)) {
+        if (opened) DeleteFileW(partial.c_str());
+        return std::unexpected(file_error(opened ? "writing PNG" : "opening", path, hr));
     }
-    if (SUCCEEDED(hr)) hr = frame->Commit();
-    if (SUCCEEDED(hr)) hr = encoder->Commit();
-    if (FAILED(hr)) return std::unexpected(file_error("writing PNG", path, hr));
+    if (!MoveFileExW(partial.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        const HRESULT moved = HRESULT_FROM_WIN32(GetLastError());
+        DeleteFileW(partial.c_str());
+        return std::unexpected(file_error("replacing", path, moved));
+    }
     return {};
 }
 

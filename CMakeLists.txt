@@ -85,6 +85,23 @@ set(_nitcad_fast_debug "$<AND:$<CONFIG:Debug>,$<BOOL:$<TARGET_PROPERTY:NITCAD_FA
 add_compile_options($<${_nitcad_slow_debug}:/Od> $<${_nitcad_slow_debug}:/Ob0> $<${_nitcad_slow_debug}:/RTC1>
                     $<${_nitcad_fast_debug}:/O2> $<${_nitcad_fast_debug}:/Ob2>)
 add_compile_options(${NITCAD_LANG_FLAGS} /W4 /WX /external:W0)
+
+# AddressSanitizer (the release-asan preset): first-party code is instrumented; vcpkg
+# libraries are not, which ASan on MSVC supports with the dynamic CRT. /Zi and /DEBUG give
+# reports file:line; ASan rejects incremental linking. The runtime DLL
+# (clang_rt.asan_dynamic-x86_64.dll) comes from the MSVC bin directory on a developer
+# shell's PATH.
+option(NITCAD_ASAN "Build with AddressSanitizer (/fsanitize=address)" OFF)
+if(NITCAD_ASAN)
+  add_compile_options(/fsanitize=address /Zi)
+  add_link_options(/DEBUG /INCREMENTAL:NO)
+  # The STL container annotations must match across every object; the vcpkg libraries
+  # (Catch2.lib) are built without them, so they are off (LNK2038 otherwise). Only the
+  # container-overflow check is lost; heap/stack/global out-of-bounds and use-after-free stay.
+  add_compile_definitions(_DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION
+                          _DISABLE_OPTIONAL_ANNOTATION)
+  message(STATUS "AddressSanitizer: ON")
+endif()
 add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
 # --- Dependencies (from vcpkg.json) ------------------------------------------------
@@ -594,6 +611,7 @@ add_library(nitcad_render STATIC
   src/render/vectors.cpp
   src/render/streamlines.cpp
   src/render/cut_line.cpp
+  src/render/band_surface.cpp
   src/render/quality.cpp
   src/render/edges.cpp
   src/render/compare.cpp
@@ -619,6 +637,7 @@ add_executable(nitcad_render_test
   tests/render/hidden_test.cpp
   tests/render/film_test.cpp
   tests/render/cut_line_test.cpp
+  tests/render/band_surface_test.cpp
   tests/render/edges_test.cpp
   tests/render/axes3d_test.cpp
   tests/render/quality_test.cpp
@@ -1217,4 +1236,19 @@ target_compile_definitions(nitcad_validation_test PRIVATE
 # The benchmarks solve many devices and pin measured gaps; they run in the Release configuration.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME validation COMMAND nitcad_validation_test)
+endif()
+
+# --- Fuzzing (the release-fuzz preset) ----------------------------------------------
+# libFuzzer through MSVC's /fsanitize=fuzzer, with ASan. The deck library carries the coverage
+# instrumentation the fuzzer steers by; only the fuzz targets link libFuzzer (it supplies main).
+# Run: nitcad_deck_syntax_fuzz <corpus dir> <seed dir>, e.g. a scratch corpus and decks/.
+option(NITCAD_FUZZ "Build the libFuzzer targets (needs NITCAD_ASAN)" OFF)
+if(NITCAD_FUZZ)
+  if(NOT NITCAD_ASAN)
+    message(FATAL_ERROR "NITCAD_FUZZ needs NITCAD_ASAN.")
+  endif()
+  target_compile_options(nitcad_deck PRIVATE /fsanitize=fuzzer)
+  add_executable(nitcad_deck_syntax_fuzz tests/fuzz/deck_syntax_fuzz.cpp)
+  target_compile_options(nitcad_deck_syntax_fuzz PRIVATE /fsanitize=fuzzer)
+  target_link_libraries(nitcad_deck_syntax_fuzz PRIVATE NiTCAD::deck)
 endif()

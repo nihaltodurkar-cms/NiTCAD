@@ -1,5 +1,8 @@
 #include "NiTCAD/render/scene.hpp"
 #include "NiTCAD/render/vectors.hpp"
+#include "scene_detail.hpp"
+
+#include "vec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -30,13 +33,11 @@ Float3 um(const Point& p) noexcept {
             static_cast<float>(p[2] * um_per_cm)};
 }
 
-Point sub(const Point& a, const Point& b) noexcept { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-Point add(const Point& a, const Point& b) noexcept { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
-Point scale(const Point& a, double s) noexcept { return {a[0] * s, a[1] * s, a[2] * s}; }
-double dot(const Point& a, const Point& b) noexcept { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-Point cross(const Point& a, const Point& b) noexcept {
-    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-}
+using vec::add;
+using vec::cross;
+using vec::dot;
+using vec::scale;
+using vec::sub;
 Point unit(const Point& a) noexcept {
     const double n = std::sqrt(dot(a, a));
     return n > 0.0 ? scale(a, 1.0 / n) : Point{0.0, 0.0, 1.0};
@@ -1622,5 +1623,21 @@ std::expected<PlotScene, base::Error> quality_plot(std::span<const double> angle
     p.series = {std::move(bins), std::move(threshold)};
     return p;
 }
+
+// Unit 26o: the shared helpers (scene_detail.hpp), forwarding to this file's own.
+namespace detail {
+
+void fan(TriangleBatch& batch, std::vector<Point> pts, const std::vector<float>& values, const Rgba& color,
+         const Point& normal) {
+    render::fan(batch, std::move(pts), values, color, normal);
+}
+
+void frame(FieldScene& s, const ViewOptions& o) { render::frame(s, o); }
+
+std::expected<void, base::Error> check_view(const device::Device& d, const Geometry& g, const ViewOptions& o) {
+    return render::check_view(d, g, o);
+}
+
+}  // namespace detail
 
 }  // namespace NiTCAD::render

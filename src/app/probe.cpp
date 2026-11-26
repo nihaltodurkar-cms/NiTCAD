@@ -2,13 +2,16 @@
 #include "NiTCAD/app/probe.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <format>
 #include <limits>
 
 #include "NiTCAD/app/view_settings.hpp"
+#include "NiTCAD/render/band_surface.hpp"
 #include "NiTCAD/render/image.hpp"
+#include "NiTCAD/render/streamlines.hpp"
 
 namespace NiTCAD::app {
 
@@ -148,6 +151,110 @@ std::string curve_text(const render::PlotScene& scene, const CurveHit& hit) {
     std::string text;
     if (scene.series.size() > 1 && hit.series < scene.series.size()) text = scene.series[hit.series].name + "\n";
     text += std::format("{} = {:.4g}\n{} = {:.4g}", scene.x.label, hit.x, scene.y.label, hit.y);
+    return text;
+}
+
+// --- band surface readout (Unit 26o, BSD7) ---------------------------------------------------------------
+
+std::optional<BandHit> band_pick(const Workspace& w, const ViewSettings& s, const render::FieldScene& scene,
+                                 int width, int height, float x, float y) {
+    if (s.kind != ViewKind::band_surface || !scene.axes || !w.device || !w.geometry || w.points.empty()) {
+        return std::nullopt;
+    }
+    const std::size_t point = s.point.value_or(w.points.size() - 1);
+    if (point >= w.points.size()) return std::nullopt;
+    const int dimension = w.device->mesh().dimension();
+    if (dimension == 3 && !s.band_plane) return std::nullopt;
+    constexpr std::array<std::string_view, 4> names{"Ec", "Ev", "EFn", "EFp"};
+    // The nearest triangle of a shown level the ray meets (Moller-Trumbore, in double).
+    const render::ScreenRay ray = render::screen_ray(scene, width, height, x, y);
+    const auto sub = [](const std::array<double, 3>& a, const std::array<double, 3>& b) {
+        return std::array<double, 3>{a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+    };
+    const auto cross = [](const std::array<double, 3>& a, const std::array<double, 3>& b) {
+        return std::array<double, 3>{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+    };
+    const auto dot = [](const std::array<double, 3>& a, const std::array<double, 3>& b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    };
+    double best = std::numeric_limits<double>::infinity();
+    int level = -1;
+    for (const render::TriangleBatch& b : scene.triangles) {
+        const auto n = std::ranges::find(names, b.name);
+        if (n == names.end()) continue;
+        const auto k = static_cast<std::size_t>(n - names.begin());
+        if (!s.band_levels[k]) continue;
+        for (std::size_t i = 0; i + 2 < b.vertices.size(); i += 3) {
+            std::array<std::array<double, 3>, 3> v{};
+            for (std::size_t j = 0; j < 3; ++j) {
+                for (std::size_t c = 0; c < 3; ++c) v[j][c] = b.vertices[i + j].position[c];
+            }
+            const auto e1 = sub(v[1], v[0]), e2 = sub(v[2], v[0]);
+            const auto p = cross(ray.direction, e2);
+            const double det = dot(e1, p);
+            if (std::abs(det) < 1e-300) continue;
+            const auto t0 = sub(ray.origin, v[0]);
+            const double u = dot(t0, p) / det;
+            if (u < 0.0 || u > 1.0) continue;
+            const auto q = cross(t0, e1);
+            const double w2 = dot(ray.direction, q) / det;
+            if (w2 < 0.0 || u + w2 > 1.0) continue;
+            const double t = dot(e2, q) / det;
+            if (t > 0.0 && t < best) {
+                best = t;
+                level = static_cast<int>(k);
+            }
+        }
+    }
+    if (level < 0) return std::nullopt;
+    // The device point under the hit: scene x and z are the base's u and v (BSD1).
+    const std::array<double, 3> at{ray.origin[0] + best * ray.direction[0], ray.origin[1] + best * ray.direction[1],
+                                   ray.origin[2] + best * ray.direction[2]};
+    BandHit hit;
+    hit.level = level;
+    if (dimension == 2) {
+        hit.position_um = {at[0], at[2], 0.0};
+    } else {
+        const auto a = static_cast<std::size_t>(s.band_plane->axis);
+        const std::size_t b0 = a == 0 ? 1 : 0, b1 = a == 2 ? 1 : 2;
+        hit.position_um[a] = s.band_plane->at_um;
+        hit.position_um[b0] = at[0];
+        hit.position_um[b1] = at[2];
+    }
+    const render::Point x_cm{hit.position_um[0] * 1e-4, hit.position_um[1] * 1e-4, hit.position_um[2] * 1e-4};
+    const render::Locator locator(*w.geometry);
+    const auto located = locator.locate(x_cm);
+    if (!located) return std::nullopt;
+    const auto& bands = w.points[point].bands;
+    for (std::size_t k = 0; k < 4; ++k) {
+        if (!s.band_levels[k]) continue;
+        hit.energy_eV[k] = render::band_energy_at(*w.device, *w.geometry, bands, static_cast<render::BandLevel>(k),
+                                                  located->element, x_cm);
+    }
+    const mesh::NodeId owner = render::band_owner(*w.geometry, located->element, x_cm);
+    const auto regions = w.device->regions();
+    const auto r = w.device->node_region()[static_cast<std::size_t>(owner)];
+    if (static_cast<std::size_t>(r) < regions.size()) hit.region = regions[static_cast<std::size_t>(r)].name;
+    return hit;
+}
+
+std::string band_hover_text(const BandHit& hit, int dimension) {
+    constexpr std::array<std::string_view, 4> names{"Ec", "Ev", "EFn", "EFp"};
+    std::string text;
+    const auto line = [&](std::size_t k) {
+        if (!text.empty()) text += '\n';
+        text += hit.energy_eV[k] ? std::format("{} = {:.4g} eV", names[k], *hit.energy_eV[k])
+                                 : std::format("{}: no value", names[k]);
+    };
+    const auto first = static_cast<std::size_t>(std::clamp(hit.level, 0, 3));
+    line(first);
+    for (std::size_t k = 0; k < 4; ++k) {
+        if (k != first && hit.energy_eV[k]) line(k);
+    }
+    text += std::format("\nx {:.3g}  y {:.3g}", hit.position_um[0], hit.position_um[1]);
+    if (dimension == 3) text += std::format("  z {:.3g}", hit.position_um[2]);
+    text += " \xC2\xB5m";
+    if (!hit.region.empty()) text += "\n" + hit.region;
     return text;
 }
 

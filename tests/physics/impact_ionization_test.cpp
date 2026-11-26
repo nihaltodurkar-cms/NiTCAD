@@ -77,7 +77,8 @@ TEST_CASE("impact ionization: the temperature factor") {
                       1e-15));
         REQUIRE((T > 300.0 ? g > 1.0 : g < 1.0));
     }
-    const auto& n = impact_ionization(silicon(), Carrier::electron);
+    const Semiconductor si = silicon();  // a named material: the coefficients refer into it
+    const auto& n = impact_ionization(si, Carrier::electron);
     const double g = impact_ionization_temperature_factor(0.063, 400.0);
     REQUIRE(impact_ionization_coefficient(n, g, 3e5).alpha <
             impact_ionization_coefficient(n, 1.0, 3e5).alpha);
@@ -86,7 +87,8 @@ TEST_CASE("impact ionization: the temperature factor") {
 }
 
 TEST_CASE("impact ionization: zero at zero field, without coefficients, and below underflow") {
-    const auto& n = impact_ionization(silicon(), Carrier::electron);
+    const Semiconductor si = silicon();  // a named material: the coefficients refer into it
+    const auto& n = impact_ionization(si, Carrier::electron);
     for (const double E : {0.0, 1e-300, 1.0, 1.7e3}) {
         CAPTURE(E);
         const ImpactIonizationRate r = impact_ionization_coefficient(n, 1.0, E);

@@ -3,9 +3,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <format>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -13,7 +18,10 @@
 
 #include "NiTCAD/app/run_controller.hpp"
 #include "NiTCAD/app/view_settings.hpp"
+#include "NiTCAD/render/band_surface.hpp"
+#include "NiTCAD/render/cut_line.hpp"
 #include "NiTCAD/render/image.hpp"
+#include "NiTCAD/render/scene.hpp"
 #include "fixtures.hpp"
 
 using namespace NiTCAD;
@@ -87,7 +95,8 @@ bool has(const std::vector<std::string>& v, const std::string& x) { return std::
 TEST_CASE("app views: names, and the views and fields a workspace offers", "[app]") {
     for (const ViewKind v : {ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::slice, ViewKind::iso,
                              ViewKind::bands, ViewKind::profile, ViewKind::iv, ViewKind::cv, ViewKind::current,
-                             ViewKind::quality, ViewKind::quality_histogram, ViewKind::difference, ViewKind::exploded}) {
+                             ViewKind::quality, ViewKind::quality_histogram, ViewKind::difference, ViewKind::exploded,
+                             ViewKind::band_surface}) {
         CHECK(app::find_view(app::to_string(v)) == v);
     }
     CHECK_FALSE(app::find_view("filmstrip"));  // nitcad plot's alone (Unit 26c: playback instead)
@@ -98,7 +107,7 @@ TEST_CASE("app views: names, and the views and fields a workspace offers", "[app
     CHECK(app::available_views(diode().workspace) == V{ViewKind::profile, ViewKind::bands, ViewKind::iv});
     CHECK(app::available_views(mosfet().workspace) ==
           V{ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::iso, ViewKind::profile, ViewKind::bands,
-            ViewKind::iv, ViewKind::quality,
+            ViewKind::band_surface, ViewKind::iv, ViewKind::quality,
             ViewKind::quality_histogram});  // profile and bands along a cut line, mesh quality (Unit 26b)
     const auto fields = app::available_fields(mosfet().workspace);
     for (const char* f : {"potential", "n", "p", "Ec", "doping", "R", "srh", "E", "J"}) CHECK(has(fields, f));
@@ -1396,4 +1405,492 @@ TEST_CASE("app views 26h: smooth moves follow Windows' animation setting (JD5, J
     CHECK_FALSE(app::smooth_moves(true, false, false));  // "Show animations" off: instant
     CHECK_FALSE(app::smooth_moves(false, true, false));  // tests and the self-test: instant
     CHECK(app::smooth_moves(false, false, true));        // a test forcing them
+}
+
+TEST_CASE("app views 26o: the band surface, as nitcad plot takes it (BSD5)", "[app]") {
+    CHECK(app::to_string(ViewKind::band_surface) == "band-surface");
+    CHECK_FALSE(app::is_plot(ViewKind::band_surface));
+    const ViewSettings fresh;
+    CHECK(fresh.band_levels == std::array<bool, 4>{true, true, false, false});
+    CHECK(fresh.exaggeration == 1.0);
+    CHECK(fresh.band_opacity == 1.0f);
+    CHECK_FALSE(fresh.by_level);
+    CHECK_FALSE(fresh.band_plane);
+
+    // 2D: the scene is render's band surface for the point's bands, with the app's look.
+    const app::Workspace& w2 = mosfet().workspace;
+    ViewSettings s;
+    s.kind = ViewKind::band_surface;
+    s.point = 1;
+    s.band_levels = {true, false, true, false};
+    s.exaggeration = 2.0;
+    s.band_opacity = 0.6f;
+    s.by_level = true;
+    s.range = std::pair{-1.5, 1.0};
+    const auto built = app::build_scene(w2, s);
+    REQUIRE(built);
+    const auto& scene = std::get<render::FieldScene>(*built);
+    render::BandSurfaceOptions o;
+    o.levels = {true, false, true, false};
+    o.exaggeration = 2.0;
+    o.opacity = 0.6f;
+    o.by_level = true;
+    o.range_eV = std::pair{-1.5, 1.0};
+    auto direct = render::band_surface_view(*w2.device, *w2.geometry, w2.points[1].bands, o);
+    REQUIRE(direct);
+    for (const render::TriangleBatch& d : direct->scene.triangles) {
+        CAPTURE(d.name);
+        const auto t = std::ranges::find(scene.triangles, d.name, &render::TriangleBatch::name);
+        REQUIRE(t != scene.triangles.end());
+        REQUIRE(t->vertices.size() == d.vertices.size());
+        bool same = true;
+        for (std::size_t i = 0; i < d.vertices.size(); ++i) same = same && t->vertices[i].position == d.vertices[i].position;
+        CHECK(same);
+    }
+    REQUIRE(scene.axes);
+    CHECK((*scene.axes)[1].per_unit == direct->um_per_eV);
+    const auto args = app::plot_arguments(s);
+    for (const std::vector<std::string>& pair :
+         {std::vector<std::string>{"--view", "band-surface"}, {"--band-levels", "Ec,EFn"}, {"--exaggeration", "2"},
+          {"--opacity", "0.6"}, {"--range", "-1.5,1"}}) {
+        CAPTURE(pair[0]);
+        CHECK(std::ranges::search(args, pair).begin() != args.end());
+    }
+    CHECK(has(args, "--by-level"));
+    CHECK_FALSE(has(args, "--field"));
+    CHECK_FALSE(has(args, "--plane"));
+    // The defaults are not named.
+    ViewSettings plain;
+    plain.kind = ViewKind::band_surface;
+    for (const char* a : {"--band-levels", "--exaggeration", "--opacity", "--by-level"}) CHECK_FALSE(has(app::plot_arguments(plain), a));
+
+    // 3D: a plane is needed; it is the band surface's, named --plane.
+    const app::Workspace& w3 = mosfet3d().workspace;
+    const auto views3 = app::available_views(w3);
+    CHECK(std::ranges::find(views3, ViewKind::band_surface) != views3.end());
+    ViewSettings t;
+    t.kind = ViewKind::band_surface;
+    const auto none = app::build_scene(w3, t);
+    REQUIRE_FALSE(none);
+    CHECK(none.error().message == "--view band-surface needs --plane in 3D");
+    t.band_plane = ViewSettings::Slice{2, 0.4};
+    const auto three = app::build_scene(w3, t);
+    REQUIRE(three);
+    CHECK((*std::get<render::FieldScene>(*three).axes)[0].title == "x (\xC2\xB5m)");
+    const auto targs = app::plot_arguments(t);
+    CHECK(std::ranges::search(targs, std::vector<std::string>{"--plane", "z=0.4"}).begin() != targs.end());
+    // A plane in 2D, and bad values, are refused with nitcad plot's messages.
+    s.band_plane = ViewSettings::Slice{2, 0.4};
+    CHECK(app::build_scene(w2, s).error().message == "--plane applies to a 3D device");
+    s.band_plane.reset();
+    s.exaggeration = 20.0;
+    CHECK(app::build_scene(w2, s).error().message == "--exaggeration is from 0.1 to 10");
+    s.exaggeration = 1.0;
+    s.band_opacity = 0.1f;
+    CHECK(app::build_scene(w2, s).error().message == "--opacity is from 0.2 to 1");
+    s.band_opacity = 1.0f;
+    s.band_levels = {false, false, false, false};
+    CHECK(app::build_scene(w2, s).error().message == "--band-levels needs a level: Ec, Ev, EFn or EFp");
+    // Before a run there is no band surface.
+    const fs::path dir = app_test::scratch("views_26o_unrun");
+    auto unrun = app::workspace_from_deck(app_test::write(dir, "d.deck", app_test::mosfet2d));
+    REQUIRE(unrun);
+    const auto unrun_views = app::available_views(*unrun);
+    CHECK(std::ranges::find(unrun_views, ViewKind::band_surface) == unrun_views.end());
+}
+
+TEST_CASE("app views 26o: the band surface drawn as nitcad plot draws it (BSD5, WG4's choices)", "[app]") {
+    const fs::path out = app_test::scratch("views_26o_images");
+    std::vector<std::pair<const Ran*, ViewSettings>> cases;
+    {
+        ViewSettings s;
+        s.kind = ViewKind::band_surface;
+        cases.emplace_back(&mosfet(), s);
+        s.band_levels = {true, true, true, true};
+        s.by_level = true;
+        s.exaggeration = 0.5;
+        s.band_opacity = 0.7f;
+        s.azimuth = 30.0f;
+        cases.emplace_back(&mosfet(), s);
+    }
+    {
+        ViewSettings s;
+        s.kind = ViewKind::band_surface;
+        s.band_plane = ViewSettings::Slice{0, 1.0};
+        s.range = std::pair{-1.0, 0.8};
+        cases.emplace_back(&mosfet3d(), s);
+    }
+    int k = 0;
+    for (const auto& [ran, s] : cases) {
+        CAPTURE(k);
+        auto scene = app::build_scene(ran->workspace, s);
+        REQUIRE(scene);
+        const render::Image mine = draw(*scene, 480, 360);
+        const fs::path png = out / std::format("bs{}.png", k++);
+        std::string args = "plot " + app_test::quoted(ran->deck);
+        for (const std::string& a : app::plot_arguments(s)) args += " \"" + a + "\"";
+        args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+        const auto cli = app_test::nitcad(args);
+        CAPTURE(args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto theirs = render::load_png(png);
+        REQUIRE(theirs);
+        const auto d = render::compare(mine, *theirs, 0);
+        REQUIRE(d);
+        CHECK(d->max_channel == 0);
+    }
+    // nitcad plot refuses what the app refuses.
+    const auto bad = app_test::nitcad("plot " + app_test::quoted(mosfet3d().deck) + " --view band-surface --out " +
+                                      app_test::quoted(out / "bad.png"));
+    CHECK(bad.status != 0);
+    CHECK(bad.output.find("needs --plane in 3D") != std::string::npos);
+}
+
+TEST_CASE("app views 26o: the band surface's plane drawn on the solid, field and slice views (BSD6)", "[app]") {
+    const app::Workspace& w3 = mosfet3d().workspace;
+    const auto has_outline = [](const app::Scene& s) {
+        const auto& f = std::get<render::FieldScene>(s);
+        return std::ranges::any_of(f.lines, [](const render::LineBatch& l) { return l.name == "band plane"; });
+    };
+    for (const ViewKind k : {ViewKind::solid, ViewKind::field, ViewKind::slice}) {
+        CAPTURE(app::to_string(k));
+        ViewSettings s;
+        s.kind = k;
+        s.slices = {{2, 0.4}};
+        const auto plain = app::build_scene(w3, s);
+        REQUIRE(plain);
+        CHECK_FALSE(has_outline(*plain));
+        CHECK_FALSE(has(app::plot_arguments(s), "--plane"));
+        s.band_plane = ViewSettings::Slice{0, 1.0};
+        const auto drawn = app::build_scene(w3, s);
+        REQUIRE(drawn);
+        CHECK(has_outline(*drawn));
+        const auto args = app::plot_arguments(s);
+        CHECK(std::ranges::search(args, std::vector<std::string>{"--plane", "x=1"}).begin() != args.end());
+    }
+    // The other views keep the setting without drawing or naming it.
+    ViewSettings mesh;
+    mesh.kind = ViewKind::mesh;
+    mesh.band_plane = ViewSettings::Slice{0, 1.0};
+    const auto m = app::build_scene(w3, mesh);
+    REQUIRE(m);
+    CHECK_FALSE(has_outline(*m));
+    CHECK_FALSE(has(app::plot_arguments(mesh), "--plane"));
+    // A 2D device has no plane.
+    ViewSettings flat;
+    flat.kind = ViewKind::solid;
+    flat.band_plane = ViewSettings::Slice{0, 1.0};
+    const auto refused = app::build_scene(mosfet().workspace, flat);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().message == "--plane applies to a 3D device");
+    // nitcad plot draws the same image, and refuses --plane where the app does not draw it.
+    const fs::path out = app_test::scratch("views_26o_outline");
+    ViewSettings solid;
+    solid.kind = ViewKind::solid;
+    solid.band_plane = ViewSettings::Slice{2, 0.4};
+    auto scene = app::build_scene(w3, solid);
+    REQUIRE(scene);
+    const render::Image mine = draw(*scene, 480, 360);
+    std::string args = "plot " + app_test::quoted(mosfet3d().deck);
+    for (const std::string& a : app::plot_arguments(solid)) args += " \"" + a + "\"";
+    args += " --size 480x360 --adapter warp --out " + app_test::quoted(out / "solid.png");
+    const auto cli = app_test::nitcad(args);
+    CAPTURE(args, cli.output);
+    REQUIRE(cli.status == 0);
+    auto theirs = render::load_png(out / "solid.png");
+    REQUIRE(theirs);
+    const auto d = render::compare(mine, *theirs, 0);
+    REQUIRE(d);
+    CHECK(d->max_channel == 0);
+    const auto bad = app_test::nitcad("plot " + app_test::quoted(mosfet3d().deck) + " --view mesh --plane x=1 --out " +
+                                      app_test::quoted(out / "bad.png"));
+    CHECK(bad.status != 0);
+    CHECK(bad.output.find("--plane applies to") != std::string::npos);
+}
+
+TEST_CASE("app views 26o: one energy range over the run; a cut line on the surfaces (BSD8, BSD9, BSC5)", "[app]") {
+    const app::Workspace& w = mosfet().workspace;
+    REQUIRE(w.points.size() >= 3);
+    ViewSettings s;
+    s.kind = ViewKind::band_surface;
+    CHECK_FALSE(s.band_fit_point);
+    const auto run_range = render::band_energy_range(*w.device, w.points, s.band_levels);
+    REQUIRE(run_range);
+    const auto scene_at = [&](std::size_t i, const ViewSettings& v) {
+        ViewSettings t = v;
+        t.point = i;
+        auto b = app::build_scene(w, t);
+        REQUIRE(b);
+        return std::get<render::FieldScene>(std::move(*b));
+    };
+    // The same range at every point; the scene is the one point i's bands alone draw on that range.
+    const auto first = scene_at(0, s);
+    REQUIRE(first.colorbar);
+    for (std::size_t i = 0; i < w.points.size(); ++i) {
+        CAPTURE(i);
+        const auto f = scene_at(i, s);
+        REQUIRE(f.colorbar);
+        CHECK(f.colorbar->scale.lo() == run_range->first);
+        CHECK(f.colorbar->scale.hi() == run_range->second);
+        CHECK((*f.axes)[1].per_unit == (*first.axes)[1].per_unit);
+        render::BandSurfaceOptions o;
+        o.range_eV = run_range;
+        auto alone = render::band_surface_view(*w.device, *w.geometry, w.points[i].bands, o);
+        REQUIRE(alone);
+        for (const render::TriangleBatch& d : alone->scene.triangles) {
+            const auto t = std::ranges::find(f.triangles, d.name, &render::TriangleBatch::name);
+            REQUIRE(t != f.triangles.end());
+            REQUIRE(t->vertices.size() == d.vertices.size());
+            bool same = true;
+            for (std::size_t k = 0; k < d.vertices.size(); ++k) same = same && t->vertices[k].position == d.vertices[k].position;
+            CHECK(same);
+        }
+    }
+    // Stepping i -> j -> i gives the same scene.
+    const auto again = scene_at(0, s);
+    REQUIRE(again.triangles.size() == first.triangles.size());
+    for (std::size_t k = 0; k < first.triangles.size(); ++k) {
+        bool same = first.triangles[k].vertices.size() == again.triangles[k].vertices.size();
+        for (std::size_t i = 0; same && i < first.triangles[k].vertices.size(); ++i) {
+            same = first.triangles[k].vertices[i].position == again.triangles[k].vertices[i].position;
+        }
+        CHECK(same);
+    }
+    // Fit this point: the point's own range, named --fit-point.
+    ViewSettings fit = s;
+    fit.band_fit_point = true;
+    const auto own = scene_at(0, fit);
+    const auto own_direct = render::band_surface_view(*w.device, *w.geometry, w.points[0].bands);
+    REQUIRE(own_direct);
+    CHECK(own.colorbar->scale.lo() == own_direct->range_eV.first);
+    CHECK(own.colorbar->scale.hi() == own_direct->range_eV.second);
+    CHECK(has(app::plot_arguments(fit), "--fit-point"));
+    CHECK_FALSE(has(app::plot_arguments(s), "--fit-point"));
+    // A cut line: drawn on the surfaces, not on the base.
+    ViewSettings cut = s;
+    cut.cut = ViewSettings::Cut{{0.1, 0.5}, {1.9, 0.5}};
+    const auto with = scene_at(1, cut);
+    CHECK(std::ranges::any_of(with.lines, [](const render::LineBatch& l) { return l.name == "band cut"; }));
+    CHECK(std::ranges::none_of(with.lines, [](const render::LineBatch& l) { return l.name == "cut line"; }));
+    // nitcad plot draws the same images; Fit this point at the last point.
+    // (This run moves Ec and Ev only: EFn and EFp stay flat. The last point's Ev floor is 2e-4 eV above the run's.)
+    const auto run_levels = render::band_energy_range(*w.device, w.points, fit.band_levels);
+    REQUIRE(run_levels);
+    const auto last_fit = scene_at(w.points.size() - 1, fit);
+    CHECK(std::pair{last_fit.colorbar->scale.lo(), last_fit.colorbar->scale.hi()} != *run_levels);
+    const fs::path out = app_test::scratch("views_26o_run");
+    int n = 0;
+    for (ViewSettings v : {s, fit, cut}) {
+        v.point = w.points.size() - 1;
+        auto scene = app::build_scene(w, v);
+        REQUIRE(scene);
+        const render::Image mine = draw(*scene, 480, 360);
+        const fs::path png = out / std::format("r{}.png", n++);
+        std::string args = "plot " + app_test::quoted(mosfet().deck);
+        for (const std::string& a : app::plot_arguments(v)) args += " \"" + a + "\"";
+        args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+        const auto cli = app_test::nitcad(args);
+        CAPTURE(args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto theirs = render::load_png(png);
+        REQUIRE(theirs);
+        const auto d = render::compare(mine, *theirs, 0);
+        REQUIRE(d);
+        CHECK(d->max_channel == 0);
+    }
+}
+
+TEST_CASE("app views 26o: the band surface plays a sweep's points (BSD11)", "[app]") {
+    const app::Workspace& w = mosfet().workspace;
+    REQUIRE(w.points.size() >= 3);
+    REQUIRE_FALSE(w.transient);
+    ViewSettings s;
+    s.kind = ViewKind::band_surface;
+    CHECK(app::takes_band_playback(w, s));
+    for (const ViewKind k : {ViewKind::solid, ViewKind::field, ViewKind::slice}) {
+        s.kind = k;
+        CHECK_FALSE(app::takes_band_playback(w, s));
+        CHECK_FALSE(app::takes_film(w, s));  // a sweep's field view still does not play
+    }
+    // One point is nothing to play.
+    app::Workspace one;
+    one.device = std::make_unique<device::Device>(*w.device);
+    one.geometry = std::make_unique<render::Geometry>(*w.geometry);
+    one.points = {w.points.front()};
+    s.kind = ViewKind::band_surface;
+    CHECK_FALSE(app::takes_band_playback(one, s));
+    // The label: the point's biases without its index, then "(k of n)".
+    const auto labels = app::point_labels(w);
+    const std::size_t n = w.points.size();
+    for (const std::size_t k : {std::size_t{0}, n - 1}) {
+        const std::string label = app::playback_label(w, k);
+        CAPTURE(label, labels[k]);
+        CHECK(label.ends_with(std::format("({} of {})", k + 1, n)));
+        const std::size_t dot = labels[k].find(" \xC2\xB7 ");
+        REQUIRE(dot != std::string::npos);
+        CHECK(label.starts_with(labels[k].substr(dot + 4)));
+    }
+    CHECK(app::playback_label(w, n + 5).ends_with(std::format("({} of {})", n, n)));
+}
+
+namespace {
+
+std::string env(const char* name) {
+    char* value = nullptr;
+    std::size_t length = 0;
+    const bool given = _dupenv_s(&value, &length, name) == 0 && value != nullptr;
+    const std::string out = given ? value : "";
+    std::free(value);
+    return out;
+}
+
+// BSC14: on each line (cm) every sample in a silicon-only element: band_energy_at equals the cut band plot's value
+// within 1e-9 eV, all four levels. Returns the level samples checked.
+std::size_t agree_on_lines(const device::Device& d, const render::Geometry& g, const results::BandDiagram& b,
+                           const std::vector<std::pair<render::Point, render::Point>>& lines) {
+    const auto keys = render::band_material_keys(d);
+    std::size_t checked = 0;
+    for (const auto& [a, z] : lines) {
+        const auto cut = render::cut_line(g, a, z);
+        REQUIRE(cut.has_value());
+        REQUIRE_FALSE(cut->samples.empty());
+        const auto plot = render::cut_band_plot(d.mesh(), *cut, b);
+        REQUIRE(plot.has_value());
+        for (std::size_t i = 0; i < cut->samples.size(); ++i) {
+            const render::CutSample& s = cut->samples[i];
+            const auto nodes = g.element(s.element);
+            const std::int32_t key = keys[static_cast<std::size_t>(nodes[0])];
+            if (key < 0 || !std::ranges::all_of(nodes, [&](mesh::NodeId v) { return keys[static_cast<std::size_t>(v)] == key; })) {
+                continue;
+            }
+            render::Point x{};
+            for (std::size_t k = 0; k < 4; ++k) {
+                if (s.at.weights[k] == 0.0) continue;
+                const auto& p = d.mesh().points()[static_cast<std::size_t>(s.at.nodes[k])];
+                for (std::size_t c = 0; c < 3; ++c) x[c] += s.at.weights[k] * p[c];
+            }
+            for (std::size_t lv = 0; lv < 4; ++lv) {
+                const auto e = render::band_energy_at(d, g, b, static_cast<render::BandLevel>(lv), s.element, x);
+                REQUIRE(e.has_value());
+                CHECK(std::abs(*e - plot->series[lv].y[i]) < 1e-9);
+                ++checked;
+            }
+        }
+    }
+    return checked;
+}
+
+}  // namespace
+
+// BSD12: the FinFET check (BSC14, BSC15), on a solved decks/finfet_3d.deck named by NITCAD_FINFET_DECK. Hidden:
+// the solve takes 30+ minutes. Prints the numbers for the record.
+TEST_CASE("app views 26o: the solved FinFET on the band surface (BSC14, BSC15)", "[.finfet][app]") {
+    const std::string deck = env("NITCAD_FINFET_DECK");
+    if (deck.empty()) SKIP("NITCAD_FINFET_DECK names no solved FinFET deck");
+    const auto loaded = app::workspace_from_deck(deck);
+    REQUIRE(loaded.has_value());
+    const app::Workspace& w = *loaded;
+    REQUIRE(w.points.size() == 17);
+    const device::Device& d = *w.device;
+    const render::Geometry& g = *w.geometry;
+    constexpr double nm = 1e-7;  // cm
+
+    // BSC14: the two planes' lines, at the first and the last point.
+    std::vector<std::pair<render::Point, render::Point>> along_x, across;
+    for (const double y : {25.0, 32.0, 40.0, 48.0}) {
+        along_x.push_back({{0.0, y * nm, 7.0 * nm}, {85.0 * nm, y * nm, 7.0 * nm}});
+        across.push_back({{42.5 * nm, y * nm, 0.0}, {42.5 * nm, y * nm, 14.0 * nm}});
+    }
+    for (const std::size_t k : {std::size_t{0}, w.points.size() - 1}) {
+        CAPTURE(k);
+        const std::size_t a = agree_on_lines(d, g, w.points[k].bands, along_x);
+        const std::size_t c = agree_on_lines(d, g, w.points[k].bands, across);
+        CHECK(a > 0);
+        CHECK(c > 0);
+        std::printf("BSC14 point %zu: %zu level samples along x (z = 7 nm), %zu across (x = 42.5 nm) checked\n", k, a, c);
+    }
+    // BSC9 (recorded): each plane's scene build time, median of 5, at the last point.
+    for (const auto& [name, plane] : {std::pair{"z = 7 nm", render::Plane{{0.0, 0.0, 1.0}, 7.0 * nm}},
+                                      std::pair{"x = 42.5 nm", render::Plane{{1.0, 0.0, 0.0}, 42.5 * nm}}}) {
+        render::BandSurfaceOptions o;
+        o.plane = plane;
+        std::vector<double> ms;
+        for (int r = 0; r < 5; ++r) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto s = render::band_surface_view(d, g, w.points.back().bands, o);
+            ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            REQUIRE(s.has_value());
+        }
+        std::ranges::sort(ms);
+        std::printf("BSC9 FinFET plane %s: scene build median %.1f ms\n", name, ms[2]);
+    }
+
+    // BSC15: the barrier top E_b at each point: per mesh plane x = const, the lowest Ec over the semiconductor
+    // nodes; E_b the highest of those.
+    const auto& pts = d.mesh().points();
+    const auto barrier = [&](const results::BandDiagram& b) {
+        std::map<double, double> lowest;  // x -> min Ec
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            const double ec = b.conduction_eV[i];
+            if (!std::isfinite(ec)) continue;
+            auto [it, fresh] = lowest.try_emplace(pts[i][0], ec);
+            if (!fresh) it->second = std::min(it->second, ec);
+        }
+        double top = -1e300, at = 0.0;
+        for (const auto& [x, e] : lowest) {
+            if (e > top) top = e, at = x;
+        }
+        return std::pair{top, at};
+    };
+    std::size_t drain = d.contacts().size();
+    std::size_t gate = d.contacts().size();
+    for (std::size_t c = 0; c < d.contacts().size(); ++c) {
+        if (d.contacts()[c].name == "drain") drain = c;
+        if (d.contacts()[c].name == "gate_top") gate = c;
+    }
+    REQUIRE(drain < d.contacts().size());
+    REQUIRE(gate < d.contacts().size());
+    constexpr double kT_ln10 = 8.617333262e-5 * 300.0 * 2.302585092994046;  // eV
+    std::vector<std::pair<double, double>> eb;
+    for (const auto& p : w.points) eb.push_back(barrier(p.bands));
+    std::size_t steps = 0;
+    for (std::size_t k = 0; k + 1 < w.points.size(); ++k) {
+        const double v0 = w.points[k].bias_V[gate], v1 = w.points[k + 1].bias_V[gate];
+        const double i0 = std::abs(w.points[k].terminal_current[drain]);
+        const double i1 = std::abs(w.points[k + 1].terminal_current[drain]);
+        const double alpha = -(eb[k + 1].first - eb[k].first) / (v1 - v0);
+        const double swing = (v1 - v0) / (std::log10(i1) - std::log10(i0));  // V/dec
+        const double ratio = alpha / (kT_ln10 / swing);
+        const bool sub = i0 < 1e-7 && i1 < 1e-7;
+        std::printf("BSC15 VG %.2f-%.2f V: Id %.3e-%.3e A, E_b %.4f-%.4f eV (top at x = %.1f nm), alpha %.4f, "
+                    "S %.1f mV/dec, alpha/(kT ln10/S) %.4f%s\n",
+                    v0, v1, i0, i1, eb[k].first, eb[k + 1].first, eb[k + 1].second / nm, alpha, swing * 1e3, ratio,
+                    sub ? "  [subthreshold]" : "");
+        if (sub) {
+            CAPTURE(k, alpha, swing, ratio);
+            CHECK(std::abs(ratio - 1.0) <= 0.10);
+            ++steps;
+        }
+    }
+    CHECK(steps >= 2);
+    // Recorded: the corner against the fin centre on x = 42.5 nm (the gate's middle plane) at VG = 0.1 V.
+    REQUIRE(std::abs(w.points[2].bias_V[gate] - 0.1) < 1e-12);
+    const auto& ec = w.points[2].bands.conduction_eV;
+    const auto nearest = [&](double x, double y, double z) {
+        std::size_t best = 0;
+        double dist = 1e300;
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            if (!std::isfinite(ec[i])) continue;
+            const double q = std::hypot(pts[i][0] - x, pts[i][1] - y, pts[i][2] - z);
+            if (q < dist) dist = q, best = i;
+        }
+        return best;
+    };
+    const std::size_t corner = nearest(42.5 * nm, 50.0 * nm, 2.0 * nm);
+    const std::size_t top = nearest(42.5 * nm, 50.0 * nm, 7.0 * nm);
+    const std::size_t side = nearest(42.5 * nm, 35.0 * nm, 2.0 * nm);
+    const std::size_t centre = nearest(42.5 * nm, 35.0 * nm, 7.0 * nm);
+    std::printf("BSC15 corner effect, x = 42.5 nm, VG = 0.1 V: Ec corner %.4f, top centre %.4f, side middle %.4f, "
+                "fin centre %.4f eV (corner - centre %.1f meV)\n",
+                ec[corner], ec[top], ec[side], ec[centre], (ec[corner] - ec[centre]) * 1e3);
 }

@@ -38,5 +38,8 @@ struct ImpactIonizationRate {
     return carrier == Carrier::electron ? m.parameters().impact_ionization.electron
                                         : m.parameters().impact_ionization.hole;
 }
+// The result refers into the material, so a temporary material (impact_ionization(silicon(), ...))
+// would leave it dangling: rejected at compile time.
+const ImpactIonizationCoefficients& impact_ionization(const Semiconductor&& m, Carrier carrier) = delete;
 
 }  // namespace NiTCAD::physics

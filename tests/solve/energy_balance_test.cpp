@@ -272,7 +272,8 @@ TEST_CASE("energy balance: a uniform field gives Canali's velocity and the local
                                               : physics::Carrier::hole);
             const double tau_w = electrons ? physics::silicon_energy_relaxation.tau_n_s
                                            : physics::silicon_energy_relaxation.tau_p_s;
-            const physics::ImpactIonizationParameters& ii =
+            // A copy: silicon() is a temporary, so a reference into its parameters would dangle.
+            const physics::ImpactIonizationParameters ii =
                 physics::silicon().parameters().impact_ionization;
             const physics::ImpactIonizationCoefficients& ionization =
                 electrons ? ii.electron : ii.hole;
