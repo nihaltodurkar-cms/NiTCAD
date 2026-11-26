@@ -2213,7 +2213,10 @@ TEST_CASE("app window 26o: the band surface plays a sweep's bias points (BSD11, 
     CHECK_FALSE(w->playing());
     CHECK(seen.back() == n - 1);
     CHECK(std::ranges::is_sorted(seen));
+    // Release only (as KG6): the unoptimised Debug build records the time (284 ms on CI, 9a85819).
+#ifdef NDEBUG
     CHECK(longest_ms < app_test::wg1_limit_ms());
+#endif
     CHECK(text_of(*w, MainWindow::id_play) == "Pla&y");
     // Pause holds the point shown.
     w->execute(Command::snapshot_first);
