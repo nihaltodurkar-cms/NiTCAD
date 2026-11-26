@@ -2096,6 +2096,9 @@ TEST_CASE("app window 26o: the band surface in the inspector, stepped, hovered; 
         CHECK(w->settings().band_plane->axis == 2);
         CHECK(std::abs(w->settings().band_plane->at_um - 0.4) < 1e-9);
         CHECK(shown(*w, MainWindow::id_slice_axis));
+        // On this view the slice controls are labelled for the plane they set.
+        CHECK(text_of(*w, MainWindow::id_first_label + 5) == "Plane");
+        CHECK(text_of(*w, MainWindow::id_first_label + 6) == "Plane at (?m)");
         choose(*w, MainWindow::id_slice_axis, L"x");
         apply_text(*w, MainWindow::id_slice_at, "1");
         REQUIRE(w->settings().band_plane);
@@ -2106,6 +2109,8 @@ TEST_CASE("app window 26o: the band surface in the inspector, stepped, hovered; 
         CHECK(std::get<render::FieldScene>(*w->scene()).plane_inset->axis == 0);
         // The Slice view shows the same plane; the Solid view outlines it.
         choose(*w, MainWindow::id_view, L"slice");
+        CHECK(text_of(*w, MainWindow::id_first_label + 5) == "Slice plane");
+        CHECK(text_of(*w, MainWindow::id_first_label + 6) == "Slice at (?m)");
         REQUIRE(w->settings().slices.size() == 1);
         CHECK(w->settings().slices.front().axis == 0);
         CHECK(w->settings().slices.front().at_um == 1.0);

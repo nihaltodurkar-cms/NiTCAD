@@ -853,7 +853,11 @@ void MainWindow::draw_section_header(const DRAWITEMSTRUCT& d) {
     SetTextColor(dc, RGB(80, 87, 98));
     HGDIOBJ old = SelectObject(dc, bold_);
     RECT text{r.left + scaled(10, dpi_), r.top, r.right - scaled(24, dpi_), r.bottom};
-    DrawTextW(dc, section_titles[static_cast<std::size_t>(section)], -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    // Unit 26o: on the band surface the slice controls set its plane, so the section says so.
+    const wchar_t* title = section == sec_slice && settings().kind == ViewKind::band_surface
+                               ? L"PLANE AND CLIP"
+                               : section_titles[static_cast<std::size_t>(section)];
+    DrawTextW(dc, title, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, font_);
     RECT chevron{r.right - scaled(24, dpi_), r.top, r.right - scaled(8, dpi_), r.bottom};
     DrawTextW(dc, section_folded(section) ? L"▸" : L"▾", 1, &chevron, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
@@ -2111,6 +2115,11 @@ void MainWindow::show_inspector_groups() {
     show({label_range, id_range_min, id_range_max, id_range_auto},
          tab_ == tab_view && workspace_ &&
              (s.kind == ViewKind::field || s.kind == ViewKind::slice || s.kind == ViewKind::iso || exploded || band));
+    // Unit 26o: the slice controls set the band surface's plane on that view; their labels and header say "Plane".
+    const bool band_plane = s.kind == ViewKind::band_surface;
+    win32::set_text(GetDlgItem(inspector_, id_first_label + 5), band_plane ? "Plane" : "Slice plane");
+    win32::set_text(GetDlgItem(inspector_, id_first_label + 6), band_plane ? "Plane at (µm)" : "Slice at (µm)");
+    InvalidateRect(GetDlgItem(inspector_, id_section_first + sec_slice), nullptr, TRUE);
     win32::set_text(GetDlgItem(inspector_, label_swept), s.kind == ViewKind::current ? "Contact" : "Swept contact");
     show({label_swept, id_swept, id_log}, curves);
     show({label_sensed, id_sensed}, curves && s.kind != ViewKind::current);

@@ -2837,6 +2837,11 @@ band-surface --size 1200x800`, the last point, VG = 1.5 V). Its two example comm
 Release build (the 3D one on `examples/mosfet_3d.deck`, plane z = 0.5 µm). Not done: the FinFET section image BSD10
 names, which waits with BSC8 for a solved FinFET run. No code changed; no tests run.
 
+**Labels (2026-11-26; owner: "fix it").** On the band surface the slice controls set its plane, so there they read
+"Plane" and "Plane at (µm)" and the section "PLANE AND CLIP"; on every other view "Slice plane", "Slice at (µm)" and
+"SLICE AND CLIP" as before (`main_window.cpp`). The 26o window test checks both labels on the band surface and back
+on the Slice view. Tests run (Release, 3 cores): the 14 tests of `build\rt2.cmd`, all pass; no full suite, no Debug.
+
 ### Unit 64 — interface pieces the 3D generator refuses: holes, domain edges, slanted walls (proposed 2026-11-21; on `mesh/interface-pieces`)
 
 **Owner request (2026-11-21):** asked what limits make the 3D generator refuse drawn fillets, cylinders and arrays

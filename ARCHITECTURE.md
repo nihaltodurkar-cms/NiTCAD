@@ -3303,8 +3303,7 @@ CG1–CG9; accepted by the owner 2026-10-22):**
 - **Measured (BSC9, Release):** build median 7.3 ms for the 2D MOSFET, 9.6 ms for a 3D plane (limits 150 / 400 ms).
 - **Not done:** playback over the run's points (the call is point-indexed for it); the FinFET section check and its
   image (BSC8, waiting for a solved FinFET run); hidden regions are checked but not hidden; the enhanced look's
-  feature edges draw stray lines on steep junction slopes (shared `set_look` code); the slice controls keep their
-  "Slice" labels on this view.
+  feature edges draw stray lines on steep junction slopes (shared `set_look` code).
 
 ## 7. Language placement (D6: C and Fortran deferred)
 
