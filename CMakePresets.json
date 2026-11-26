@@ -16,16 +16,24 @@
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
     },
     { "name": "debug",   "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
-    { "name": "release", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } }
+    { "name": "release", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "release-asan", "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "NITCAD_ASAN": "ON" } },
+    { "name": "release-fuzz", "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "NITCAD_ASAN": "ON", "NITCAD_FUZZ": "ON" } }
   ],
   "buildPresets": [
     { "name": "debug",   "configurePreset": "debug" },
-    { "name": "release", "configurePreset": "release" }
+    { "name": "release", "configurePreset": "release" },
+    { "name": "release-asan", "configurePreset": "release-asan" },
+    { "name": "release-fuzz", "configurePreset": "release-fuzz", "targets": [ "nitcad_deck_syntax_fuzz" ] }
   ],
   "testPresets": [
     { "name": "debug",   "configurePreset": "debug",   "output": { "outputOnFailure": true },
       "execution": { "jobs": 4 } },
     { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true },
+      "execution": { "jobs": 4 } },
+    { "name": "release-asan", "configurePreset": "release-asan", "output": { "outputOnFailure": true },
       "execution": { "jobs": 4 } }
   ]
 }
