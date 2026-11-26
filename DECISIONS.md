@@ -5064,7 +5064,8 @@ offset, so its depletion reaches less far into the base; its neutral base is wid
 while the textbook factor assumes equal neutral bases. A 200 nm base confirms this: the ratio is 331 at 0.4 V
 (-1.5 %). The other 7 % comes in above 0.6 V (296 at 0.6 V, 282 at 0.7 V; 321 at 0.7 V with the 200 nm base).
 It tracks the SiGe device's base current, which is 190 times larger, and matches the series drop through the
-side-contacted base; it is not high injection (electrons in the base stay near 1e16 against 2e18 cm^-3).
+side-contacted base. High injection is unlikely: J W_B / (q D_n) estimates about 2e16 electrons/cm^3 in the base
+against 2e18 acceptors (estimated, not read from the solution).
 The same check found a deck flaw, now fixed: the base contact had covered the whole base edge, so its end nodes
 lay 2 nm from each junction, inside the depletion regions, and drew a base current ten times the collector
 current (beta 0.1). The contact is now inset to the base's middle 10 nm, which cuts the base current about
