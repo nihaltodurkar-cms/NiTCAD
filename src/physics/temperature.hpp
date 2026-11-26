@@ -20,6 +20,59 @@ inline void expect_temperature(double temperature_K) {
 [[nodiscard]] inline double mu_max_at(const CaugheyThomasParameters& ct, double temperature_K) {
     return ct.mu_max * std::pow(temperature_K / 300.0, ct.T_exponent);
 }
+// Unit 68 slice 2: mu_min, N_ref and alpha at T (unchanged with their exponents 0).
+[[nodiscard]] inline double mu_min_at(const CaugheyThomasParameters& ct, double temperature_K) {
+    return ct.mu_min_T_exponent == 0.0 ? ct.mu_min : ct.mu_min * std::pow(temperature_K / 300.0, ct.mu_min_T_exponent);
+}
+
+// One Caughey-Thomas set's mobility and its temperature slope at N [cm^-3] and T [K]. With the
+// slice-2 exponents 0 both are the legacy expressions, operation for operation.
+[[nodiscard]] inline double ct_mobility(const CaugheyThomasParameters& ct, double N, double T) {
+    const double mu_max = mu_max_at(ct, T);
+    const double mu_min = mu_min_at(ct, T);
+    const double N_ref = ct.N_ref_T_exponent == 0.0 ? ct.N_ref : ct.N_ref * std::pow(T / 300.0, ct.N_ref_T_exponent);
+    const double alpha = ct.alpha_T_exponent == 0.0 ? ct.alpha : ct.alpha * std::pow(T / 300.0, ct.alpha_T_exponent);
+    // Legacy operation order (materials.mobility_caughey_thomas).
+    return mu_min + (mu_max - mu_min) / (1.0 + std::pow(N / N_ref, alpha));
+}
+[[nodiscard]] inline double ct_mobility_slope(const CaugheyThomasParameters& ct, double N, double T) {
+    const double mu_max = mu_max_at(ct, T);
+    if (ct.mu_min_T_exponent == 0.0 && ct.N_ref_T_exponent == 0.0 && ct.alpha_T_exponent == 0.0) {
+        return ct.T_exponent * mu_max / T / (1.0 + std::pow(N / ct.N_ref, ct.alpha));
+    }
+    // mu = mu_min + (mu_max - mu_min) s, s = 1 / (1 + u), u = (N / N_ref)^alpha, each of mu_min,
+    // mu_max, N_ref, alpha a power of T: d ln u / dT = (gamma3 ln(N / N_ref) - gamma2) alpha / T.
+    const double mu_min = mu_min_at(ct, T);
+    const double N_ref = ct.N_ref * std::pow(T / 300.0, ct.N_ref_T_exponent);
+    const double alpha = ct.alpha * std::pow(T / 300.0, ct.alpha_T_exponent);
+    const double u = N > 0.0 ? std::pow(N / N_ref, alpha) : 0.0;
+    const double s = 1.0 / (1.0 + u);
+    const double dln_u = N > 0.0 ? (ct.alpha_T_exponent * std::log(N / N_ref) - ct.N_ref_T_exponent) * alpha / T : 0.0;
+    const double d_min = ct.mu_min_T_exponent * mu_min / T;
+    const double d_max = ct.T_exponent * mu_max / T;
+    return d_min + (d_max - d_min) * s - (mu_max - mu_min) * s * s * u * dln_u;
+}
+
+// A carrier's low-field mobility with the alloy rule (AlloyMobilityParameters), and its slope.
+[[nodiscard]] inline double alloy_mobility(const CaugheyThomasParameters& a, const AlloyMobilityParameters& m,
+                                           bool electron, double N, double T) {
+    const double mu_a = ct_mobility(a, N, T);
+    if (m.fraction == 0.0) return mu_a;
+    const double x = m.fraction;
+    const double mu_b = ct_mobility(electron ? m.electron_b : m.hole_b, N, T);
+    const double scatter = electron && m.C_mu_electron > 0.0 ? x * (1.0 - x) / m.C_mu_electron : 0.0;
+    return 1.0 / ((1.0 - x) / mu_a + x / mu_b + scatter);
+}
+[[nodiscard]] inline double alloy_mobility_slope(const CaugheyThomasParameters& a, const AlloyMobilityParameters& m,
+                                                 bool electron, double N, double T) {
+    if (m.fraction == 0.0) return ct_mobility_slope(a, N, T);
+    const double x = m.fraction;
+    const CaugheyThomasParameters& b = electron ? m.electron_b : m.hole_b;
+    const double mu_a = ct_mobility(a, N, T), mu_b = ct_mobility(b, N, T);
+    const double mu = alloy_mobility(a, m, electron, N, T);
+    // d(1/mu) = -(1 - x) mu_a' / mu_a^2 - x mu_b' / mu_b^2; the scattering term is constant.
+    return mu * mu * ((1.0 - x) * ct_mobility_slope(a, N, T) / (mu_a * mu_a) + x * ct_mobility_slope(b, N, T) / (mu_b * mu_b));
+}
 
 struct BandSlope {
     double value;

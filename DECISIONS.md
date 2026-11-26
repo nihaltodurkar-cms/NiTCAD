@@ -5120,20 +5120,46 @@ tables, KAUST, AIP, Cornell; secondary).
 Rulings the engineer chose as recommended (the owner chooses recommended). Each is reported to the owner.
 1. Names. `aln` is free: the slice-5 dielectric is `aln_dielectric`. Slice 2 adds `gan`, `aln`, `inn`,
    `algan <x>` and `ingan <x>`.
-2. Affinity of the alloys. Items 18 and 19 disagree: linear chi would make the AlGaN/GaN dEc 2.1x, while Q_c
-   gives 0.70 dEg(x). Q_c wins, because the 2DEG (MAC10) depends on dEc. So chi(x) = chi_GaN - Q_c [Eg(x) -
-   Eg_GaN]. The binaries keep their own chi. `algan 1` therefore has chi 2.133 eV against `aln` 2.00, and
-   `ingan 1` has 5.714 eV against `inn` 5.80. This is recorded, not hidden.
-3. AlN gap. The book's table gives 6.2 eV at 300 K. Its Guo-Yoshida Varshni (1.799e-3 eV/K, 1462 K, fitted
-   for 0-300 K) gives a lower curve. Eg(300) = 6.2 eV is used, with Guo-Yoshida's temperature shape.
+2. Affinity, superseded by the owner's option A (below).
+3. AlN gap, superseded: the owner's Piprek values (below).
 4. Caughey-Thomas temperature exponents. The engine's model lets only mu_max vary with T. New optional
    exponents for mu_min, N_ref and alpha are added; 0 keeps every existing set bit-identical (MAC1).
-5. Alloy mobility. The reciprocal rule applies to electron mu_max and mu_min. Hole mobility follows the
-   reciprocal rule without the alloy term. N_ref, alpha and the exponents are linear.
+5. Alloy mobility, superseded by the owner's revision (below).
 6. DOS masses. Electrons: GaN 0.20, AlN 0.40, InN 0.11 (book). Holes: GaN 1.5 (book), AlN 2.7 (owner),
-   InN 1.65 (from the book's Nv = 5.3e19 cm^-3). All are linear in x.
+   InN 1.65 (from the book's Nv = 5.3e19 cm^-3). Interpolation: owner's revision (below).
 7. Interface transport. Thermionic is declared by the deck's `[interface]` section, as today. The library HEMT
    deck declares it, and the engine default is unchanged.
+
+Owner's review of rulings 1-7 (2026-11-27): 1, 4 and 7 accepted; 2, 3, 5 and 6 revised:
+- Option A (alignment). chi_GaN = 4.10 eV at the 300 K reference; every other nitride, binaries included,
+  is aligned by its 300 K gap from the model's own gap functions: chi = 4.10 - Q_c [Eg(x, 300) - Eg_GaN(300)],
+  Q_c 0.70 (AlGaN) and 0.58 (InGaN). So `aln` has chi 2.2747 eV and `inn` 5.7153 eV, and the alloys meet the
+  binaries at their ends. The affinity is held at its 300 K value at every temperature (v1): an effective TCAD
+  alignment parameter, the fixed-Q_c relation calibrated at 300 K. The InGaN Q_c is extrapolated from low In
+  fractions (about 5-9 %). The book's and the owner's first affinities (AlN 2.00, InN 5.80) are not used.
+- AlN gap: Eg(0) 6.10 eV, Varshni 2.63e-3 eV/K and 2082 K (J. Piprek, ed., *Nitride Semiconductor Devices:
+  Principles and Simulation*, Wiley-VCH 2007, Section 2); Eg(300) 6.0006 eV.
+- Alloy mobility: the reciprocal rule applies once, to each end member's final Caughey-Thomas mobility at the
+  node's doping and temperature: 1/mu = (1-x)/mu_A + x/mu_B + x(1-x)/C_mu (electrons; holes without C_mu).
+- Alloy masses: electrons linear, AlGaN bowing 4.8e-3 m0 in the gap's minus form; holes by the DOS mass,
+  m(x) = [(1-x) m_A^1.5 + x m_B^1.5]^(2/3) (Nv linear).
+- InN donors: depth 0, fully ionized, a fallback, not a measured level; a `[material]` override of
+  `ionization.donor_eV` gives incomplete ionization.
+- AlN alpha +0.18 is provisional.
+
+Engineer's questions answered "choose recommended" (2026-11-27):
+- AlN electron saturation beta 1.0, not 0.45: the engine requires beta >= 1 (below it dmu/dE is infinite at
+  E = 0).
+- AlGaN mass bowing: the gap's minus form (no recommendation was given; the engineer's choice, |effect|
+  <= 0.0012 m0).
+- Alloy values not given: permittivity, lifetimes, Auger, radiative coefficient, saturation, dopant levels and
+  heat capacity linear in x.
+- Alloy thermal conductivity off (electrothermal refused), as for SiGe, until a C_kappa is supplied.
+- Alloy impact ionization off.
+- InN is refused above about 494 K, where its exponents put mu_min(T) above mu_max(T).
+
+Slice 1 left this: the material hash took every parameter path, so adding paths (its alloy gap)
+moved every set's hash. Paths added after slice 0 enter it only when nonzero (MAC1).
 
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain

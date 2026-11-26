@@ -1,5 +1,6 @@
 #include "NiTCAD/physics/materials.hpp"
 
+#include "NiTCAD/physics/nitrides.hpp"
 #include "NiTCAD/physics/sige.hpp"
 
 #include <algorithm>
@@ -15,7 +16,11 @@ namespace {
     X(thermal.conductivity_W_cmK) X(thermal.conductivity_exponent) X(thermal.heat_capacity_J_cm3K) \
     X(thermal.thermopower_exponent_n) X(thermal.thermopower_exponent_p)
 
-#define NITCAD_SEMICONDUCTOR_PARAMETERS(X)                                                     \
+// Unit 68 slice 2: the Caughey-Thomas exponents added to a mobility set, and a whole set.
+#define NITCAD_CT_EXPONENTS(X, s) X(s.mu_min_T_exponent) X(s.N_ref_T_exponent) X(s.alpha_T_exponent)
+#define NITCAD_CT(X, s) X(s.mu_min) X(s.mu_max) X(s.N_ref) X(s.alpha) X(s.T_exponent) NITCAD_CT_EXPONENTS(X, s)
+
+#define NITCAD_SEMICONDUCTOR_PARAMETERS(X)                                                   \
     X(eps_r) X(Eg0_eV) X(varshni_alpha_eV_per_K) X(varshni_beta_K) X(Nc300) X(Nv300)           \
     X(electron_affinity_eV) X(electron_mobility.mu_min) X(electron_mobility.mu_max)            \
     X(electron_mobility.N_ref) X(electron_mobility.alpha) X(electron_mobility.T_exponent)      \
@@ -36,7 +41,10 @@ namespace {
     X(passler_gap.alpha_eV_per_K) X(passler_gap.Theta_K) X(passler_gap.Delta)                  \
     X(energy_relaxation.tau_n_s) X(energy_relaxation.tau_p_s) X(alloy_gap.fraction)             \
     X(alloy_gap.alpha_a_eV_per_K) X(alloy_gap.beta_a_K) X(alloy_gap.alpha_b_eV_per_K)          \
-    X(alloy_gap.beta_b_K) NITCAD_THERMAL_PARAMETERS(X)
+    X(alloy_gap.beta_b_K) NITCAD_CT_EXPONENTS(X, electron_mobility)                            \
+    NITCAD_CT_EXPONENTS(X, hole_mobility) X(alloy_mobility.fraction)                           \
+    X(alloy_mobility.C_mu_electron) NITCAD_CT(X, alloy_mobility.electron_b)                    \
+    NITCAD_CT(X, alloy_mobility.hole_b) NITCAD_THERMAL_PARAMETERS(X)
 
 // Unit 51 (GD5, GD10): an insulator's gate-tunnelling band data after its permittivity and heat.
 #define NITCAD_INSULATOR_PARAMETERS(X)                                                         \
@@ -314,7 +322,90 @@ std::expected<MaterialParameters, base::Error> si_strained(std::span<const doubl
     return *p;
 }
 
-constexpr std::array<MaterialEntry, 25> registry{{
+// --- nitrides (MAD8; slice 2, amendment 6) -------------------------------------------------------
+
+constexpr Citation levinshtein_nitrides{
+    "M. Levinshtein, S. Rumyantsev, M. Shur, eds., Properties of Advanced Semiconductor Materials (Wiley 2001), ch. 1-3",
+    "eps_r; GaN gap and Varshni; electron and hole DOS masses; radiative coefficient; 300 K thermal conductivity; "
+    "specific heat and density"};
+constexpr Citation piprek_aln{"J. Piprek, ed., Nitride Semiconductor Devices: Principles and Simulation (Wiley-VCH 2007), "
+                              "Section 2",
+                              "AlN gap Eg(0) 6.10 eV and Varshni alpha 2.63e-3 eV/K, beta 2082 K"};
+constexpr Citation nitride_owner{"owner values and rulings 2026-11-27 (Unit 68 amendment 6)",
+                                 "InN gap and Varshni; Caughey-Thomas mobility and its exponents (AlN alpha +0.18 "
+                                 "provisional); constant hole mobility; saturation (AlN beta 1, not 0.45); SRH; Auger; "
+                                 "dopant levels (InN donor fully ionized fallback); GaN impact ionization; thermal "
+                                 "exponents; Q_c alignment, bowing, alloy mobility"};
+constexpr Citation nitride_none{"NiTCAD: no nitride data in hand",
+                                "off: band-gap narrowing, band-to-band tunnelling; AlN, InN and alloy impact ionization; "
+                                "alloy thermal conductivity"};
+constexpr std::array<Citation, 4> nitride_sources{{levinshtein_nitrides, piprek_aln, nitride_owner, nitride_none}};
+
+// Rules every nitride shares, then each set's own (later rules win).
+template <std::size_t N>
+constexpr auto nitride_rules(const std::array<ParameterCitation, N>& own) {
+    constexpr std::array<ParameterCitation, 12> common{{{"electron_affinity_eV", 2, "derived"},
+                                                        {"Nc300", 0, "derived"},
+                                                        {"Nv300", 0, "derived"},
+                                                        {"electron_mobility.", 2, "secondary"},
+                                                        {"hole_mobility.", 2, "secondary"},
+                                                        {"lifetime.", 2, "secondary"},
+                                                        {"auger.", 2, "secondary"},
+                                                        {"electron_saturation.", 2, "secondary"},
+                                                        {"hole_saturation.", 2, "secondary"},
+                                                        {"ionization.", 2, "secondary"},
+                                                        {"bandgap_narrowing.", 3, "default"},
+                                                        {"band_to_band.", 3, "default"}}};
+    std::array<ParameterCitation, 12 + N> out{};
+    for (std::size_t i = 0; i < 12; ++i) out[i] = common[i];
+    for (std::size_t i = 0; i < N; ++i) out[12 + i] = own[i];
+    return out;
+}
+constexpr auto gan_cites = semiconductor_cites(
+    {0, "secondary"}, nitride_rules(std::array<ParameterCitation, 4>{{{"electron_affinity_eV", 2, "secondary"},
+                                                                      {"impact_ionization.", 2, "secondary"},
+                                                                      {"thermal.conductivity_exponent", 2, "secondary"},
+                                                                      {"thermal.heat_capacity_J_cm3K", 0, "derived"}}}));
+constexpr auto aln_semiconductor_cites = semiconductor_cites(
+    {0, "secondary"}, nitride_rules(std::array<ParameterCitation, 7>{{{"Eg0_eV", 1, "secondary"},
+                                                                      {"varshni_alpha_eV_per_K", 1, "secondary"},
+                                                                      {"varshni_beta_K", 1, "secondary"},
+                                                                      {"electron_saturation.beta", 2, "approximate"},
+                                                                      {"impact_ionization.", 3, "default"},
+                                                                      {"thermal.conductivity_exponent", 2, "secondary"},
+                                                                      {"thermal.heat_capacity_J_cm3K", 0, "derived"}}}));
+constexpr auto inn_cites = semiconductor_cites(
+    {0, "secondary"}, nitride_rules(std::array<ParameterCitation, 7>{{{"Eg0_eV", 2, "secondary"},
+                                                                      {"varshni_alpha_eV_per_K", 2, "secondary"},
+                                                                      {"varshni_beta_K", 2, "secondary"},
+                                                                      {"ionization.donor_eV", 2, "approximate"},
+                                                                      {"impact_ionization.", 3, "default"},
+                                                                      {"thermal.conductivity_exponent", 2, "secondary"},
+                                                                      {"thermal.heat_capacity_J_cm3K", 0, "derived"}}}));
+constexpr auto nitride_alloy_cites = semiconductor_cites(
+    {0, "interpolated"},
+    nitride_rules(std::array<ParameterCitation, 9>{{{"Eg0_eV", 2, "derived"},
+                                                    {"alloy_gap.", 0, "derived"},
+                                                    {"alloy_mobility.", 2, "secondary"},
+                                                    {"alloy_mobility.fraction", 0, "derived"},
+                                                    {"Nc300", 2, "derived"},
+                                                    {"impact_ionization.", 3, "default"},
+                                                    {"thermal.conductivity_W_cmK", 3, "default"},
+                                                    {"thermal.conductivity_exponent", 3, "default"},
+                                                    {"thermal.heat_capacity_J_cm3K", 0, "interpolated"}}}));
+
+template <SemiconductorParameters (*make)()>
+std::expected<MaterialParameters, base::Error> nitride_binary(std::span<const double>) {
+    return make();
+}
+template <std::expected<SemiconductorParameters, base::Error> (*make)(double)>
+std::expected<MaterialParameters, base::Error> nitride_alloy(std::span<const double> a) {
+    auto p = make(a[0]);
+    if (!p) return std::unexpected(std::move(p.error()));
+    return *p;
+}
+
+constexpr std::array<MaterialEntry, 30> registry{{
     {"silicon", MaterialKind::semiconductor, 0, 0, "", "silicon, Couderc band set (default)", silicon_sources,
      fixed_semiconductor<silicon_parameters>},
     {"silicon_legacy", MaterialKind::semiconductor, 0, 0, "", "silicon, the legacy set", legacy_silicon_sources,
@@ -362,6 +453,18 @@ constexpr std::array<MaterialEntry, 25> registry{{
      "Si(1-x)Ge(x) pseudomorphic on (001) silicon, 0 <= x <= 0.3", sige_sources, sige_strained, sige_cites, true},
     {"si_strained", MaterialKind::semiconductor, 1, 1, "si_strained takes the substrate's Ge fraction, 0 <= x <= 0.3",
      "silicon pseudomorphic on relaxed Si(1-x)Ge(x)", sige_sources, si_strained, si_strained_cites, true},
+    {"gan", MaterialKind::semiconductor, 0, 0, "", "GaN, wurtzite, isotropic", nitride_sources,
+     nitride_binary<gan_parameters>, gan_cites, true},
+    {"aln", MaterialKind::semiconductor, 0, 0, "", "AlN, wurtzite, isotropic", nitride_sources,
+     nitride_binary<aln_parameters>, aln_semiconductor_cites, true},
+    {"inn", MaterialKind::semiconductor, 0, 0, "", "InN, wurtzite, isotropic (refused above about 494 K)",
+     nitride_sources, nitride_binary<inn_parameters>, inn_cites, true},
+    {"algan", MaterialKind::semiconductor, 1, 1, "algan takes the Al fraction x, 0 <= x <= 1",
+     "Al(x)Ga(1-x)N between GaN (x = 0) and AlN (x = 1)", nitride_sources, nitride_alloy<algan_parameters>,
+     nitride_alloy_cites, true},
+    {"ingan", MaterialKind::semiconductor, 1, 1, "ingan takes the In fraction x, 0 <= x <= 1",
+     "In(x)Ga(1-x)N between GaN (x = 0) and InN (x = 1)", nitride_sources, nitride_alloy<ingan_parameters>,
+     nitride_alloy_cites, true},
 }};
 
 // --- metal presets (MAD6, MAD14; amendment 4) ---------------------------------------------------
@@ -475,7 +578,15 @@ std::uint64_t parameter_hash(const MaterialParameters& m) {
     };
     const unsigned char kind = m.index() == 0 ? 0 : 1;
     bytes(&kind, 1);
+    // Paths added after slice 0 enter only when nonzero, so a set's hash does not move when the
+    // parameter list grows (MAC1): the alloy gap (slice 1), the alloy mobility and the
+    // Caughey-Thomas exponents (slice 2).
+    const auto added_later = [](std::string_view p) {
+        return p.starts_with("alloy_gap.") || p.starts_with("alloy_mobility.") || p.ends_with(".mu_min_T_exponent") ||
+               p.ends_with(".N_ref_T_exponent") || p.ends_with(".alpha_T_exponent");
+    };
     for (const auto& [path, v] : parameter_values(m)) {
+        if (v == 0.0 && added_later(path)) continue;
         bytes(path.data(), path.size());
         value(v);
     }

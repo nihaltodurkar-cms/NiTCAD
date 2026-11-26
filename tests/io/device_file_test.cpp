@@ -16,6 +16,7 @@
 #include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
+#include "NiTCAD/physics/nitrides.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "container.hpp"
 #include "record.hpp"
@@ -90,6 +91,9 @@ Device rich_device() {
     algaas.energy_relaxation = {.tau_n_s = 0.30000000000000004e-12, .tau_p_s = 0.25e-12};  // Unit 52
     algaas.alloy_gap = {.fraction = 0.3, .alpha_a_eV_per_K = 4.73e-4, .beta_a_K = 636.0,  // Unit 68
                         .alpha_b_eV_per_K = 4.774e-4, .beta_b_K = 235.0};
+    algaas.electron_mobility.N_ref_T_exponent = 1.3;  // Unit 68 slice 2
+    algaas.hole_mobility.alpha_T_exponent = 0.31;
+    algaas.alloy_mobility = physics::algan_parameters(0.3)->alloy_mobility;
     auto d = Device::create(
         {.mesh = std::move(m),
          .temperature_K = 301.5,

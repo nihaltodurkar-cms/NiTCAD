@@ -172,12 +172,9 @@ double caughey_thomas_mobility_slope(const Semiconductor& m, Carrier carrier,
                                      double total_impurity_cm3, double temperature_K) {
     NITCAD_EXPECTS(std::isfinite(total_impurity_cm3) && total_impurity_cm3 >= 0.0);
     detail::expect_temperature(temperature_K);
-    const CaugheyThomasParameters& ct = carrier == Carrier::electron
-                                            ? m.parameters().electron_mobility
-                                            : m.parameters().hole_mobility;
-    const double mu_max = detail::mu_max_at(ct, temperature_K);
-    return ct.T_exponent * mu_max / temperature_K /
-           (1.0 + std::pow(total_impurity_cm3 / ct.N_ref, ct.alpha));
+    const bool electron = carrier == Carrier::electron;
+    const CaugheyThomasParameters& ct = electron ? m.parameters().electron_mobility : m.parameters().hole_mobility;
+    return detail::alloy_mobility_slope(ct, m.parameters().alloy_mobility, electron, total_impurity_cm3, temperature_K);
 }
 
 double impact_ionization_temperature_factor_slope(double phonon_energy_eV,
