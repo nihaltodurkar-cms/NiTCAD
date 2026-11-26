@@ -149,6 +149,7 @@ auto energy_relaxation_fields(P& p) {
 }
 
 constexpr std::uint16_t thermal_record_key = 100;
+constexpr std::uint16_t insulator_metal_key = 7;  // Unit 68 (MAD6): an insulator region that is a metal
 
 // A writer visitor: doubles by bit pattern, bools as 0 / 1.
 struct Put {
@@ -207,6 +208,7 @@ Writer write_region(const device::Region& region) {
         for (const auto& [key, v] : insulator_band(i)) {  // Unit 51: written only when nonzero
             if (*v != 0.0) p.f64(key, *v);
         }
+        if (i.metal) p.u64(insulator_metal_key, 1);  // Unit 68: written only for a metal region
         p.record(thermal_record_key, write_thermal(i.thermal));
     }
     w.record(region_key::parameters, p);
@@ -241,6 +243,10 @@ std::expected<device::Region, base::Error> read_region(const Reader& r) {
             if (!p.has(key)) continue;
             NITCAD_IO_TRY(v, p.f64(key));
             *target = v;
+        }
+        if (p.has(insulator_metal_key)) {
+            NITCAD_IO_TRY(metal, p.u64(insulator_metal_key));
+            i.metal = metal != 0;
         }
         NITCAD_IO_TRY(material, physics::Insulator::create(i));
         return device::Region{std::move(name), std::move(material)};

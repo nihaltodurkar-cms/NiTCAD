@@ -51,7 +51,9 @@
 //   [region <name>]   (repeatable, in order: region k is the k-th section, also for a generated
 //                     mesh and a mesh file, whose node regions are indices)
 //                     material = silicon | silicon_legacy | germanium | gaas | ingaas | sic_4h
-//                                | algaas <x> [<share>] | sio2 | insulator | <a [material] name>
+//                                | algaas <x> [<share>] | sio2 | insulator | metal | <a [material] name>
+//                       (metal, Unit 68 MAD6: work_function = <eV> or metal = <preset>, and an
+//                       electrode contact with region = <name> holds all its nodes)
 //                       (silicon: Couderc et al.'s band set, Unit 35; silicon_legacy: the legacy's)
 //                     <parameter> = <value>   (a material parameter by its C++ member path, e.g.
 //                       eps_r, electron_mobility.mu_max, thermal.conductivity_W_cmK,
@@ -70,10 +72,13 @@
 //                       [center=<l>] [width=<l>] [x=<lo>:<hi>] [y=...] [z=...] [lateral=<l>]
 //                       (repeatable; device/doping_profiles.hpp)
 //   [contact <name>]  (repeatable) kind = ohmic | gate | electrode; patch = <boundary patch>;
+//                     electrode: region = <a metal region> in place of patch (Unit 68, MAD6);
 //                     box = <lo hi> per dimension (optional: only the patch nodes inside);
 //                     gate: oxide_thickness, oxide_permittivity, electrode = n_poly|p_poly|metal,
 //                           work_function, fixed_charge;
 //                     electrode: electrode, work_function
+//                     gate, electrode, schottky: metal = <preset> in place of electrode and
+//                           work_function (Unit 68, MAD14; nitcad materials lists the presets)
 //                     The contact's nodes are the patch's semiconductor nodes (ohmic, gate) or its
 //                     insulator nodes (electrode).
 //   [interface <a> <b>] (repeatable) transport = drift_diffusion | thermionic; fixed_charge;

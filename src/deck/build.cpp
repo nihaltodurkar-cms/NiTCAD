@@ -71,6 +71,7 @@ struct RegionSpec {
     const Entry* overlap = nullptr;      // Unit 26m (MT4): overlap = replace | fill, layered meshes only
     bool fill = false;
     std::optional<results::MaterialRecord> record;  // Unit 68 (MAD3): when the run records its material
+    std::optional<device::Electrode> metal;          // Unit 68 (MAD6): a metal region's electrode
 };
 
 // A [material] section built (Unit 68, MAD4): its set and its base's composition.
@@ -317,6 +318,9 @@ std::expected<UserMaterial, base::Error> Builder::user_material(const Section& s
     if (!base) return std::unexpected(at(s.line, "[material " + s.name + "] has no 'base'"));
     std::vector<double> composition;
     NITCAD_DECK_TRY(params, registry_material(*base, &composition));
+    if (const auto* i = std::get_if<physics::InsulatorParameters>(&params); i && i->metal) {
+        return std::unexpected(at(base->line, "'metal' is not a [material] base: a region names it directly"));
+    }
     for (const Entry& e : s.entries) {
         if (&e == base) continue;
         if (e.key == "include") return std::unexpected(at(e.line, "an included material file cannot include another"));
@@ -405,6 +409,8 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
             spec.record = results::MaterialRecord{s.name, std::string(words.front()), std::move(composition), 0};
         }
     }
+    const bool is_metal = std::holds_alternative<physics::InsulatorParameters>(params) &&
+                          std::get<physics::InsulatorParameters>(params).metal;
     for (const Entry& e : s.entries) {
         if (&e == material) continue;
         if (e.key == "box") { spec.boxes.push_back(&e); continue; }
@@ -419,10 +425,35 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
             spec.fill = e.value == "fill";
             continue;
         }
+        if (is_metal) {  // Unit 68 (MAD6): the metal's work function, and nothing else
+            if (e.key != "work_function" && e.key != "metal") {
+                return std::unexpected(at(e.line, "a metal region takes 'work_function' or 'metal', not '" + e.key + "'"));
+            }
+            if (spec.metal) return std::unexpected(at(e.line, "a metal region takes one of 'work_function' and 'metal'"));
+            if (e.key == "work_function") {
+                NITCAD_DECK_TRY(v, num(e));
+                spec.metal = device::Electrode{.kind = device::GateElectrode::metal, .work_function_eV = v};
+                continue;
+            }
+            const physics::MetalPreset* p = physics::find_metal_preset(e.value);
+            if (!p) return std::unexpected(at(e.line, "unknown metal '" + e.value + "' (nitcad materials lists them)"));
+            spec.metal = device::Electrode{
+                .kind = p->kind == physics::MetalPresetKind::n_poly   ? device::GateElectrode::n_poly
+                        : p->kind == physics::MetalPresetKind::p_poly ? device::GateElectrode::p_poly
+                                                                      : device::GateElectrode::metal,
+                .work_function_eV = p->work_function_eV};
+            continue;
+        }
         NITCAD_DECK_TRY(taken, parameter(params, e));
         if (taken) continue;
+        if (e.key == "work_function" || e.key == "metal") {
+            return std::unexpected(at(e.line, "'" + e.key + "' is for a metal region (material = metal)"));
+        }
         return std::unexpected(at(e.line, "unknown key '" + e.key + "' in [region " + s.name +
                                               "] (not a parameter of its material)"));
+    }
+    if (is_metal && !spec.metal) {
+        return std::unexpected(at(material->line, "a metal region needs 'work_function' or 'metal = <preset>'"));
     }
     if (spec.record) spec.record->parameter_hash = physics::parameter_hash(params);
     if (const auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
@@ -1260,9 +1291,14 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
     bool gate_keys = false;
     const Entry* work_function = nullptr;
     const Entry* barrier = nullptr;
+    const Entry* electrode = nullptr;
+    const Entry* metal = nullptr;  // Unit 68 (MAD14): a named metal in place of the work function
+    const Entry* region_entry = nullptr;  // Unit 68 (MAD6): the metal region an electrode holds
     bool schottky_keys = false;
     for (const Entry& e : s.entries) {
         if (e.key == "kind") kind = &e;
+        else if (e.key == "metal") metal = &e;
+        else if (e.key == "region") region_entry = &e;
         else if (e.key == "patch") patch = &e;
         else if (e.key == "box") boxes.push_back(&e);
         else if (e.key == "oxide_thickness") {
@@ -1285,6 +1321,7 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
             else return std::unexpected(at(e.line, "electrode is n_poly, p_poly or metal"));
             c.gate.electrode = g;
             c.electrode.kind = g;
+            electrode = &e;
         } else if (e.key == "work_function") {
             NITCAD_DECK_TRY(v, num(e));
             c.gate.work_function_eV = v;
@@ -1360,6 +1397,35 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
     if ((barrier || schottky_keys) && c.kind != device::ContactKind::schottky) {
         return std::unexpected(at(s.line, "barrier, richardson_n and richardson_p are for a Schottky contact"));
     }
+    if (metal) {  // Unit 68 (MAD14): the preset stands for 'electrode' and 'work_function'
+        if (work_function || barrier || electrode) {
+            return std::unexpected(at(metal->line, "'metal' replaces 'work_function', 'barrier' and 'electrode'; give one"));
+        }
+        if (c.kind == device::ContactKind::ohmic) {
+            return std::unexpected(at(metal->line, "'metal' is for a gate, electrode or Schottky contact"));
+        }
+        const physics::MetalPreset* p = physics::find_metal_preset(metal->value);
+        if (!p) {
+            std::vector<std::string_view> names;
+            for (const physics::MetalPreset& m : physics::metal_presets()) names.push_back(m.name);
+            const std::string_view nearest = physics::nearest_name(metal->value, names);
+            return std::unexpected(at(metal->line, "unknown metal '" + metal->value + "'" +
+                                                       (nearest.empty() ? "" : " (did you mean '" + std::string(nearest) + "'?)")));
+        }
+        if (p->kind != physics::MetalPresetKind::metal && c.kind == device::ContactKind::schottky) {
+            return std::unexpected(at(metal->line, "'" + metal->value + "' is a polysilicon electrode, not a Schottky metal"));
+        }
+        const device::GateElectrode g = p->kind == physics::MetalPresetKind::n_poly   ? device::GateElectrode::n_poly
+                                        : p->kind == physics::MetalPresetKind::p_poly ? device::GateElectrode::p_poly
+                                                                                      : device::GateElectrode::metal;
+        // Exactly as written out: `electrode = <kind>` (gate, electrode) and `work_function = <eV>`.
+        if (c.kind != device::ContactKind::schottky) {
+            c.gate.electrode = g;
+            c.electrode.kind = g;
+        }
+        c.gate.work_function_eV = c.electrode.work_function_eV = c.schottky.work_function_eV = p->work_function_eV;
+        work_function = metal;  // a Schottky contact takes it as its work function (SD1)
+    }
     if (c.kind == device::ContactKind::schottky) {
         // Exactly one of the barrier and the work function (SD1).
         if ((barrier != nullptr) == (work_function != nullptr)) {
@@ -1367,6 +1433,28 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
         }
         c.schottky.by_work_function = work_function != nullptr;
         c.schottky.boundary = patch ? patch->value : std::string{};
+    }
+    if (region_entry) {  // Unit 68 (MAD6): the electrode is the whole metal region
+        if (c.kind != device::ContactKind::electrode) {
+            return std::unexpected(at(region_entry->line, "'region' is for a kind = electrode contact"));
+        }
+        if (patch || !boxes.empty()) {
+            return std::unexpected(at(region_entry->line, "an electrode on a metal region takes no 'patch' or 'box'"));
+        }
+        if (work_function || electrode || metal) {
+            return std::unexpected(at(region_entry->line, "the metal region gives the electrode's work function; "
+                                                          "drop 'work_function', 'electrode' and 'metal' here"));
+        }
+        const auto spec = std::ranges::find_if(regions_, [&](const RegionSpec& g) { return g.section->name == region_entry->value; });
+        if (spec == regions_.end()) return std::unexpected(at(region_entry->line, "no [region " + region_entry->value + "]"));
+        if (!spec->metal) return std::unexpected(at(region_entry->line, "[region " + region_entry->value + "] is not a metal region"));
+        c.electrode = *spec->metal;
+        const auto r = static_cast<device::RegionId>(spec - regions_.begin());
+        for (std::size_t k = 0; k < d.node_region.size(); ++k) {
+            if (d.node_region[k] == r) c.nodes.push_back(static_cast<mesh::NodeId>(k));
+        }
+        if (c.nodes.empty()) return std::unexpected(at(region_entry->line, "metal region '" + region_entry->value + "' has no mesh node"));
+        return c;
     }
     if (!patch) return std::unexpected(at(s.line, "[contact " + s.name + "] needs 'patch'"));
     const mesh::BoundaryPatch* b = d.mesh.find_boundary(patch->value);

@@ -285,11 +285,17 @@ TEST_CASE("material registry: existing names give the existing sets bit for bit"
     REQUIRE(std::get<InsulatorParameters>(*sio2->make({})) == silicon_dioxide_parameters);
     REQUIRE(std::get<InsulatorParameters>(*find_material("insulator")->make({})).eps_r == 0.0);
     REQUIRE(find_material("unobtainium") == nullptr);
+    // Unit 68 (MAD6): the metal region set.
+    const MaterialEntry* metal = find_material("metal");
+    REQUIRE(metal->kind == MaterialKind::metal);
+    REQUIRE(metal->recorded);
+    REQUIRE(std::get<InsulatorParameters>(*metal->make({})).metal);
+    REQUIRE(Insulator::create(std::get<InsulatorParameters>(*metal->make({}))).has_value());
 }
 
 TEST_CASE("material registry: names unique, arities and usage consistent", "[materials][unit68]") {
     const auto all = material_registry();
-    REQUIRE(all.size() == 9);
+    REQUIRE(all.size() == 10);
     for (std::size_t i = 0; i < all.size(); ++i) {
         CAPTURE(all[i].name);
         REQUIRE(find_material(all[i].name) == &all[i]);
@@ -374,4 +380,20 @@ TEST_CASE("material registry: parameter hash sees every value (MAD3)", "[materia
     const auto hi = parameter_hash(MaterialParameters{i});
     i.eps_r = 3.9000001;
     REQUIRE(parameter_hash(MaterialParameters{i}) != hi);
+}
+
+// Unit 68 (MAD6, MAD14): every metal preset is named once, cited, and a metal has a work function.
+TEST_CASE("material registry: metal presets (MAD14)", "[materials][unit68]") {
+    std::vector<std::string_view> seen;
+    for (const MetalPreset& m : metal_presets()) {
+        CAPTURE(m.name);
+        REQUIRE(std::ranges::find(seen, m.name) == seen.end());
+        REQUIRE(find_material(m.name) == nullptr);
+        seen.push_back(m.name);
+        REQUIRE_FALSE(m.source.source.empty());
+        REQUIRE((m.kind == MetalPresetKind::metal) == (m.work_function_eV > 0.0));
+        REQUIRE(find_metal_preset(m.name) == &m);
+    }
+    REQUIRE(find_metal_preset("tin")->work_function_eV == 4.70);
+    REQUIRE(find_metal_preset("nisi") == nullptr);  // slice 5c
 }

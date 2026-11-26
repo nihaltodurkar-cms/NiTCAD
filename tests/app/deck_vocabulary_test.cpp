@@ -563,3 +563,14 @@ TEST_CASE("deck vocabulary: material choices are the material registry", "[vocab
     REQUIRE(material->choices.size() == registry.size());
     for (std::size_t i = 0; i < registry.size(); ++i) REQUIRE(material->choices[i] == registry[i].name);
 }
+
+// Unit 68 MAD14: the contact's metal choices are the metal presets, in their order.
+TEST_CASE("deck vocabulary: metal choices are the metal presets", "[vocabulary][unit68]") {
+    const app::SectionInfo* contact = app::find_section_info("contact");
+    REQUIRE(contact != nullptr);
+    const app::KeyInfo* metal = app::find_key_info(*contact, "metal", "gate");
+    REQUIRE(metal != nullptr);
+    const auto presets = physics::metal_presets();
+    REQUIRE(metal->choices.size() == presets.size());
+    for (std::size_t i = 0; i < presets.size(); ++i) REQUIRE(metal->choices[i] == presets[i].name);
+}

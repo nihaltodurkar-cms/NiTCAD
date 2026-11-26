@@ -58,6 +58,12 @@ struct Region {
     return std::holds_alternative<physics::Insulator>(r.material);
 }
 
+// Unit 68 (MAD6): a metal region, an insulator region held whole by one electrode contact.
+[[nodiscard]] inline bool is_metal(const Region& r) noexcept {
+    const auto* i = std::get_if<physics::Insulator>(&r.material);
+    return i && i->parameters().metal;
+}
+
 // The carrier transport across the edges joining two regions.
 enum class InterfaceTransport : std::uint8_t {
     drift_diffusion,      // Scharfetter-Gummel with the band offsets (the default for any edge)

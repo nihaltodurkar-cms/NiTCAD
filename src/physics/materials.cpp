@@ -51,7 +51,26 @@ constexpr std::array<Citation, 1> sio2_sources{{
     {"legacy moscap.EPS_OX_R; NIST-JANAF", "eps_r 3.9; heat capacity (Unit 23)"},
 }};
 
-constexpr std::array<MaterialEntry, 9> registry{{
+// `metal` (Unit 68, MAD6): not solved, its nodes held by an electrode; eps_r 1 is never read.
+constexpr InsulatorParameters metal_region{.eps_r = 1.0, .metal = true};
+constexpr std::array<Citation, 1> metal_sources{{
+    {"NiTCAD (MAD6)", "a metal region is not solved: no parameter is read; the work function is the region's"},
+}};
+constexpr std::array<ParameterCitation, 11> metal_parameter_sources{{
+    {"eps_r", 0, "default"},
+    {"thermal.conductivity_W_cmK", 0, "default"},
+    {"thermal.conductivity_exponent", 0, "default"},
+    {"thermal.heat_capacity_J_cm3K", 0, "default"},
+    {"thermal.thermopower_exponent_n", 0, "default"},
+    {"thermal.thermopower_exponent_p", 0, "default"},
+    {"electron_affinity_eV", 0, "default"},
+    {"band_gap_eV", 0, "default"},
+    {"tunnel_mass_n", 0, "default"},
+    {"tunnel_mass_p", 0, "default"},
+    {"tunnel_mass_evb", 0, "default"},
+}};
+
+constexpr std::array<MaterialEntry, 10> registry{{
     {"silicon", MaterialKind::semiconductor, 0, 0, "", "silicon, Couderc band set (default)", silicon_sources,
      fixed_semiconductor<silicon_parameters>},
     {"silicon_legacy", MaterialKind::semiconductor, 0, 0, "", "silicon, the legacy set", legacy_silicon_sources,
@@ -69,6 +88,36 @@ constexpr std::array<MaterialEntry, 9> registry{{
     {"sio2", MaterialKind::insulator, 0, 0, "", "SiO2", sio2_sources, fixed_insulator<silicon_dioxide_parameters>},
     {"insulator", MaterialKind::insulator, 0, 0, "", "generic insulator, eps_r given in the region", {},
      fixed_insulator<generic_insulator>},
+    {"metal", MaterialKind::metal, 0, 0, "",
+     "metal region held by one electrode contact; work_function or metal = <preset> in the region", metal_sources,
+     fixed_insulator<metal_region>, metal_parameter_sources, true},
+}};
+
+// --- metal presets (MAD6, MAD14; amendment 4) ---------------------------------------------------
+
+constexpr std::string_view michaelson = "H. B. Michaelson, J. Appl. Phys. 48, 4729 (1977)";
+constexpr std::string_view michaelson_where = "Table III, polycrystalline preferred value";
+constexpr std::string_view greczynski = "G. Greczynski, arXiv:2405.10919 (2024)";
+constexpr std::string_view poly = "degenerate polysilicon: Fermi level at the silicon band edge";
+
+constexpr std::array<MetalPreset, 16> presets{{
+    {"al", MetalPresetKind::metal, 4.28, {michaelson, michaelson_where}},
+    {"au", MetalPresetKind::metal, 5.1, {michaelson, michaelson_where}},
+    {"co", MetalPresetKind::metal, 5.0, {michaelson, michaelson_where}},
+    {"cr", MetalPresetKind::metal, 4.5, {michaelson, michaelson_where}},
+    {"cu", MetalPresetKind::metal, 4.65, {michaelson, michaelson_where}},
+    {"mo", MetalPresetKind::metal, 4.6, {michaelson, michaelson_where}},
+    {"ni", MetalPresetKind::metal, 5.15, {michaelson, michaelson_where}},
+    {"pd", MetalPresetKind::metal, 5.12, {michaelson, michaelson_where}},
+    {"pt", MetalPresetKind::metal, 5.65, {michaelson, michaelson_where}},
+    {"ru", MetalPresetKind::metal, 4.71, {michaelson, michaelson_where}},
+    {"ti", MetalPresetKind::metal, 4.33, {michaelson, michaelson_where}},
+    {"w", MetalPresetKind::metal, 4.55, {michaelson, michaelson_where}},
+    // UPS on sputtered films; air-exposed films read 4.9 (TiN) and 4.7 (TaN) +- 0.3 eV (M21).
+    {"tin", MetalPresetKind::metal, 4.70, {greczynski, "UPS work function, mean of three TiN films (4.69-4.71 eV)"}},
+    {"tan", MetalPresetKind::metal, 4.41, {greczynski, "UPS work function of TaN"}},
+    {"n_poly", MetalPresetKind::n_poly, 0.0, {poly, "phi_m = chi of silicon"}},
+    {"p_poly", MetalPresetKind::p_poly, 0.0, {poly, "phi_m = chi + Eg(T) of silicon"}},
 }};
 
 // --- material parameters by member path (DK7) --------------------------------------------------
@@ -190,6 +239,15 @@ std::uint64_t parameter_hash(const MaterialParameters& m) {
 }
 
 std::span<const MaterialEntry> material_registry() noexcept { return registry; }
+
+std::span<const MetalPreset> metal_presets() noexcept { return presets; }
+
+const MetalPreset* find_metal_preset(std::string_view name) noexcept {
+    for (const MetalPreset& p : presets) {
+        if (p.name == name) return &p;
+    }
+    return nullptr;
+}
 
 const MaterialEntry* find_material(std::string_view name) noexcept {
     for (const MaterialEntry& e : registry) {

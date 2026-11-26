@@ -4979,6 +4979,15 @@ with one metal end takes the permittivity of its other end (the metal surface is
 electrode patch's nodes are; edges between two metal nodes join two held nodes and do not count); a metal node
 joined by an edge to a semiconductor node is refused (a metal on a semiconductor is a Schottky or ohmic contact).
 
+**Slice 5a as built (2026-11-26).** `physics::metal_presets()` (16: the twelve M8 metals, `tin`, `tan`, `n_poly`,
+`p_poly`), `metal = <preset>` on gate, electrode and Schottky contacts (exactly as `electrode` plus `work_function`
+written out; refused on ohmic contacts, with `work_function`, `barrier` or `electrode`, and a polysilicon preset on a
+Schottky contact); the registry's `metal` (`InsulatorParameters::metal`, saved and hashed only when set, so existing
+files and identities do not move), its region keys `work_function` or `metal`, and `region = <name>` on an electrode
+contact. MAC7's planar clause met in 1D: a metal-region gate equals its electrode-patch twin to 1e-9 V at every shared
+node, at equilibrium and at 0.5 and 1 V. Not run: MAC7's FinFET clause (the 3D deck, hours; owner stopped the 3D runs),
+the full Release suite. Limitation: a metal region on a semiconductor is refused, not modelled.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

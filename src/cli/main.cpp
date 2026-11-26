@@ -421,17 +421,33 @@ int sweep(int argc, char** argv) {
 // material, or one material's set, every parameter a deck can set and the set's sources.
 int materials(int argc, char** argv) {
     using namespace NiTCAD::physics;
-    const auto kind = [](MaterialKind k) { return k == MaterialKind::semiconductor ? "semiconductor" : "insulator"; };
+    const auto kind = [](MaterialKind k) {
+        return k == MaterialKind::semiconductor ? "semiconductor" : k == MaterialKind::insulator ? "insulator" : "metal";
+    };
     if (argc == 2) {
         for (const MaterialEntry& e : material_registry()) {
             std::printf("%-16s %-14s %s\n", std::string(e.name).c_str(), kind(e.kind), std::string(e.summary).c_str());
         }
+        std::puts("\nmetal presets (a contact's metal = <name>):");
+        for (const MetalPreset& m : metal_presets()) {
+            std::printf("%-16s %s\n", std::string(m.name).c_str(),
+                        m.kind == MetalPresetKind::metal ? std::format("{:.12g} eV", m.work_function_eV).c_str()
+                                                         : std::string(m.source.where).c_str());
+        }
+        return 0;
+    }
+    if (const MetalPreset* m = find_metal_preset(argv[2]); m && argc == 3) {
+        std::printf("%s: metal preset%s\n  source: %s (%s)\n", argv[2],
+                    m->kind == MetalPresetKind::metal ? std::format(", work function {:.12g} eV", m->work_function_eV).c_str()
+                                                      : "",
+                    std::string(m->source.source).c_str(), std::string(m->source.where).c_str());
         return 0;
     }
     const MaterialEntry* e = find_material(argv[2]);
     if (!e) {
         std::vector<std::string_view> names;
         for (const MaterialEntry& m : material_registry()) names.push_back(m.name);
+        for (const MetalPreset& m : metal_presets()) names.push_back(m.name);
         const std::string_view nearest = nearest_name(argv[2], names);
         std::fprintf(stderr, "nitcad materials: unknown material '%s'%s (nitcad materials lists them)\n", argv[2],
                      nearest.empty() ? "" : std::format(" (did you mean '{}'?)", nearest).c_str());

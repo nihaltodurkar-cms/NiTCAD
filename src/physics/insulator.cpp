@@ -29,6 +29,11 @@ std::expected<Insulator, base::Error> Insulator::create(const InsulatorParameter
         }
         any = any || v != 0.0;
     }
+    if (any && parameters.metal) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input,
+                                           "a metal region carries no insulator band data",
+                                           base::ErrorContext{.index = std::nullopt, .value = parameters.band_gap_eV}});
+    }
     if (any && !has_band_data(parameters)) {
         return std::unexpected(base::Error{
             base::ErrorCode::invalid_input,

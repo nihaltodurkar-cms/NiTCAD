@@ -1109,6 +1109,8 @@ add_test(NAME cli_materials_suggest COMMAND nitcad materials silicn)
 set_tests_properties(cli_materials_suggest PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_materials_unknown COMMAND nitcad materials unobtainium)
 set_tests_properties(cli_materials_unknown PROPERTIES WILL_FAIL TRUE)
+add_test(NAME cli_materials_metal COMMAND nitcad materials tin)
+set_tests_properties(cli_materials_metal PROPERTIES PASS_REGULAR_EXPRESSION "tin: metal preset, work function 4.7 eV")
 
 # --- app layer (the Windows application; Unit 26, DECISIONS.md VA1-VA9, AQ1-AQ4, WG1-WG8) ---------
 # The logic, plain C++ under test (26-1): documents, the run controller, the workspace, view settings,

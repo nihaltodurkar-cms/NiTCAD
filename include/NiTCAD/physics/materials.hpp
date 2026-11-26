@@ -19,7 +19,8 @@
 
 namespace NiTCAD::physics {
 
-enum class MaterialKind : std::uint8_t { semiconductor, insulator };
+// metal (Unit 68, MAD6): a metal region, an insulator set flagged metal (InsulatorParameters::metal).
+enum class MaterialKind : std::uint8_t { semiconductor, insulator, metal };
 
 // Where a parameter set's values come from (MAD3). The existing sets carry the sources already
 // named in their header comments.
@@ -79,6 +80,24 @@ struct MaterialEntry {
 // The name of `names` nearest `word` by edit distance, when near enough to be a misspelling
 // (distance at most a third of the word, at least 1; MAC13), or "" (the first on a tie).
 [[nodiscard]] std::string_view nearest_name(std::string_view word, std::span<const std::string_view> names);
+
+// A named gate or contact metal (Unit 68, MAD6, MAD14; slice 5a). A metal preset is a work
+// function; `n_poly` and `p_poly` are the polysilicon electrodes, whose Fermi level sits at a band
+// edge of silicon (device::GateElectrode), so they carry no number.
+enum class MetalPresetKind : std::uint8_t { metal, n_poly, p_poly };
+
+struct MetalPreset {
+    std::string_view name;
+    MetalPresetKind kind;
+    double work_function_eV;  // the metal's; 0 for a polysilicon preset
+    Citation source;
+};
+
+// Every metal preset, in listing order.
+[[nodiscard]] std::span<const MetalPreset> metal_presets() noexcept;
+
+// The preset named `name`, or nullptr.
+[[nodiscard]] const MetalPreset* find_metal_preset(std::string_view name) noexcept;
 
 // A 64-bit FNV-1a digest of the set's kind, its parameter_values (paths and value bits), its
 // direct-gap flag and its density-of-states mass fits: equal sets give equal hashes (MAD3).

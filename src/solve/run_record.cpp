@@ -258,6 +258,7 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
                     d.real(v);
                 }
             }
+            if (ip.metal) d.text("metal");  // Unit 68: hashed only for a metal, so a digest stays put
             continue;
         }
         material(d, std::get<physics::Semiconductor>(r.material).parameters());

@@ -1521,3 +1521,74 @@ TEST_CASE("deck build: an unknown material suggests the nearest name (MAC13)", "
               .find("unknown material 'barier' (did you mean 'barrier'?)") != std::string::npos);
     CHECK(failure(head + "[region a]\nmaterial = unobtainium\n[equilibrium]\n").find("did you mean") == std::string::npos);
 }
+
+// Unit 68 (MAD14, slice 5a): `metal = <preset>` on a contact is its preset's work function or
+// polysilicon electrode, exactly as written out; the refusals name the reason.
+TEST_CASE("deck build: metal presets on contacts (MAD14)", "[deck][unit68]") {
+    const auto deck = [](const std::string& kind, const std::string& keys) {
+        return "[mesh]\ntype = tensor\nx = linspace(0, 1um, 11)\n[region si]\nmaterial = silicon\n"
+               "[doping]\nprofile = donor constant 1e16\n[contact a]\nkind = " + kind + "\npatch = x_min\n" + keys +
+               "[contact b]\nkind = ohmic\npatch = x_max\n[equilibrium]\n";
+    };
+    const auto contact = [](const deck::Plan& p) { return p.device.contacts().front(); };
+    const auto same = [&](const std::string& kind, const std::string& preset, const std::string& written) {
+        const device::Contact a = contact(must(deck(kind, "metal = " + preset + "\n")));
+        const device::Contact b = contact(must(deck(kind, written)));
+        CHECK(a.gate.electrode == b.gate.electrode);
+        CHECK(a.gate.work_function_eV == b.gate.work_function_eV);
+        CHECK(a.schottky.by_work_function == b.schottky.by_work_function);
+        CHECK(a.schottky.work_function_eV == b.schottky.work_function_eV);
+    };
+    same("schottky", "pt", "work_function = 5.65\n");
+    same("schottky", "tin", "work_function = 4.70\n");
+    same("gate", "al\noxide_thickness = 2nm", "oxide_thickness = 2nm\nelectrode = metal\nwork_function = 4.28\n");
+    same("gate", "p_poly\noxide_thickness = 2nm", "oxide_thickness = 2nm\nelectrode = p_poly\n");
+    CHECK(contact(must(deck("gate", "oxide_thickness = 2nm\nmetal = n_poly\n"))).gate.electrode == device::GateElectrode::n_poly);
+    CHECK(failure(deck("schottky", "metal = pt\nwork_function = 5\n")).find("'metal' replaces") != std::string::npos);
+    CHECK(failure(deck("gate", "oxide_thickness = 2nm\nmetal = al\nelectrode = metal\n")).find("'metal' replaces") != std::string::npos);
+    CHECK(failure(deck("ohmic", "metal = al\n")).find("'metal' is for a gate, electrode or Schottky contact") != std::string::npos);
+    CHECK(failure(deck("schottky", "metal = n_poly\n")).find("polysilicon electrode, not a Schottky metal") != std::string::npos);
+    CHECK(failure(deck("schottky", "metal = tln\n")).find("unknown metal 'tln' (did you mean 'tin'?)") != std::string::npos);
+}
+
+// Unit 68 (MAD6, MAC7): a gate written as a metal region equals the same gate as an electrode patch:
+// the potential at every node they share agrees to 1e-9 V, at equilibrium and under gate bias.
+TEST_CASE("deck build: a metal-region gate equals its electrode patch (MAC7)", "[deck][unit68]") {
+    const std::string body = "[region si]\nmaterial = silicon\n[region ox]\nmaterial = sio2\nbox = 1um 1.01um\n"
+                             "[doping]\nprofile = acceptor constant 1e17\n";
+    const std::string tail = "[contact b]\nkind = ohmic\npatch = x_min\n[sweep]\ncontact g = 0 : 0.5 : 1\n";
+    const std::string patch = "[mesh]\ntype = tensor\nx = linspace(0, 1um, 101) + linspace(1um, 1.01um, 11)\n" + body +
+                              "[contact g]\nkind = electrode\npatch = x_max\nelectrode = metal\nwork_function = 4.6\n" + tail;
+    const std::string metal = "[mesh]\ntype = tensor\nx = linspace(0, 1um, 101) + linspace(1um, 1.01um, 11) + "
+                              "linspace(1.01um, 1.02um, 6)\n" + body +
+                              "[region gm]\nmaterial = metal\nbox = 1.01um 1.02um\nwork_function = 4.6\n"
+                              "[contact g]\nkind = electrode\nregion = gm\n" + tail;
+    const deck::Plan pp = must(patch);
+    const deck::Plan pm = must(metal);
+    REQUIRE(pm.device.contacts().front().nodes.size() == 6);
+    const auto a = deck::run(pp);
+    const auto b = deck::run(pm);
+    if (!a) FAIL(a.error().message);
+    if (!b) FAIL(b.error().message);
+    REQUIRE(a->sweep->points.size() == b->sweep->points.size());
+    const std::size_t shared = pp.device.mesh().node_count();  // the patch mesh's nodes come first in x
+    for (std::size_t k = 0; k < a->sweep->points.size(); ++k) {
+        const auto& va = a->sweep->points[k].fields.potential_V;
+        const auto& vb = b->sweep->points[k].fields.potential_V;
+        double worst = 0.0;
+        for (std::size_t i = 0; i < shared; ++i) worst = std::max(worst, std::abs(va[i] - vb[i]));
+        INFO("point " << k);
+        CHECK(worst <= 1e-9);
+    }
+    // A preset is its work function; the refusals.
+    CHECK(must(changed(metal, "work_function = 4.6\n[contact", "metal = mo\n[contact")).device.contacts().front().electrode.work_function_eV == 4.6);
+    CHECK(failure(changed(metal, "[contact g]\nkind = electrode\nregion = gm\n", "")).find("held by no electrode contact") != std::string::npos);
+    CHECK(failure(changed(metal, "region = gm", "region = ox")).find("is not a metal region") != std::string::npos);
+    CHECK(failure(changed(metal, "region = gm", "region = gm\npatch = x_max")).find("takes no 'patch'") != std::string::npos);
+    CHECK(failure(changed(metal, "region = gm", "region = gm\nwork_function = 4")).find("gives the electrode's work function") != std::string::npos);
+    CHECK(failure(changed(metal, "work_function = 4.6\n[contact", "[contact")).find("needs 'work_function' or 'metal") != std::string::npos);
+    CHECK(failure(changed(metal, "work_function = 4.6\n[contact", "work_function = 4.6\neps_r = 2\n[contact")).find("takes 'work_function' or 'metal', not 'eps_r'") != std::string::npos);
+    CHECK(failure(changed(metal, "material = silicon\n", "material = silicon\nwork_function = 4\n")).find("is for a metal region") != std::string::npos);
+    CHECK(failure(changed(metal, "box = 1um 1.01um", "box = 0.5um 0.51um")).find("touches a semiconductor") != std::string::npos);
+    CHECK(failure(metal + "[material m2]\nbase = metal\n").find("not a [material] base") != std::string::npos);
+}

@@ -28,6 +28,10 @@ struct InsulatorParameters {
     double tunnel_mass_n = 0.0;
     double tunnel_mass_p = 0.0;
     double tunnel_mass_evb = 0.0;
+    // Unit 68 (MAD6, amendment 4): a metal region, held whole by one electrode contact
+    // (device::DeviceDescription). Not solved: eps_r is not read (an edge with a metal end takes
+    // its other end's permittivity) and it carries no band data.
+    bool metal = false;
 
     bool operator==(const InsulatorParameters&) const = default;
 };
