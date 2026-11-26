@@ -1423,6 +1423,16 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
         if (const auto it = switches.find(e.key); it != switches.end()) {
             NITCAD_DECK_TRY(v, flag(e));
             m.*(it->second) = v;
+        } else if (e.key == "trap_assisted_tunnelling") {
+            if (e.value == "off") m.trap_assisted_tunnelling = assemble::TrapTunnelling::off;
+            else if (e.value == "hurkx") m.trap_assisted_tunnelling = assemble::TrapTunnelling::hurkx;
+            else return std::unexpected(at(e.line, "trap_assisted_tunnelling is off or hurkx"));
+        } else if (e.key == "tat_mass_n") {
+            NITCAD_DECK_TRY(v, num(e));
+            m.tat_mass_n = v;
+        } else if (e.key == "tat_mass_p") {
+            NITCAD_DECK_TRY(v, num(e));
+            m.tat_mass_p = v;
         } else if (e.key == "btbt_nonlocal") {
             if (e.value == "off") m.btbt_nonlocal = assemble::NonlocalTunnelling::off;
             else if (e.value == "kane") m.btbt_nonlocal = assemble::NonlocalTunnelling::kane;
@@ -2332,7 +2342,7 @@ std::string profile_text(const device::DopingProfile& p) {
     if (p.shape != device::DepthShape::constant || p.axis != 0) out += std::string(" axis=") + axes[p.axis];
     if (p.shape != device::DepthShape::constant) out += std::format(" center={}cm width={}cm", p.center, p.width);
     for (int k = 0; k < 3; ++k) {
-        if (k == p.axis) continue;
+        if (k == p.axis && p.shape != device::DepthShape::constant) continue;
         const auto i = static_cast<std::size_t>(k);
         if (std::isinf(p.lo[i]) && std::isinf(p.hi[i])) continue;
         out += std::format(" {}={}cm:{}cm", axes[k], p.lo[i], p.hi[i]);

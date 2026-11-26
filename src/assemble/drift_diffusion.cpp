@@ -225,6 +225,35 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
     if (nonlocal && device.cells() == nullptr) {
         return refuse("nonlocal tunnelling needs the device's tensor cells");
     }
+    // Unit 67 (TAD2, TAD5): Hurkx trap-assisted tunnelling enhances SRH, isothermal and in the
+    // drift-diffusion rows only.
+    const bool tat = models.trap_assisted_tunnelling != TrapTunnelling::off;
+    if (models.trap_assisted_tunnelling != TrapTunnelling::off &&
+        models.trap_assisted_tunnelling != TrapTunnelling::hurkx) {
+        return refuse("unknown trap-assisted tunnelling model");
+    }
+    if (tat) {
+        if (!models.srh) return refuse("trap_assisted_tunnelling hurkx needs srh on");
+        if (models.electrothermal) {
+            return refuse("trap_assisted_tunnelling hurkx with the electrothermal model is not "
+                          "supported");
+        }
+        if (models.energy_balance) {
+            return refuse("trap_assisted_tunnelling hurkx with energy balance is not supported");
+        }
+        if (models.quantum_confinement == QuantumConfinement::density_gradient) {
+            return refuse("trap_assisted_tunnelling hurkx with density gradient is not supported");
+        }
+        for (const auto& [name, mass] : {std::pair{"tat_mass_n", models.tat_mass_n},
+                                         std::pair{"tat_mass_p", models.tat_mass_p}}) {
+            if (!(std::isfinite(mass) && mass > 0.0)) {
+                return std::unexpected(base::Error{
+                    base::ErrorCode::invalid_input,
+                    std::string(name) + " must be finite and positive",
+                    base::ErrorContext{.index = std::nullopt, .value = mass}});
+            }
+        }
+    }
     // Unit 52 (DECISIONS.md ED11, EQ2): the model combinations energy balance refuses; the
     // device's (contacts, interfaces, materials) in make_energy_balance. Lombardi with impact
     // ionization stays refused below, as without the model.
@@ -772,8 +801,10 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             s.impact_nodes_.push_back(node);
         }
     }
-    if (models.btbt_local) {
-        // Per node with a Kane pair: its carrier edges and the pseudo-inverse of sum t t^T.
+    if (models.btbt_local || tat) {
+        // The node field of local band-to-band tunnelling (Unit 20) and of trap-assisted
+        // tunnelling (Unit 67, TAD3): per semiconductor node off the ohmic contacts with carrier
+        // edges, those edges (appended to field_edges_) and the pseudo-inverse of sum t t^T.
         const mesh::Mesh& m = device.mesh();
         const int D = m.dimension();
         s.dimension_ = D;
@@ -785,13 +816,12 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             incident[e.i].push_back(k);
             incident[e.j].push_back(k);
         }
-        for (std::size_t i = 0; i < n; ++i) {
-            if (s.insulator_[i] != 0 || s.contact_[i] >= 0 || incident[i].empty()) continue;
-            const physics::BandToBandParameters& b =
-                device.material(static_cast<mesh::NodeId>(i)).parameters().band_to_band;
-            if (b.A_per_cm3_s == 0.0) continue;
-            SystemData::TunnelNode node{i, s.field_edges_.size(), 0, {}, b.A_per_cm3_s,
-                                        b.B_V_per_cm};
+        const auto field_node = [&](std::size_t i) {
+            return s.insulator_[i] == 0 && s.contact_[i] < 0 && !incident[i].empty();
+        };
+        // Appends node i's field edges; returns [first, last) and fills the pseudo-inverse.
+        const auto field_rows = [&](std::size_t i, double* inverse) {
+            const std::size_t first = s.field_edges_.size();
             double outer[9] = {};
             for (const std::size_t k : incident[i]) {
                 const detail::ScaledEdge& e = scaled->edges[k];
@@ -804,9 +834,41 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
                 }
                 s.field_edges_.push_back(fe);
             }
-            pseudo_inverse(outer, D, node.inverse);
-            node.last = s.field_edges_.size();
-            s.tunnel_nodes_.push_back(node);
+            pseudo_inverse(outer, D, inverse);
+            return std::pair{first, s.field_edges_.size()};
+        };
+        if (models.btbt_local) {
+            // Per node with a Kane pair.
+            for (std::size_t i = 0; i < n; ++i) {
+                if (!field_node(i)) continue;
+                const physics::BandToBandParameters& b =
+                    device.material(static_cast<mesh::NodeId>(i)).parameters().band_to_band;
+                if (b.A_per_cm3_s == 0.0) continue;
+                SystemData::TunnelNode node{i, 0, 0, {}, b.A_per_cm3_s, b.B_V_per_cm};
+                std::tie(node.first, node.last) = field_rows(i, node.inverse);
+                s.tunnel_nodes_.push_back(node);
+            }
+        }
+        if (tat) {
+            s.tat_mass_n_ = models.tat_mass_n;
+            s.tat_mass_p_ = models.tat_mass_p;
+            s.trap_index_.assign(n, std::numeric_limits<std::size_t>::max());
+            for (std::size_t i = 0; i < n; ++i) {
+                if (!field_node(i)) continue;
+                // a = (E_c - E_i) / kT and (E_i - E_v) / kT: past 700 the factor's exponentials
+                // overflow (a gap of 36 eV at 300 K).
+                if (!(s.log_dos_n_[i] <= 700.0 && s.log_dos_p_[i] <= 700.0)) {
+                    return std::unexpected(base::Error{
+                        base::ErrorCode::invalid_input,
+                        "trap_assisted_tunnelling hurkx: a tunnelling range above 700 kT",
+                        base::ErrorContext{.index = i, .value = std::max(s.log_dos_n_[i],
+                                                                         s.log_dos_p_[i])}});
+                }
+                SystemData::TrapNode node{i, 0, 0, {}};
+                std::tie(node.first, node.last) = field_rows(i, node.inverse);
+                s.trap_index_[i] = s.trap_nodes_.size();
+                s.trap_nodes_.push_back(node);
+            }
         }
     }
     if (nonlocal) {

@@ -25,6 +25,7 @@
 
 using namespace NiTCAD;
 using deck_test::diode_device;
+using deck_test::compensated_device;
 using deck_test::hand_diode;
 using deck_test::must;
 using deck_test::scratch;
@@ -152,7 +153,7 @@ table = iv.csv
 
 TEST_CASE("deck run: a restart continues after the checkpoint's point", "[deck]") {
     const fs::path dir = scratch("run_restart");
-    const deck::Plan first = must(diode_device + R"(
+    const deck::Plan first = must(compensated_device + R"(
 [sweep]
 contact anode = 0 : 0.3 : 0.1
 [output]
@@ -160,7 +161,7 @@ checkpoint = at.nitckpt
 )", dir);
     REQUIRE(deck::run(first).has_value());
 
-    const std::string rest = diode_device + R"(
+    const std::string rest = compensated_device + R"(
 [sweep]
 contact anode = 0 : 0.6 : 0.1
 restart = at.nitckpt

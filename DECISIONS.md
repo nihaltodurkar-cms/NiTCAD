@@ -4662,6 +4662,234 @@ unchanged.
 **KC10 (2026-11-25, owner's word).** Release: build `/W4 /WX` clean, full suite 302/302 (3787 s, ctest -j 4).
 Debug not run: the owner stopped it before it started ("dont start the debug process"); Debug is left to CI.
 
+### Unit 67 — Hurkx trap-assisted tunnelling, opt-in (proposed 2026-11-25; on `physics/trap-assisted-tunnelling`)
+
+**Owner request (2026-11-25):** "any physics model?", then "plan for Hurkx trap-assisted tunnelling", "start it in
+new worktree" (worktree `nitcad-tat`, branch from `origin/main` 0f49230). Unit 20 recorded trap-assisted tunnelling as
+excluded. Without it, SRH lifetimes ignore the field. In a depletion region above about 3e5 V/cm, electrons and holes
+tunnel between the bands and the trap (phonon-assisted, through Dirac wells), which shortens the effective lifetimes.
+Reverse diode leakage and MOSFET drain/body off-current then come out too low, and their voltage dependence is too
+weak.
+
+**Standing conditions.** Opt-in. Unselected, everything is bit-identical to `main`: residuals, Jacobian patterns and
+values, run identities, result files, the Unit 40/59 traces and decks. Criteria are fixed before code and never
+loosened after a run (TVM2). Builds run `-j 6` and runs use 6 threads. Release suite with `/W4 /WX` runs only on the
+owner's word. Debug builds and runs need the owner's word. Commits stay local; no push, PR or merge without the
+owner's word. TAQ1–TAQ7 were ruled as recommended under the owner's standing instruction (2026-11-11).
+
+**Sources.**
+- (S4) Silvaco ATLAS User's Manual (old edition, `C:\Users\disha\papers\klaassen\atlas.pdf`, not committed),
+  "Trap-Assisted Tunneling", eqs 3-71–3-75, Table 3-7 (MASS.TUNNEL 0.25), citing G. A. M. Hurkx, D. B. M. Klaassen,
+  M. P. G. Knuvers, IEEE Trans. Electron Devices 39, 331 (1992).
+- The 1992 paper itself was NOT read; no copy is in hand. The Charon manual in the same folder implements Schenk's
+  band-to-trap model, not Hurkx's, so it is not a source here.
+- K below is the WKB exponent of a triangular barrier, (4/3)√(2m) ΔE^{3/2}/(qħF). The PDF extraction of S4 eq 3-74
+  is ambiguous. Taken as written below for two reasons:
+  - It is the standard exponent.
+  - Laplace's method on Γ then recovers Hurkx's widely quoted low-field form exactly: 2√(3π)(F/F_Γ)exp((F/F_Γ)²),
+    with F_Γ = √(24 m (kT)³)/(qħ). Derivation: the peak is at u* = (2a/3K)², φ(u*) = 4a³/(27K²) = (F/F_Γ)²,
+    and |φ''(u*)| = 9K²/(8a).
+
+**Model.** SRH with a midgap trap, as built (n₁ = p₁ = n_ie). Each lifetime is divided by its field-enhancement
+factor (S4 eq 3-71):
+
+  R = (n p − n_ie²) / [ τ_p/(1 + Γ_p) (n + n_ie) + τ_n/(1 + Γ_n) (p + n_ie) ]
+  Γ_c(F) = a_c ∫₀¹ exp(a_c u − K_c u^{3/2}) du,   a_c = ΔE_c / kT,   K_c = (4/3) √(2 m_c m₀ ΔE_c³) / (q ħ F)
+  ΔE_n = E_c − E_i = kT ln(N_c/n_ie),   ΔE_p = E_i − E_v = kT ln(N_v/n_ie)   (TAQ2)
+
+- F = |E| at the node, the least-squares field of local band-to-band tunnelling (Unit 20).
+- F = 0 gives Γ = 0.
+- Γ is computed in SI: F is converted from V/cm, ΔE in J, m in kg.
+- So a_n and a_p are exactly the node's `log_dos_n_` and `log_dos_p_`. They already carry band-gap narrowing and
+  MLDA's band data, so no new tables are needed.
+- Silicon at 300 K with m = 0.25: F_Γ ≈ 3.7e5 V/cm.
+
+**Design (TAD1–TAD9).**
+
+| ID | Decision | Reason | Limitation |
+|---|---|---|---|
+| TAD1 | Physics: new `include/NiTCAD/physics/trap_tunnelling.hpp` and `src/physics/trap_tunnelling.cpp`. They hold `struct TrapTunnellingFactor { double gamma; double d_dF; }` and `[[nodiscard]] TrapTunnellingFactor hurkx_enhancement(double a, double mass_ratio, double T_K, double F_V_per_cm) noexcept`. `d_dF` is in per V/cm. Quadrature is fixed composite Gauss–Legendre: 16 equal panels of 8 points on [0, 1]. dΓ/dF = (K/F)·a ∫ u^{3/2} exp(a u − K u^{3/2}) du on the same nodes. Γ = d_dF = 0 when F = 0 or K > a + 745 (underflow). | Deterministic and bounded. For a peak inside (0, 1), K < 2a/3, so its width is √(8a/9)/K > √(2/a) ≈ 0.18 even at a = 62 (4H-SiC). Each panel then holds a smooth integrand, at most exp(a/16) across it. | Fixed cost of 2 × 128 exponentials per node per evaluation |
+| TAD2 | `[models] trap_assisted_tunnelling = off \| hurkx` (default `off`), plus `tat_mass_n` and `tat_mass_p` (default 0.25, S4 Table 3-7). Both masses must be > 0 and finite. One pair for every semiconductor region (TAQ3). | Follows the MLDA mass keys (Unit 47). | No per-material masses |
+| TAD3 | Node table: the per-node field rows built for `btbt_local` move into one helper, `build_field_nodes(...)` in drift_diffusion.cpp. It returns the nodes (semiconductor, off the ohmic contacts, with carrier edges) and their `FieldEdge`s and pseudo-inverses. `btbt_local` and TAT share it: `TunnelNode` keeps A and B, and the new `SystemData::TrapNode { node, first, last, inverse[9] }` uses the same `field_edges_`. | One field definition (Unit 20's OLD/NEW). The refactor is under TAC1. | — |
+| TAD4 | Term: new `SystemData::Terms::TrapTunnellingSrh` (TermDomain::global; rows n and p; columns n, p of the node and ψ of the node and its edge neighbours). It replaces `Srh` when `trap_assisted_tunnelling = hurkx` and `srh` is on. `Srh`'s predicate becomes `m.srh && !m.tat`. Nodes outside the TrapNode table (contacts, nodes with no carrier edges) get plain SRH, Γ = 0. ψ partials go through `e.ab`/`e.ba` as in LocalTunnelling; the pattern already holds them. | Exact Jacobian; plain SRH stays untouched when off. | — |
+| TAD5 | Refused (`invalid_input`, before solving): `hurkx` with `srh = off`, electrothermal, energy balance, density gradient; masses ≤ 0 or non-finite. Allowed with: impact ionization, local and nonlocal band-to-band tunnelling, MLDA, Lombardi, Klaassen, transient, small signal, traces, restart. | Γ depends on T (needs ∂/∂T, a follow-up). Energy balance and density gradient keep their own SRH paths. | Recorded follow-ups |
+| TAD6 | Scope is bulk SRH only. Interface SRH (interface_edges.cpp) and interface traps are unchanged (TAQ7). | Hurkx's model is a bulk lifetime factor. | — |
+| TAD7 | Outputs: `srh_rate` and RateMechanism::srh report the enhanced rate. No new derived field (TAQ5). | The trap rate is the rate. | Γ not plotted |
+| TAD8 | Run records: `models.trap_assisted_tunnelling` = 1 (hurkx), plus `models.tat_mass_n` and `models.tat_mass_p`, all written only when on. Deck vocabulary and help text in `deck_vocabulary.cpp`. ARCHITECTURE.md: an as-built block after Unit 20 and the 11.3 row. | Run identities of existing decks unchanged. | — |
+| TAD9 | No new bundled deck. Device checks use the bundled 1D diode deck in tests only (TAC8). | The tree is the owner's. | — |
+
+**Questions (ruled as recommended, 2026-11-25, standing instruction).**
+
+| ID | Question | Options | Ruling |
+|---|---|---|---|
+| TAQ1 | Form of Γ | (a) Hurkx's integral by fixed composite Gauss–Legendre; (b) the low-field closed form 2√(3π)(F/F_Γ)e^{(F/F_Γ)²} (unbounded at high field); (c) Schenk's model (S1 Charon) | **(a)**; (b) is used only as a check (TAC4) |
+| TAQ2 | Tunnelling energy range ΔE | (a) the trap at the intrinsic level, as built: ΔE_n = E_c − E_i, ΔE_p = E_i − E_v from the node's `log_dos`; (b) Hurkx's bias-dependent range (needs the paper); (c) a deck trap level E_t for SRH as a whole | **(a)**; (b) when the paper is in hand, (c) a separate unit |
+| TAQ3 | Masses | (a) `[models] tat_mass_n/p`, 0.25 each (S4); (b) per material | **(a)** |
+| TAQ4 | Electrothermal, energy balance, density gradient | (a) refused, follow-ups; (b) silent fall-back to plain SRH | **(a)**: no silent model change |
+| TAQ5 | Outputs | (a) `srh_rate` enhanced, plus new fields Γ_n and Γ_p; (b) `srh_rate` enhanced only | **(b)**; (a) a follow-up if asked |
+| TAQ6 | Published curves | (a) none (paper not in hand); TAC2–TAC8 check limits, the asymptote and device consistency; (b) the owner supplies Hurkx 1992 first | **(a)**, recorded as a limitation |
+| TAQ7 | Interface SRH | (a) bulk only; (b) interface recombination enhanced too | **(a)** |
+
+**Criteria (TAC1–TAC11), fixed before code.**
+
+| ID | Criterion |
+|---|---|
+| TAC1 | Off: every existing test passes unchanged. The Unit 59 NG1 trace set is byte-identical to `main` 0f49230's (built as for KC1: build/ng1 traces). Run identities and Jacobian patterns are unchanged. `btbt_local` cases are included (TAD3 refactor). |
+| TAC2 | Γ(0) = 0 and d_dF(0) = 0 exactly. Γ ≥ 0 and strictly increasing on F = 1e3…1e7 V/cm (40 log points) for a ∈ {10, 21.7, 40, 62}, T ∈ {250, 300, 400} K. Finite at 1e8 V/cm, with Γ ≤ a e^a. |
+| TAC3 | Quadrature: Γ and d_dF against a 4096-panel × 8-point reference to 1e-12 relative on the TAC2 grid. |
+| TAC4 | Laplace check: where u* = (2a/3K)² ≤ 0.25 and (F/F_Γ)² ≥ 5, Γ is within 10% of 2√(3π)(F/F_Γ)exp((F/F_Γ)²). The largest deviation is recorded. Silicon (m 0.25, 300 K): F_Γ = 3.69e5 V/cm to 0.5%. |
+| TAC5 | d_dF against central differences of Γ to 1e-6 relative on the TAC2 grid, wherever Γ > 1e-12. |
+| TAC6 | Node rate: with Γ_n, Γ_p given, R equals `srh_recombination` with τ_c/(1 + Γ_c) to 1e-14 relative; Γ = 0 reproduces it bitwise. |
+| TAC7 | Jacobian: the existing FD-check helper on a reverse-biased (−2 V) diode state, 1D, 2D and 3D, all columns (ψ of the neighbours included), to 1e-6 relative. Also with `btbt_local` and with impact ionization on together. |
+| TAC8 | Device: the bundled 1D diode deck, reverse sweep 0 → −5 V in 0.25 V steps, with and without TAT. Requirements: every point converges; Newton iterations per point ≤ the plain-SRH run's + 2; \|I\| with TAT ≥ \|I\| without at every point. The ratio is recorded at −1 and −5 V, and it rises with \|V\|. Forward bias 0.3–0.7 V: the change is recorded. A transient restart continues bit for bit (Unit 61). Small signal at −2 V: the conductance matches the DC dI/dV by central difference to 1e-4 relative. |
+| TAC9 | Refusals: each TAD5 refusal names the model or key. The deck error for an unknown value lists `off` and `hurkx`. |
+| TAC10 | Run records: the TAD8 keys written when on, absent when off; a two-deck identity check (on vs off) differs. |
+| TAC11 | Suites: Release `/W4 /WX` full suite on the owner's word; Debug only on the owner's word. |
+
+**Pre-code corrections (2026-11-25, slice 0, before any code ran; the owner's "go ahead").** I found these
+while writing the TAC tests. They replace the plan text above where they differ. They correct defects, and no
+criterion was loosened.
+- TAD1, quadrature:
+  - In u, the low-field integrand peaks within K^{-2/3} of u = 0, next to the u^{3/2} kink, far inside the first
+    panel. So the rule is applied after the substitution u = v²: Γ = 2a ∫₀¹ v exp(a v² − K v³) dv, and
+    dΓ/dF = (K/F) 2a ∫₀¹ v⁴ exp(…) dv. Both integrands are analytic.
+  - The 16 × 8 Gauss–Legendre panels cover [0, v_max] in v. v_max = 1, or the point past the maximum where the
+    exponent has fallen 50 below it (bisection).
+  - The underflow clause "Γ = 0 when K > a + 745" is wrong and dropped. As F → 0, Γ → a Γ(5/3) K^{−2/3} ∝ F^{2/3}:
+    it never underflows, and dΓ/dF is unbounded there. Γ = d_dF = 0 only at F = 0 or where K overflows.
+  - So Γ has a cusp (∝ |E|^{2/3}) at zero field. For example, a = 21.7 gives Γ ≈ 0.15 at 1e4 V/cm and ≈ 0.03 at
+    1e3 V/cm, so neutral regions with fields of 1e2–1e3 V/cm see a few-percent enhancement. That is the model, and
+    TAC8 records the forward-bias change.
+- TAC3: the reference is independent of the production rule. It is composite Simpson in v with 2¹⁶ intervals
+  (same 1e-12), not a finer copy of the same Gauss nodes.
+- TAC4 as written was vacuous. Its region (u* ≤ 0.25 with (F/F_Γ)² ≥ 5) is empty for a < 60, because
+  (F/F_Γ)² = a v*²/3 with v* = √u*. Replaced by:
+  - (i) the low-field limit: Γ within 1e-3 of a Γ(5/3) K^{−2/3} where a K^{−2/3} = 1e-4, on the TAC2 (a, T) grid;
+  - (ii) the Laplace form at v* = 0.7, for a ∈ {40, 62, 100, 200} at 300 K: the relative deviation strictly
+    decreasing and ≤ 5% at a = 200, every value recorded;
+  - (iii) F_Γ = 3.69e5 V/cm to 0.5% (silicon, m 0.25, 300 K), kept.
+
+**Slice 0 (2026-11-25).** `hurkx_enhancement` with the tests TAC2–TAC5 and `tat extreme field finite`, all
+red first against a stub that returns 0. Three cases passed on the stub (zero field, extreme field, and the 1e-300
+field), and they guard limits a stub satisfies trivially.
+- **The run exposed a quadrature fault, fixed.** With 16 panels, TAC3 missed by up to 1.7e-10 at high field
+  (a = 62). There the exponent changes by about 8 across a panel. The panel count is now the larger of 16 and
+  ⌈(2a v_max + 3K v_max²) v_max / 4⌉, so φ changes by at most 4 across a panel. The Simpson reference's own error
+  there is about 1e-13.
+- **TAC5's difference changed.** Central difference with h = 1e-4 F missed by up to 1.6e-6 (a = 62, F ≥ 9e5 V/cm).
+  That is the difference's own truncation, about (2(F/F_Γ)² h/F)²/6, because Γ grows like e^{(F/F_Γ)²}. It is now
+  the fourth-order 5-point difference, same 1e-6. This is a defect in the test, not the criterion.
+- Results:
+  - TAC2: met.
+  - TAC3: largest relative deviation 5.7e-14.
+  - TAC4 (i): met. TAC4 (ii) Laplace deviations: 0.61%, 0.30%, 0.18%, 0.086% at a = 40, 62, 100, 200
+    (decreasing, ≤ 5%). TAC4 (iii): met.
+  - TAC5: met.
+- Physics binary: 139/139 cases.
+- Hand mutants, 5/5 caught:
+  - d_dF with v³ for v⁴;
+  - a 4-point rule;
+  - a prefactor dropped;
+  - ħ → h;
+  - tail 50 → 5.
+- The plan's "15 panels" mutant was replaced. With adaptive panels it changes Γ by about 1e-14, so it is
+  equivalent under TAC3's 1e-12 and cannot be caught.
+
+**Slice 1 (2026-11-25).** Assembly (`TrapTunnellingSrh`, a global term over all three columns; plain `Srh` when
+the model is off), the deck keys, the run record and the vocabularies.
+- Results:
+  - TAC6 (rate): with each lifetime over 1 + Γ, the term equals SRH to 1e-14 (a zero-current state, unequal
+    masses 0.2 and 0.6).
+  - TAC7 (Jacobian): the finite-difference gate, worst 3.2e-7; with local band-to-band and impact ionization too.
+  - TAC9, TAC10: the deck values, errors, refusals and run record; `models.trap_assisted_tunnelling` and the
+    masses are written only when on.
+  - Review focus 1 and 2: `tat zero field keeps SRH`, `tat contact nodes plain srh`.
+  - TAC1: **met.** NG1 traces of the five traced binaries (assemble, deck, adapt, validation, solve; Release),
+    branch against `main` 0f49230, compared order-independently by case. All five pass. 634 common cases:
+    632 identical; the two quasi-static C-V cases of `mos_test.cpp` differ only by attribution (the shared
+    static fixture lands in whichever runs first), and their pooled records are identical, as in KC1. 9 cases
+    are new (the TAT cases).
+  - TAC8: **met as amended (below).** The deck tests' diode, reverse 0 → −5 V in 0.25 V steps: every point
+    converges, Newton iterations ≤ plain SRH's + 1, |I| with TAT above |I| without at every point, the ratio
+    rising at every point: 2.98, 3.50, 4.01, 4.55, 5.11 at −1 … −5 V. Forward: +2.95 % at 0.3 V, +0.42 %,
+    +0.060 %, +0.009 %, +0.001 % at 0.7 V. The transient restart continues bit for bit.
+- **TAC8 amended by the owner (2026-11-25), on two pre-existing faults the first TAC8 run exposed.**
+  1. *The terminal current does not resolve this leakage.* The contact-edge current is a difference of large
+     drift and diffusion terms; its own resolution (`terminal_current_resolution`) is about 4e-7 A/cm² on a
+     10 nm mesh and 4.5e-5 on a 1 nm mesh, against a generation current of about 5e-9. Read that way the
+     reverse current stepped with the mesh and differed 150× between meshes, and its slope was the same
+     9.99e-13 S/cm² everywhere. The weighted current (Unit 32) resolves it: 1e-21 resolution, the two meshes
+     agreeing to 0.5 %, equal to q∫R. **Ruling:** TAC8 reads the weighted current, and the ratio is checked
+     at every point. The small-signal check (no weighted admittance exists) is |Y − G| within Y's own reported
+     resolution instead of 1e-4 relative. Recorded as weak: at −2 V the resolution is 1.5e-7 S/cm² against
+     G = 8.0e-9, so it constrains little.
+  2. *The deck tests' "1D diode" was a compensated resistor.* A profile's window on its depth axis was dropped,
+     and the depth axis defaults to x, so in 1D `x=-1:1um` was silently ignored: Na = Nd = 1e17 at every node
+     (and the same in `hand_diode`, so deck and hand agreed). **Ruling:** fixed in this unit.
+     - `device::evaluate`: a constant profile is bounded by its window on every axis, its depth axis
+       included (a constant has no depth shape). `check_profile` refuses a bounded window on the depth axis of
+       a Gaussian or erfc (the shape sets it). `deck::profile_text` writes a constant's depth-axis window; the
+       app's `profile_extent` reads it. No shipped deck and no app-built profile windows a depth axis
+       (2D/3D decks use `axis=y` for x windows), so nothing shipped changes.
+     - The deck and app test diodes are now real junctions. Four mechanics tests written against the
+       compensated device keep it, bit-identical, as `compensated_device` / `hand_diode(true)`, because their
+       tolerances assume its large currents: RG3 (initial checkpoint), the sweep restart, the `[trace]` deck
+       (tol_update 1e-12) and RG6 (small-signal restart). The app's 0 V I-V check compares with the point's
+       terminal-current resolution instead of exact 0.
+     - Doping tests: the 1D step, the refusal, a Gaussian's window unchanged.
+- Affected cases run by name (every deck, app and window case in a file using the diode fixtures or an
+  x window, hidden cases excluded): all pass. The hidden benchmark "reduced FinFET as layered generate3d
+  meshes and is certified" fails P6, and fails the same on `main`'s binary: pre-existing, outside this unit.
+  The app completion count is 27 (28 `[models]` keys less srh).
+- Hand mutants, 4/4 caught:
+  - Γ_n applied to τ_p (the rate test);
+  - the other end's ψ columns scaled to 0 (the Jacobian gate; the plan's "dropped" form does not compile
+    under `/WX`);
+  - the electrothermal refusal removed (the refusals test);
+  - the run-record key written when off (the deck run-record test).
+
+**Slice 2 (2026-11-25).** ARCHITECTURE.md: the as-built block after Unit 20's, Unit 20's exclusion note, the
+Unit 16 doping entry (the depth-axis window) and the 11.3 nanoscale-physics row. TAC11 (Release and Debug full
+suites) waits for the owner's word.
+
+**Review focus (not otherwise exercised; each pinned by a test in the slice that owns the code).**
+1. A node where F is exactly 0, e.g. a symmetric centre: plain SRH must still be added there. The E_r/F division
+   must not run, and LocalTunnelling's `continue` pattern must not be copied. Test `tat zero field keeps SRH`
+   (slice 1).
+2. Ohmic contact nodes and nodes with no carrier edges: Γ = 0 and plain SRH. Test `tat contact nodes plain srh`
+   (slice 1).
+3. Extreme field, F ≥ 1e7 V/cm: finite, no NaN, Newton still converges (TAC2 plus test
+   `tat extreme field finite`, slice 0).
+4. A wide gap (a ≈ 62, 4H-SiC): quadrature accuracy holds (TAC3 grid; slice 0).
+5. Small-signal and restart paths read the new ψ columns: the AC Jacobian pattern holds them (TAC8, slice 1).
+
+**Slices and tasks.** Each task follows test → fail → implement → pass → commit (local).
+
+- **Slice 0: physics (TAD1).**
+  - Files: create `include/NiTCAD/physics/trap_tunnelling.hpp`, `src/physics/trap_tunnelling.cpp` and
+    `tests/physics/trap_tunnelling_test.cpp`; register them in the physics CMake lists.
+  - Tests (Catch2, tag `[trap_tunnelling]`): `hurkx zero field`, `hurkx monotone and bounded`,
+    `hurkx quadrature reference` (TAC3), `hurkx laplace asymptote` (TAC4), `hurkx derivative` (TAC5) and
+    `tat extreme field finite`.
+  - Run: `ctest -R trap_tunnelling` in build/release.
+  - Hand mutants: drop the u^{3/2} factor in d_dF; use 15 panels; drop the a prefactor; swap ħ for h. Each must
+    be caught.
+- **Slice 1: assembly, deck, records (TAD2–TAD8).**
+  - Files:
+    - `include/NiTCAD/assemble/models.hpp`: `bool tat`, `double tat_mass_n`, `double tat_mass_p`.
+    - `src/deck/build.cpp` and `src/app/deck_vocabulary.cpp`.
+    - `src/assemble/system_data.hpp`: `TrapNode` and `trap_nodes_`.
+    - `src/assemble/drift_diffusion.cpp`: `build_field_nodes` and the refusals.
+    - `src/assemble/terms.cpp`: `TrapTunnellingSrh` and the predicate.
+    - `src/solve/run_record.cpp`.
+  - Tests in the assemble and solve test files: TAC6, TAC7, TAC9, TAC10, plus review-focus items 1, 2 and 5.
+  - TAC8 runs by case name only (never the whole deck binary).
+  - TAC1 trace comparison against main's NG1 traces.
+  - Hand mutants: Γ_n applied to τ_p; a dropped ψ column of the neighbour; the refusal for electrothermal
+    removed; the run-record key written when off.
+- **Slice 2: docs and suites.** ARCHITECTURE.md as-built block and the 11.3 row; this record completed; TAC11 on the
+  owner's word.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

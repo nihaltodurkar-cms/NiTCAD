@@ -45,7 +45,8 @@ inline std::vector<double> linspace(double a, double b, int n) {
     return v;
 }
 
-// The diode without its analysis section.
+// The diode without its analysis section: p 1e17 on x < 1 um, n 1e17 beyond (Unit 67 TAC8: until
+// then a profile's window on its depth axis was dropped, and this was compensated everywhere).
 inline const std::string diode_device = R"(
 # The 1D diode of the deck tests.
 [device]
@@ -76,7 +77,21 @@ inline const std::string diode_deck = diode_device + R"(
 contact anode = 0 : 0.2 : 0.1
 )";
 
-inline NiTCAD::device::Device hand_diode() {
+// The pre-Unit 67 diode_device, kept for tests of run mechanics written against it (restart, the
+// initial checkpoint, the trace): Na = Nd = 1e17 at every node, a compensated resistor, whose large
+// currents those tests' tolerances assume. Bit-identical to the device they were written on.
+inline const std::string compensated_device = [] {
+    std::string t = diode_device;
+    const auto replace = [&t](const std::string& from, const std::string& to) {
+        t.replace(t.find(from), from.size(), to);
+    };
+    replace("acceptor constant 1e17 x=-1:1um", "acceptor constant 1e17");
+    replace("donor constant 1e17 x=1um:3um", "donor constant 1e17");
+    replace("# The 1D diode of the deck tests.", "# The compensated 1D resistor of the deck tests.");
+    return t;
+}();
+
+inline NiTCAD::device::Device hand_diode(bool compensated = false) {
     using namespace NiTCAD;
     auto m = *mesh::make_tensor_grid(linspace(0.0, 2e-4, 201));
     const std::size_t n = m.node_count();
@@ -88,6 +103,10 @@ inline NiTCAD::device::Device hand_diode() {
     device::DopingProfile d{.dopant = device::Dopant::donor, .peak_cm3 = 1e17};
     d.lo[0] = 1e-4;
     d.hi[0] = 3e-4;
+    if (compensated) {  // compensated_device's doping: both everywhere
+        a = {.dopant = device::Dopant::acceptor, .peak_cm3 = 1e17};
+        d = {.dopant = device::Dopant::donor, .peak_cm3 = 1e17};
+    }
     const std::vector<device::DopingProfile> profiles{a, d};
     auto doping = *device::sample(profiles, m, node_region, regions);
     auto anode = m.find_boundary("x_min")->nodes;
