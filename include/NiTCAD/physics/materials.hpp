@@ -39,7 +39,8 @@ struct ParameterCitation {
 };
 
 // The bases a ParameterCitation may name.
-inline constexpr std::string_view citation_bases[] = {"measured", "fit", "interpolated", "derived", "secondary", "default"};
+// "approximate": a general value where no source in hand gives one (owner ruling 2026-11-26, Unit 68 slice 5b).
+inline constexpr std::string_view citation_bases[] = {"measured", "fit", "interpolated", "derived", "secondary", "default", "approximate"};
 
 using MaterialParameters = std::variant<SemiconductorParameters, InsulatorParameters>;
 

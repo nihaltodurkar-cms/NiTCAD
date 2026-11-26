@@ -1,0 +1,33 @@
+NiTCAD Unit 68 - approximate (unsourced) material values
+=========================================================
+
+Owner ruling 2026-11-26: where no source in hand gives a value, use a general
+approximate value. Each such value is cited with basis "approximate" in the
+material registry (src/physics/materials.cpp); `nitcad materials <name>` shows it.
+Replace a value here and in the registry when a source turns up.
+
+Material         Parameter                  Value       Why approximate / what would replace it
+---------------  -------------------------  ----------  ----------------------------------------------------
+all 11 slice-5b  tunnel_mass_p (hole)       0.50 m0     no measured hole tunnelling mass for any high-k oxide;
+dielectrics                                             same value SiO2 uses (owner ruling 2026-10-28).
+                                                        Source wanted: Yeo, King, Hu, APL 81, 2091 (2002).
+all slice-5b     thermal set (k, exponent,  SiO2's      no thermal data in hand; used only with the
+dielectrics      heat capacity, thermopower) values     electrothermal model.
+zro2             tunnel_mass_n (electron)   0.50 m0     not in Salmani Table I.
+tio2             tunnel_mass_n              0.50 m0     not in Salmani Table I.
+ta2o5            tunnel_mass_n              0.50 m0     not in Salmani Table I.
+mgo              eps_r                      9.8         Afanas'ev 2010 gives band alignment only.
+mgo              tunnel_mass_n              0.50 m0     no source.
+aln_dielectric   eps_r                      8.5         arXiv:2407.17360 gives gap and affinity only.
+aln_dielectric   tunnel_mass_n              0.50 m0     no source.
+sapphire         eps_r (along c)            11.6        no crystalline-sapphire permittivity source in hand.
+hbn              eps_r (out of plane)       3.76        M15 not in hand.
+hbn              electron_affinity_eV       2.0 eV      no h-BN affinity/offset source in hand.
+hbn              tunnel_mass_n              0.50 m0     no source.
+sion <x>         (linear in x between sio2's tunnelling set and si3n4; inherits the approximations above)
+
+Not approximate but worth noting:
+- aln_dielectric electron_affinity_eV 1.885 eV is the midpoint of 1.83-1.94 eV (arXiv:2407.17360), basis "derived".
+- sapphire gap, offset and electron mass are the amorphous Al2O3 values (Robertson 2004, Salmani), basis "secondary".
+- tio2 has no conduction-band offset to Si (Robertson Table 2: 0 eV), so electrons barely see a barrier.
+- tunnel_mass_evb = 0 everywhere means "use the electron mass" (basis "default").

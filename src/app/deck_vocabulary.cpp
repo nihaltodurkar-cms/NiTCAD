@@ -17,8 +17,10 @@ using Words = std::span<const std::string_view>;
 constexpr std::array<std::string_view, 2> on_off{"on", "off"};
 constexpr std::array<std::string_view, 2> overlap_rules{"replace", "fill"};
 constexpr std::array<std::string_view, 5> mesh_types{"tensor", "generate2d", "generate3d", "extrude3d", "file"};
-constexpr std::array<std::string_view, 10> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas",
-                                                     "sic_4h",  "algaas",         "sio2",      "insulator", "metal"};
+constexpr std::array<std::string_view, 22> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas", "sic_4h",
+                                                     "algaas", "sio2", "insulator", "metal", "hfo2", "al2o3", "si3n4",
+                                                     "zro2", "la2o3", "tio2", "ta2o5", "mgo", "aln_dielectric",
+                                                     "sapphire", "hbn", "sion"};
 constexpr std::array<std::string_view, 2> dopants{"donor", "acceptor"};
 constexpr std::array<std::string_view, 3> shapes{"constant", "gaussian", "erfc"};
 constexpr std::array<std::string_view, 4> contact_kinds{"ohmic", "gate", "electrode", "schottky"};

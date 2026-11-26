@@ -51,6 +51,117 @@ constexpr std::array<Citation, 1> sio2_sources{{
     {"legacy moscap.EPS_OX_R; NIST-JANAF", "eps_r 3.9; heat capacity (Unit 23)"},
 }};
 
+// --- dielectrics with band data (MAD5, MAD13; slice 5b) -----------------------------------------
+// chi = 4.05 eV (silicon) - the conduction-band offset to silicon. The hole tunnelling mass, and any
+// value no source in hand gives, is a general approximate value (owner ruling 2026-11-26), cited
+// "approximate"; the thermal set is SiO2's, approximate for every dielectric.
+
+constexpr double chi_si = 4.05;
+constexpr double mass_general = 0.50;  // m0, the value SiO2 already assumes (owner ruling 2026-10-28)
+
+constexpr InsulatorParameters dielectric(double eps_r, double chi, double gap, double mass_n) {
+    return {.eps_r = eps_r, .thermal = silicon_dioxide_parameters.thermal, .electron_affinity_eV = chi,
+            .band_gap_eV = gap, .tunnel_mass_n = mass_n, .tunnel_mass_p = mass_general, .tunnel_mass_evb = 0.0};
+}
+
+struct Cite {
+    std::size_t source;
+    std::string_view basis;
+};
+
+// eps_r, chi, gap and electron mass cited per material; thermal and hole mass approximate (source
+// `approx`); tunnel_mass_evb 0 means the electron mass (insulator.hpp).
+constexpr std::array<ParameterCitation, 11> dielectric_cites(Cite eps, Cite chi, Cite gap, Cite mass_n, std::size_t approx) {
+    return {{{"eps_r", eps.source, eps.basis},
+             {"thermal.conductivity_W_cmK", approx, "approximate"},
+             {"thermal.conductivity_exponent", approx, "approximate"},
+             {"thermal.heat_capacity_J_cm3K", approx, "approximate"},
+             {"thermal.thermopower_exponent_n", approx, "approximate"},
+             {"thermal.thermopower_exponent_p", approx, "approximate"},
+             {"electron_affinity_eV", chi.source, chi.basis},
+             {"band_gap_eV", gap.source, gap.basis},
+             {"tunnel_mass_n", mass_n.source, mass_n.basis},
+             {"tunnel_mass_p", approx, "approximate"},
+             {"tunnel_mass_evb", approx, "default"}}};
+}
+
+constexpr Citation robertson{"J. Robertson, Eur. Phys. J. Appl. Phys. 28, 265 (2004)",
+                             "Table 2: K, gap, conduction-band offset to Si; chi = 4.05 eV - offset"};
+constexpr Citation salmani{"M. Salmani-Jelodar et al., arXiv:1502.06178 (2015)",
+                           "Table I: electron tunnelling mass (secondary, from Yeo 2002, Robertson 2000)"};
+constexpr Citation approx_note{"NiTCAD, owner ruling 2026-11-26 (Unit 68 slice 5b)",
+                               "general approximate values where no source in hand gives one: hole tunnelling "
+                               "mass 0.50 m0, SiO2's thermal set, and the values the material names"};
+
+constexpr std::array<Citation, 3> robertson_salmani_sources{{robertson, salmani, approx_note}};
+constexpr std::array<Citation, 2> robertson_sources{{robertson, approx_note}};
+
+constexpr InsulatorParameters hfo2 = dielectric(25.0, chi_si - 1.4, 5.8, 0.11);
+constexpr InsulatorParameters al2o3 = dielectric(9.0, chi_si - 2.8, 8.8, 0.35);
+constexpr InsulatorParameters si3n4 = dielectric(7.0, chi_si - 2.4, 5.3, 0.40);
+constexpr InsulatorParameters la2o3 = dielectric(30.0, chi_si - 2.3, 6.0, 0.27);
+constexpr auto robertson_salmani_cites = dielectric_cites({0, "measured"}, {0, "derived"}, {0, "measured"}, {1, "secondary"}, 2);
+
+constexpr InsulatorParameters zro2 = dielectric(25.0, chi_si - 1.5, 5.8, mass_general);
+constexpr InsulatorParameters tio2 = dielectric(80.0, chi_si - 0.0, 3.5, mass_general);
+constexpr InsulatorParameters ta2o5 = dielectric(22.0, chi_si - 0.35, 4.4, mass_general);
+constexpr auto robertson_cites = dielectric_cites({0, "measured"}, {0, "derived"}, {0, "measured"}, {1, "approximate"}, 1);
+
+// MgO (MAD13): amorphous MgO on (100)Si by internal photoemission, the conduction band 3.37 eV
+// above the silicon valence band top (offset 3.37 - 1.12 = 2.25 eV), gap 6.1 eV; eps_r approximate.
+constexpr std::array<Citation, 2> mgo_sources{{
+    {"V. V. Afanas'ev et al., Appl. Phys. Lett. 96, 052103 (2010), doi:10.1063/1.3294328",
+     "abstract: a-MgO gap 6.1 eV, conduction band 3.37 eV above the Si valence band top"},
+    {approx_note.source, "eps_r 9.8, electron tunnelling mass 0.50 m0, hole mass, thermal set"},
+}};
+constexpr InsulatorParameters mgo = dielectric(9.8, chi_si - (3.37 - 1.12), 6.1, mass_general);
+constexpr auto mgo_cites = dielectric_cites({1, "approximate"}, {0, "derived"}, {0, "measured"}, {1, "approximate"}, 1);
+
+// AlN as a gate or passivation insulator (MAD5): gap 6.07 eV, chi 1.83-1.94 eV (the midpoint).
+constexpr std::array<Citation, 2> aln_sources{{
+    {"arXiv:2407.17360 (2024), Si/AlN", "gap 6.07 eV, electron affinity 1.83-1.94 eV (midpoint taken)"},
+    {approx_note.source, "eps_r 8.5, electron tunnelling mass 0.50 m0, hole mass, thermal set"},
+}};
+constexpr InsulatorParameters aln = dielectric(8.5, 1.885, 6.07, mass_general);
+constexpr auto aln_cites = dielectric_cites({1, "approximate"}, {0, "derived"}, {0, "measured"}, {1, "approximate"}, 1);
+
+// Sapphire (MAD13): crystalline Al2O3, its own set; gap and offset as al2o3 (M5), eps_r along c
+// approximate (c-plane substrates).
+constexpr std::array<Citation, 3> sapphire_sources{{
+    robertson, salmani, {approx_note.source, "eps_r 11.6 along c, hole mass, thermal set"}}};
+constexpr InsulatorParameters sapphire = dielectric(11.6, chi_si - 2.8, 8.8, 0.35);
+constexpr auto sapphire_cites = dielectric_cites({2, "approximate"}, {0, "secondary"}, {0, "secondary"}, {1, "secondary"}, 2);
+
+// h-BN (MAD13): gap 5.955 eV (indirect, M16); out-of-plane eps_r and chi approximate.
+constexpr std::array<Citation, 2> hbn_sources{{
+    {"G. Cassabois, P. Valvin, B. Gil, arXiv:1512.02962 (Nat. Photon. 10, 262, 2016)", "indirect gap 5.955 eV"},
+    {approx_note.source, "eps_r 3.76 out of plane, chi 2.0 eV, electron tunnelling mass 0.50 m0, hole mass, thermal set"},
+}};
+constexpr InsulatorParameters hbn = dielectric(3.76, 2.0, 5.955, mass_general);
+constexpr auto hbn_cites = dielectric_cites({1, "approximate"}, {1, "approximate"}, {0, "measured"}, {1, "approximate"}, 1);
+
+// SiON (MAD13): x the Si3N4 share, every value linear between SiO2 (its tunnelling set) and si3n4.
+constexpr std::array<Citation, 4> sion_sources{{
+    {"NiTCAD (MAD13)", "linear in x between sio2 (x = 0, its Unit 51 tunnelling set) and si3n4 (x = 1)"},
+    robertson, salmani, approx_note}};
+constexpr auto sion_cites = dielectric_cites({0, "interpolated"}, {0, "interpolated"}, {0, "interpolated"}, {0, "interpolated"}, 3);
+
+std::expected<MaterialParameters, base::Error> sion(std::span<const double> a) {
+    const double x = a[0];
+    if (!(x >= 0.0 && x <= 1.0)) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input, "sion: the Si3N4 share x must lie in [0, 1]"});
+    }
+    const InsulatorParameters& o = silicon_dioxide_tunnelling_parameters;
+    const auto mix = [x](double a0, double a1) { return (1.0 - x) * a0 + x * a1; };
+    InsulatorParameters p = o;
+    p.eps_r = mix(o.eps_r, si3n4.eps_r);
+    p.electron_affinity_eV = mix(o.electron_affinity_eV, si3n4.electron_affinity_eV);
+    p.band_gap_eV = mix(o.band_gap_eV, si3n4.band_gap_eV);
+    p.tunnel_mass_n = mix(o.tunnel_mass_n, si3n4.tunnel_mass_n);
+    p.tunnel_mass_p = mix(o.tunnel_mass_p, si3n4.tunnel_mass_p);
+    return p;
+}
+
 // `metal` (Unit 68, MAD6): not solved, its nodes held by an electrode; eps_r 1 is never read.
 constexpr InsulatorParameters metal_region{.eps_r = 1.0, .metal = true};
 constexpr std::array<Citation, 1> metal_sources{{
@@ -70,7 +181,7 @@ constexpr std::array<ParameterCitation, 11> metal_parameter_sources{{
     {"tunnel_mass_evb", 0, "default"},
 }};
 
-constexpr std::array<MaterialEntry, 10> registry{{
+constexpr std::array<MaterialEntry, 22> registry{{
     {"silicon", MaterialKind::semiconductor, 0, 0, "", "silicon, Couderc band set (default)", silicon_sources,
      fixed_semiconductor<silicon_parameters>},
     {"silicon_legacy", MaterialKind::semiconductor, 0, 0, "", "silicon, the legacy set", legacy_silicon_sources,
@@ -91,6 +202,27 @@ constexpr std::array<MaterialEntry, 10> registry{{
     {"metal", MaterialKind::metal, 0, 0, "",
      "metal region held by one electrode contact; work_function or metal = <preset> in the region", metal_sources,
      fixed_insulator<metal_region>, metal_parameter_sources, true},
+    {"hfo2", MaterialKind::insulator, 0, 0, "", "HfO2, amorphous gate dielectric", robertson_salmani_sources,
+     fixed_insulator<hfo2>, robertson_salmani_cites, true},
+    {"al2o3", MaterialKind::insulator, 0, 0, "", "Al2O3, amorphous gate dielectric", robertson_salmani_sources,
+     fixed_insulator<al2o3>, robertson_salmani_cites, true},
+    {"si3n4", MaterialKind::insulator, 0, 0, "", "Si3N4", robertson_salmani_sources, fixed_insulator<si3n4>,
+     robertson_salmani_cites, true},
+    {"zro2", MaterialKind::insulator, 0, 0, "", "ZrO2", robertson_sources, fixed_insulator<zro2>, robertson_cites, true},
+    {"la2o3", MaterialKind::insulator, 0, 0, "", "La2O3", robertson_salmani_sources, fixed_insulator<la2o3>,
+     robertson_salmani_cites, true},
+    {"tio2", MaterialKind::insulator, 0, 0, "", "TiO2 (no conduction-band offset to Si)", robertson_sources,
+     fixed_insulator<tio2>, robertson_cites, true},
+    {"ta2o5", MaterialKind::insulator, 0, 0, "", "Ta2O5", robertson_sources, fixed_insulator<ta2o5>, robertson_cites, true},
+    {"mgo", MaterialKind::insulator, 0, 0, "", "MgO, amorphous on Si", mgo_sources, fixed_insulator<mgo>, mgo_cites, true},
+    {"aln_dielectric", MaterialKind::insulator, 0, 0, "", "AlN as a gate or passivation insulator", aln_sources,
+     fixed_insulator<aln>, aln_cites, true},
+    {"sapphire", MaterialKind::insulator, 0, 0, "", "sapphire, crystalline Al2O3 substrate (eps_r along c)",
+     sapphire_sources, fixed_insulator<sapphire>, sapphire_cites, true},
+    {"hbn", MaterialKind::insulator, 0, 0, "", "h-BN, gate dielectric for layered channels (eps_r out of plane)",
+     hbn_sources, fixed_insulator<hbn>, hbn_cites, true},
+    {"sion", MaterialKind::insulator, 1, 1, "sion takes the Si3N4 share x, 0 <= x <= 1",
+     "SiON, linear between SiO2 (x = 0) and Si3N4 (x = 1)", sion_sources, sion, sion_cites, true},
 }};
 
 // --- metal presets (MAD6, MAD14; amendment 4) ---------------------------------------------------

@@ -295,7 +295,7 @@ TEST_CASE("material registry: existing names give the existing sets bit for bit"
 
 TEST_CASE("material registry: names unique, arities and usage consistent", "[materials][unit68]") {
     const auto all = material_registry();
-    REQUIRE(all.size() == 10);
+    REQUIRE(all.size() == 22);
     for (std::size_t i = 0; i < all.size(); ++i) {
         CAPTURE(all[i].name);
         REQUIRE(find_material(all[i].name) == &all[i]);
@@ -401,4 +401,37 @@ TEST_CASE("material registry: metal presets (MAD14)", "[materials][unit68]") {
     REQUIRE(find_metal_preset("tin")->work_function_eV == 4.70);
     REQUIRE(find_metal_preset("nisi")->barrier_eV == 0.75);  // slice 5c, Sze & Ng Table 4
     for (const MetalPreset& m : metal_presets()) REQUIRE((m.kind == MetalPresetKind::silicide) == (m.barrier_eV > 0.0));
+}
+
+// Unit 68 slice 5b (MAD5, MAD13): every dielectric carries band data, so gate tunnelling runs
+// through it; the general hole mass is cited "approximate" (owner ruling 2026-11-26).
+TEST_CASE("material registry: dielectrics with band data (MAD5, MAD13)", "[materials][unit68]") {
+    for (const std::string_view name : {"hfo2", "al2o3", "si3n4", "zro2", "la2o3", "tio2", "ta2o5", "mgo", "aln_dielectric",
+                                        "sapphire", "hbn"}) {
+        CAPTURE(name);
+        const MaterialEntry* e = find_material(name);
+        REQUIRE(e != nullptr);
+        const auto p = std::get<InsulatorParameters>(*e->make({}));
+        REQUIRE(has_band_data(p));
+        REQUIRE(Insulator::create(p).has_value());
+        REQUIRE(p.tunnel_mass_p == 0.50);
+        for (const ParameterCitation& c : e->parameter_sources) {
+            if (c.path == "tunnel_mass_p") REQUIRE(c.basis == "approximate");
+        }
+    }
+    const auto hfo2 = std::get<InsulatorParameters>(*find_material("hfo2")->make({}));
+    REQUIRE(hfo2.eps_r == 25.0);
+    REQUIRE(hfo2.band_gap_eV == 5.8);
+    REQUIRE(std::abs(hfo2.electron_affinity_eV - 2.65) < 1e-12);  // 4.05 - 1.4 (Robertson Table 2)
+    REQUIRE(hfo2.tunnel_mass_n == 0.11);
+    // SiON: linear in x between the SiO2 tunnelling set and si3n4.
+    const MaterialEntry* sion = find_material("sion");
+    const std::array<double, 1> zero{0.0}, one{1.0}, half{0.5}, bad{1.5};
+    REQUIRE(std::get<InsulatorParameters>(*sion->make(zero)) == silicon_dioxide_tunnelling_parameters);
+    const auto si3n4 = std::get<InsulatorParameters>(*find_material("si3n4")->make({}));
+    const auto x1 = std::get<InsulatorParameters>(*sion->make(one));
+    REQUIRE(x1.eps_r == si3n4.eps_r);
+    REQUIRE(x1.band_gap_eV == si3n4.band_gap_eV);
+    REQUIRE(std::get<InsulatorParameters>(*sion->make(half)).band_gap_eV == 0.5 * (9.0 + 5.3));
+    REQUIRE_FALSE(sion->make(bad).has_value());
 }

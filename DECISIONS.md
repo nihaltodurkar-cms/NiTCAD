@@ -4996,6 +4996,19 @@ silicon and does not follow Schottky-Mott). Suggestions now break a distance tie
 dropped-letter form of (`nii` -> `nisi`, not `ni`), in physics::nearest_name and the editor's suggestion alike.
 Slice 5b still waits: no hole tunnelling mass in hand (Kao 2022, UCB/EECS-2022-34, read; it gives none).
 
+**Slice 5b as built (2026-11-26).** Owner ruling 2026-11-26 (it loosens MAD13's "no mass, no band data"): a value no
+source in hand gives takes a general approximate value, cited with the new basis `approximate`; every such value is
+listed in `docs/unit68-approximate-values.txt`. Eleven dielectrics with full band data, recorded: `hfo2`, `al2o3`,
+`si3n4`, `la2o3` (eps_r, gap, offset from Robertson 2004 Table 2, M5; chi = 4.05 eV - offset; electron tunnelling
+mass from Salmani Table I, secondary), `zro2`, `tio2`, `ta2o5` (M5; electron mass approximate), `mgo` (Afanas'ev
+2010: gap 6.1 eV, offset 2.25 eV), `aln_dielectric` (arXiv:2407.17360), `sapphire` (al2o3's band values, its own
+eps_r along c), `hbn` (M16 gap); plus `sion <x>`, linear between sio2's Unit 51 tunnelling set and si3n4. The hole
+tunnelling mass is 0.50 m0 throughout (approximate, as SiO2 since 2026-10-28) and the thermal set is SiO2's
+(approximate). Checks: `material = hfo2` tunnels exactly as an insulator region given the same values (gate current
+to 1e-12 relative at 1 V); every dielectric passes Insulator::create with band data. Searched and not usable for hole
+masses: Materials Project / Ricci 2017 (conductivity masses), Garcia 2004/2005 (band masses), arXiv:1204.2886 (ZrO2
+band masses), cond-mat/0609403 (assumes 0.5 m0).
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

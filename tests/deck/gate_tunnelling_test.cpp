@@ -930,3 +930,26 @@ TEST_CASE("Gate tunnelling: the FinFET sweep (GC14, GC16)", "[.gate_tunnelling_f
                     I_G / b.terminal_current[drain]);
     }
 }
+
+// Unit 68 slice 5b (MAD5): `material = hfo2` tunnels exactly as an insulator region given the same
+// values by hand.
+TEST_CASE("Gate tunnelling: a registry dielectric equals its values written out (MAD5)", "[gate_tunnelling][unit68]") {
+    const std::string head = "[device]\ntemperature = 300\n[mesh]\ntype = tensor\n"
+                             "x = linspace(0, 1.45nm, 30) + linspace(1.495nm, 1.505nm, 2) + linspace(1.505nm, 1um, 101)\n"
+                             "[region ox]\n";
+    const std::string tail = "[region silicon]\nmaterial = silicon\nbox = 1.5nm 2um\n[doping]\nprofile = acceptor constant 5e17\n"
+                             "[contact gate]\nkind = electrode\npatch = x_min\nmetal = tin\ntunnelling = on\n"
+                             "[contact substrate]\nkind = ohmic\npatch = x_max\n[sweep]\ncontact gate = 0 : 1 : 1\n";
+    const deck::Plan named = must(head + "material = hfo2\n" + tail);
+    const deck::Plan written = must(head + "material = insulator\neps_r = 25\nelectron_affinity_eV = 2.65\nband_gap_eV = 5.8\n"
+                                           "tunnel_mass_n = 0.11\ntunnel_mass_p = 0.5\n" + tail);
+    const auto a = deck::run(named);
+    const auto b = deck::run(written);
+    if (!a) FAIL(a.error().message);
+    if (!b) FAIL(b.error().message);
+    const auto& ia = a->sweep->points.back().terminal_current;
+    const auto& ib = b->sweep->points.back().terminal_current;
+    INFO("gate current " << ia[0] << " vs " << ib[0]);
+    CHECK(ia[0] != 0.0);
+    CHECK(std::abs(ia[0] - ib[0]) <= 1e-12 * std::abs(ib[0]));
+}
