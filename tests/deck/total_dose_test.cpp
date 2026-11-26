@@ -164,15 +164,17 @@ TEST_CASE("TDC4: an interface's dose is its fixed charge and two trap bands", "[
 }
 
 TEST_CASE("TDC4: hole_trapping 0 leaves the fixed charge", "[total_dose]") {
-    const auto& f = only_interface(
-        must(oxide("fixed_charge = 5e10\ndose = 1e5\nhole_trapping = 0\ndose_oxide_thickness = 50nm\n")));
+    // The plan held: only_interface returns a reference into it.
+    const deck::Plan p = must(oxide("fixed_charge = 5e10\ndose = 1e5\nhole_trapping = 0\ndose_oxide_thickness = 50nm\n"));
+    const auto& f = only_interface(p);
     CHECK(f.fixed_charge_cm2 == 5e10);
     CHECK(f.traps.bands.empty());
 }
 
 TEST_CASE("TDC1: without a dose the fixed charge is as written, -0 too", "[total_dose]") {
     CHECK(std::signbit(only_interface(must(oxide("fixed_charge = -0\n"))).fixed_charge_cm2));
-    const auto* g = must(mosfet("oxide_thickness = 5nm\nfixed_charge = -0\n")).device.find_contact("gate");
+    const deck::Plan p = must(mosfet("oxide_thickness = 5nm\nfixed_charge = -0\n"));
+    const auto* g = p.device.find_contact("gate");
     REQUIRE(g != nullptr);
     CHECK(std::signbit(g->gate.fixed_charge_cm2));
 }
