@@ -16,8 +16,10 @@
 #include <objbase.h>
 #include <shellapi.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <span>
 #include <string>
@@ -30,6 +32,22 @@
 
 namespace {
 
+// stdout on the caller's console when it gave none (a GUI-subsystem process): --self-test's report and --capture's
+// errors. A missing handle is NULL or INVALID_HANDLE_VALUE depending on how the process was started.
+void attach_parent_console() {
+    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if ((out == nullptr || out == INVALID_HANDLE_VALUE) && AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* f = nullptr;
+        freopen_s(&f, "CONOUT$", "w", stdout);
+    }
+}
+
+int fail(const std::string& message) {
+    std::fprintf(stdout, "nitcad-app: %s\n", message.c_str());
+    std::fflush(stdout);
+    return 1;
+}
+
 // --capture <image.png> <deck> [--size <w>x<h>] (docs/images/app.png): the window, off every monitor, draws itself into
 // the PNG. Its client area is copied by PrintWindow from its own window (not the screen: no other application is in
 // the image), and the device view, a Direct3D swap chain PrintWindow does not see, is the renderer's read-back image
@@ -40,17 +58,24 @@ int capture(const std::filesystem::path& png, const std::filesystem::path& deck,
     options.show = false;
     options.quit_on_close = false;
     auto window = app::MainWindow::create(options);
-    if (!window) return 1;
+    if (!window) return fail("the main window could not be created");
     const HWND h = window->hwnd();
-    // The client area at the size asked for.
+    // Shown off every monitor, without a taskbar button or the focus: a window never shown has nothing composed for
+    // PrintWindow to copy, and this one is never on the screen. The frame is measured after the tool-window style
+    // (a smaller caption) has taken effect, so the client area comes out at the size asked for.
+    SetWindowLongPtrW(h, GWL_EXSTYLE, GetWindowLongPtrW(h, GWL_EXSTYLE) | WS_EX_TOOLWINDOW);
+    SetWindowPos(h, HWND_BOTTOM, -32000, -32000, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_FRAMECHANGED);
     RECT outer{}, inner{};
     GetWindowRect(h, &outer);
     GetClientRect(h, &inner);
     const int frame_w = (outer.right - outer.left) - inner.right, frame_h = (outer.bottom - outer.top) - inner.bottom;
-    // Shown off every monitor, without a taskbar button or the focus: a window never shown has nothing composed for
-    // PrintWindow to copy, and this one is never on the screen.
-    SetWindowLongPtrW(h, GWL_EXSTYLE, GetWindowLongPtrW(h, GWL_EXSTYLE) | WS_EX_TOOLWINDOW);
     SetWindowPos(h, HWND_BOTTOM, -32000, -32000, width + frame_w, height + frame_h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    // Windows caps a window at the virtual screen's size (WM_GETMINMAXINFO): a larger request is refused, not shrunk.
+    GetClientRect(h, &inner);
+    if (inner.right != width || inner.bottom != height) {
+        return fail(std::format("the client area came out {}x{}, not the {}x{} asked for (larger than the screen?)",
+                                inner.right, inner.bottom, width, height));
+    }
     const auto pump_for = [&](double seconds, const auto& done) {
         const ULONGLONG end = GetTickCount64() + static_cast<ULONGLONG>(seconds * 1000);
         MSG m;
@@ -64,8 +89,13 @@ int capture(const std::filesystem::path& png, const std::filesystem::path& deck,
         }
         return done();
     };
-    if (!window->open_deck(deck)) return 1;
-    if (!pump_for(300.0, [&] { return !window->runner().busy() && window->scene() != nullptr; })) return 1;
+    if (!window->open_deck(deck)) return fail("cannot open " + deck.string() + ": " + window->status(0));
+    // A deck that does not build ends the wait at once (as --self-test's), not after the time limit.
+    const auto failed = [&] { return window->runner().state() == app::RunState::failed; };
+    if (!pump_for(300.0, [&] { return failed() || (!window->runner().busy() && window->scene() != nullptr); }) ||
+        failed()) {
+        return fail(window->status(0));  // the state part says why ("The deck does not build: ...")
+    }
     window->execute(app::Command::tab_view);
     // The device tree from its top (opening scrolls it to the item selected).
     EnumChildWindows(
@@ -96,7 +126,11 @@ int capture(const std::filesystem::path& png, const std::filesystem::path& deck,
     const HDC dc = CreateCompatibleDC(screen);
     ReleaseDC(nullptr, screen);
     const HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!bmp || !bits) return 1;
+    if (!bmp || !bits) {
+        if (bmp) DeleteObject(bmp);
+        DeleteDC(dc);
+        return fail(std::format("no {}x{} bitmap for the capture", w, ht));
+    }
     const HGDIOBJ old = SelectObject(dc, bmp);
     PrintWindow(h, dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
     GdiFlush();
@@ -120,9 +154,16 @@ int capture(const std::filesystem::path& png, const std::filesystem::path& deck,
         if (auto view = r->last_image()) {
             RECT vr{};
             GetClientRect(window->viewport().hwnd(), &vr);
+            // An image of another size is a frame from before the last resize: pasting it would spill over the
+            // panels or leave part of the view black.
+            if (view->width != vr.right || view->height != vr.bottom) {
+                return fail(std::format("the device view's last image is {}x{}, the view {}x{}", view->width,
+                                        view->height, vr.right, vr.bottom));
+            }
             MapWindowPoints(window->viewport().hwnd(), h, reinterpret_cast<POINT*>(&vr), 2);
-            for (int y = 0; y < view->height && vr.top + y < ht; ++y) {
-                for (int x = 0; x < view->width && vr.left + x < w; ++x) {
+            const int bottom = std::min<int>(vr.bottom, ht), right = std::min<int>(vr.right, w);
+            for (int y = 0; y < view->height && vr.top + y < bottom; ++y) {
+                for (int x = 0; x < view->width && vr.left + x < right; ++x) {
                     if (vr.top + y < 0 || vr.left + x < 0) continue;
                     const std::size_t s = (static_cast<std::size_t>(y) * static_cast<std::size_t>(view->width) + static_cast<std::size_t>(x)) * 4;
                     const std::size_t d = (static_cast<std::size_t>(vr.top + y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(vr.left + x)) * 4;
@@ -142,7 +183,24 @@ int capture(const std::filesystem::path& png, const std::filesystem::path& deck,
             out.rgba.resize(static_cast<std::size_t>(out.width) * static_cast<std::size_t>(out.height) * 4);
         }
     }
-    return render::save_png(out, png) ? 0 : 1;
+    return render::save_png(out, png) ? 0 : fail("cannot write " + png.string());
+}
+
+// "<w>x<h>", both positive, nothing after.
+bool parse_size(const std::wstring& s, int& width, int& height) {
+    int consumed = 0;
+    return swscanf_s(s.c_str(), L"%dx%d%n", &width, &height, &consumed) == 2 &&
+           consumed == static_cast<int>(s.size()) && width > 0 && height > 0;
+}
+
+int usage(const std::wstring& message) {
+    MessageBoxW(nullptr,
+                (message + L"\n\nnitcad-app [<deck>] [--adapter auto|gpu|warp] [--debug-layer]\n"
+                           L"nitcad-app --self-test <deck> --out <image.png> [view options]\n"
+                           L"nitcad-app --capture <image.png> <deck> [--size <w>x<h>]")
+                    .c_str(),
+                L"NiTCAD", MB_ICONERROR);
+    return 64;
 }
 
 }  // namespace
@@ -154,15 +212,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    std::vector<std::wstring> args(argv + 1, argv + argc);
+    if (!argv) {
+        CoUninitialize();
+        return 1;
+    }
+    std::vector<std::wstring> args(argv + std::min(argc, 1), argv + argc);
     LocalFree(argv);
 
     // --self-test (26-3, WG4): its report on the caller's standard output (a pipe or the console).
     if (!args.empty() && args[0] == L"--self-test") {
-        if (!GetStdHandle(STD_OUTPUT_HANDLE) && AttachConsole(ATTACH_PARENT_PROCESS)) {
-            FILE* f = nullptr;
-            freopen_s(&f, "CONOUT$", "w", stdout);
-        }
+        attach_parent_console();
         auto options = app::parse_self_test(std::span<const std::wstring>(args).subspan(1));
         int status = 64;
         if (options) status = app::run_self_test(*options, stdout);
@@ -173,10 +232,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
 
     // --capture (docs/images/app.png): the window draws itself into a PNG, off-screen.
-    if (args.size() >= 3 && args[0] == L"--capture") {
+    if (!args.empty() && args[0] == L"--capture") {
+        attach_parent_console();
         int width = 1600, height = 968;
-        if (args.size() >= 5 && args[3] == L"--size") {
-            if (swscanf_s(args[4].c_str(), L"%dx%d", &width, &height) != 2) return 64;
+        const bool sized = args.size() == 5 && args[3] == L"--size";
+        if (!(args.size() == 3 || sized) || (sized && !parse_size(args[4], width, height))) {
+            std::fprintf(stdout, "usage: nitcad-app --capture <image.png> <deck> [--size <w>x<h>] (w, h > 0)\n");
+            std::fflush(stdout);
+            CoUninitialize();
+            return 64;
         }
         const int status = capture(args[1], args[2], width, height);
         CoUninitialize();
@@ -191,10 +255,18 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         const std::wstring& a = args[i];
         if (a == L"--debug-layer") {
             options.debug_layer = true;
-        } else if (a == L"--adapter" && i + 1 < args.size()) {
-            const std::wstring& v = args[++i];
-            options.adapter = v == L"warp" ? render::Adapter::warp : v == L"gpu" ? render::Adapter::hardware
-                                                                                  : render::Adapter::automatic;
+        } else if (a == L"--adapter") {
+            const std::wstring v = i + 1 < args.size() ? args[++i] : std::wstring();
+            if (v == L"warp") options.adapter = render::Adapter::warp;
+            else if (v == L"gpu") options.adapter = render::Adapter::hardware;
+            else if (v == L"auto") options.adapter = render::Adapter::automatic;
+            else {
+                CoUninitialize();
+                return usage(L"--adapter takes auto, gpu or warp.");
+            }
+        } else if (a.starts_with(L"--") || !deck.empty()) {
+            CoUninitialize();
+            return usage(a.starts_with(L"--") ? L"Unknown option " + a + L"." : L"Only one deck can be opened.");
         } else {
             deck = a;
         }
@@ -207,13 +279,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 1;
     }
     if (!deck.empty()) window->open_deck(deck);
-    MSG m;
-    while (GetMessageW(&m, nullptr, 0, 0) > 0) {
+    MSG m{};
+    BOOL got = 0;
+    while ((got = GetMessageW(&m, nullptr, 0, 0)) > 0) {
         if (window->pre_translate(m)) continue;
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
     window.reset();
     CoUninitialize();
-    return 0;
+    return got < 0 ? 1 : static_cast<int>(m.wParam);  // -1: the loop failed; else WM_QUIT's exit code
 }
