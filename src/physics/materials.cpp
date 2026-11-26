@@ -58,10 +58,15 @@ constexpr std::array<Citation, 1> sio2_sources{{
 
 constexpr double chi_si = 4.05;
 
-
-constexpr InsulatorParameters dielectric(double eps_r, double chi, double gap, double mass_n, double mass_p) {
-    return {.eps_r = eps_r, .thermal = silicon_dioxide_parameters.thermal, .electron_affinity_eV = chi,
-            .band_gap_eV = gap, .tunnel_mass_n = mass_n, .tunnel_mass_p = mass_p, .tunnel_mass_evb = 0.0};
+// k in W/cm K and heat capacity in J/cm3 K: the owner's thin-film starting values near 300 K
+// (2026-11-26); the conductivity exponent (0) and thermopower exponents (-0.5) stay SiO2's.
+constexpr InsulatorParameters dielectric(double eps_r, double chi, double gap, double mass_n, double mass_p, double k,
+                                         double heat_capacity) {
+    ThermalParameters t = silicon_dioxide_parameters.thermal;
+    t.conductivity_W_cmK = k;
+    t.heat_capacity_J_cm3K = heat_capacity;
+    return {.eps_r = eps_r, .thermal = t, .electron_affinity_eV = chi, .band_gap_eV = gap, .tunnel_mass_n = mass_n,
+            .tunnel_mass_p = mass_p, .tunnel_mass_evb = 0.0};
 }
 
 struct Cite {
@@ -91,20 +96,30 @@ constexpr Citation salmani{"M. Salmani-Jelodar et al., arXiv:1502.06178 (2015)",
                            "Table I: electron tunnelling mass (secondary, from Yeo 2002, Robertson 2000)"};
 constexpr Citation approx_note{"NiTCAD, owner ruling 2026-11-26 (Unit 68 slice 5b)",
                                "general approximate values where no source in hand gives one, and the tunnelling "
-                               "masses the owner supplied (2026-11-26, source not stated): SiO2's thermal set and the values each material names"};
+                               "masses, thermal conductivities and heat capacities the owner supplied (2026-11-26, "
+                               "from thin-film reports not read here); the conductivity and thermopower exponents are "
+                               "SiO2's; and the values each material names"};
 
 constexpr std::array<Citation, 3> robertson_salmani_sources{{robertson, salmani, approx_note}};
 constexpr std::array<Citation, 2> robertson_sources{{robertson, approx_note}};
 
-constexpr InsulatorParameters hfo2 = dielectric(25.0, chi_si - 1.4, 5.8, 0.11, 0.60);
-constexpr InsulatorParameters al2o3 = dielectric(9.0, chi_si - 2.8, 8.8, 0.35, 1.30);
-constexpr InsulatorParameters si3n4 = dielectric(7.0, chi_si - 2.4, 5.3, 0.40, 0.35);
-constexpr InsulatorParameters la2o3 = dielectric(30.0, chi_si - 2.3, 6.0, 0.27, 0.50);
+constexpr InsulatorParameters hfo2 = dielectric(25.0, chi_si - 1.4, 5.8, 0.11, 0.60, 0.010, 1.16);
+constexpr InsulatorParameters si3n4 = dielectric(7.0, chi_si - 2.4, 5.3, 0.40, 0.35, 0.012, 2.30);
+constexpr InsulatorParameters la2o3 = dielectric(30.0, chi_si - 2.3, 6.0, 0.27, 0.50, 0.010, 2.15);
 constexpr auto robertson_salmani_cites = dielectric_cites({0, "measured"}, {0, "derived"}, {0, "measured"}, {1, "secondary"}, 2);
 
-constexpr InsulatorParameters zro2 = dielectric(25.0, chi_si - 1.5, 5.8, 0.28, 0.60);
-constexpr InsulatorParameters tio2 = dielectric(80.0, chi_si - 0.0, 3.5, 0.50, 3.80);
-constexpr InsulatorParameters ta2o5 = dielectric(22.0, chi_si - 0.35, 4.4, 0.25, 1.00);
+// Al2O3 as deposited (ALD) gate dielectric: gap 6.4 eV and offset 1.6 eV (chi 2.45 eV), the ALD
+// row of Robertson & Wallace 2015 as the owner gave it (2026-11-26; not read here). Robertson 2004's
+// 8.8 / 2.8 eV is marked "not ALD" and is sapphire's below.
+constexpr std::array<Citation, 4> al2o3_sources{{
+    robertson, salmani, approx_note,
+    {"J. Robertson, R. M. Wallace, Mater. Sci. Eng. R 88, 1 (2015)", "ALD Al2O3: gap 6.4 eV, offset 1.6 eV (owner-supplied)"}}};
+constexpr InsulatorParameters al2o3 = dielectric(9.0, chi_si - 1.6, 6.4, 0.35, 1.30, 0.015, 2.50);
+constexpr auto al2o3_cites = dielectric_cites({0, "measured"}, {3, "secondary"}, {3, "secondary"}, {1, "secondary"}, 2);
+
+constexpr InsulatorParameters zro2 = dielectric(25.0, chi_si - 1.5, 5.8, 0.28, 0.60, 0.005, 2.70);
+constexpr InsulatorParameters tio2 = dielectric(80.0, chi_si - 0.0, 3.5, 0.50, 3.80, 0.025, 3.03);
+constexpr InsulatorParameters ta2o5 = dielectric(22.0, chi_si - 0.35, 4.4, 0.25, 1.00, 0.0012, 2.52);
 constexpr auto robertson_cites = dielectric_cites({0, "measured"}, {0, "derived"}, {0, "measured"}, {1, "approximate"}, 1);
 
 // MgO (MAD13): amorphous MgO on (100)Si by internal photoemission, the conduction band 3.37 eV
@@ -114,30 +129,33 @@ constexpr std::array<Citation, 2> mgo_sources{{
      "abstract: a-MgO gap 6.1 eV, conduction band 3.37 eV above the Si valence band top"},
     {approx_note.source, "eps_r 9.8, tunnelling masses (owner-supplied), thermal set"},
 }};
-constexpr InsulatorParameters mgo = dielectric(9.8, chi_si - (3.37 - 1.12), 6.1, 0.35, 3.00);
+constexpr InsulatorParameters mgo = dielectric(9.8, chi_si - (3.37 - 1.12), 6.1, 0.35, 3.00, 0.10, 3.33);
 constexpr auto mgo_cites = dielectric_cites({1, "approximate"}, {0, "derived"}, {0, "measured"}, {1, "approximate"}, 1);
 
-// AlN as a gate or passivation insulator (MAD5): gap 6.07 eV, chi 1.83-1.94 eV (the midpoint).
+// AlN as a gate or passivation insulator (MAD5): gap 6.07 eV, chi 1.83-1.94 eV (midpoint, 1.89).
 constexpr std::array<Citation, 2> aln_sources{{
-    {"arXiv:2407.17360 (2024), Si/AlN", "gap 6.07 eV, electron affinity 1.83-1.94 eV (midpoint taken)"},
+    {"arXiv:2407.17360 (2024), Si/AlN", "gap 6.07 eV, electron affinity 1.83-1.94 eV (midpoint 1.89 taken)"},
     {approx_note.source, "eps_r 8.5, tunnelling masses (owner-supplied), thermal set"},
 }};
-constexpr InsulatorParameters aln = dielectric(8.5, 1.885, 6.07, 0.33, 3.50);
+constexpr InsulatorParameters aln = dielectric(8.5, 1.89, 6.07, 0.33, 3.50, 0.10, 2.40);
 constexpr auto aln_cites = dielectric_cites({1, "approximate"}, {0, "derived"}, {0, "measured"}, {1, "approximate"}, 1);
 
-// Sapphire (MAD13): crystalline Al2O3, its own set; gap and offset as al2o3 (M5), eps_r along c
-// approximate (c-plane substrates).
+// Sapphire (MAD13): crystalline Al2O3, its own set: gap 8.8 eV and offset 2.8 eV, Robertson 2004's
+// Al2O3 row marked "not ALD"; the electron mass is alumina's (Salmani), a proxy; eps_r along c
+// approximate (c-plane substrates); thermal conductivity along c (owner-supplied, 2026-11-26).
 constexpr std::array<Citation, 3> sapphire_sources{{
-    robertson, salmani, {approx_note.source, "eps_r 11.6 along c, hole tunnelling mass (owner-supplied), thermal set"}}};
-constexpr InsulatorParameters sapphire = dielectric(11.6, chi_si - 2.8, 8.8, 0.35, 0.36);
-constexpr auto sapphire_cites = dielectric_cites({2, "approximate"}, {0, "secondary"}, {0, "secondary"}, {1, "secondary"}, 2);
+    {robertson.source, "Table 2, Al2O3 (not ALD): gap 8.8 eV, offset 2.8 eV; chi = 4.05 eV - offset"},
+    salmani,
+    {approx_note.source, "eps_r 11.6 along c, hole tunnelling mass, thermal set along c (owner-supplied)"}}};
+constexpr InsulatorParameters sapphire = dielectric(11.6, chi_si - 2.8, 8.8, 0.35, 0.36, 0.30, 3.04);
+constexpr auto sapphire_cites = dielectric_cites({2, "approximate"}, {0, "derived"}, {0, "measured"}, {1, "secondary"}, 2);
 
 // h-BN (MAD13): gap 5.955 eV (indirect, M16); out-of-plane eps_r and chi approximate.
 constexpr std::array<Citation, 2> hbn_sources{{
     {"G. Cassabois, P. Valvin, B. Gil, arXiv:1512.02962 (Nat. Photon. 10, 262, 2016)", "indirect gap 5.955 eV"},
     {approx_note.source, "eps_r 3.76 out of plane, chi 2.0 eV, tunnelling masses (owner-supplied), thermal set"},
 }};
-constexpr InsulatorParameters hbn = dielectric(3.76, 2.0, 5.955, 2.21, 1.33);
+constexpr InsulatorParameters hbn = dielectric(3.76, 2.0, 5.955, 2.21, 1.33, 0.033, 1.80);  // k out of plane
 constexpr auto hbn_cites = dielectric_cites({1, "approximate"}, {1, "approximate"}, {0, "measured"}, {1, "approximate"}, 1);
 
 // SiON (MAD13): x the Si3N4 share, every value linear between SiO2 (its tunnelling set) and si3n4.
@@ -204,8 +222,8 @@ constexpr std::array<MaterialEntry, 22> registry{{
      fixed_insulator<metal_region>, metal_parameter_sources, true},
     {"hfo2", MaterialKind::insulator, 0, 0, "", "HfO2, amorphous gate dielectric", robertson_salmani_sources,
      fixed_insulator<hfo2>, robertson_salmani_cites, true},
-    {"al2o3", MaterialKind::insulator, 0, 0, "", "Al2O3, amorphous gate dielectric", robertson_salmani_sources,
-     fixed_insulator<al2o3>, robertson_salmani_cites, true},
+    {"al2o3", MaterialKind::insulator, 0, 0, "", "Al2O3, amorphous (ALD) gate dielectric", al2o3_sources,
+     fixed_insulator<al2o3>, al2o3_cites, true},
     {"si3n4", MaterialKind::insulator, 0, 0, "", "Si3N4", robertson_salmani_sources, fixed_insulator<si3n4>,
      robertson_salmani_cites, true},
     {"zro2", MaterialKind::insulator, 0, 0, "", "ZrO2", robertson_sources, fixed_insulator<zro2>, robertson_cites, true},

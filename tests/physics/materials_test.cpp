@@ -425,6 +425,13 @@ TEST_CASE("material registry: dielectrics with band data (MAD5, MAD13)", "[mater
     REQUIRE(std::abs(hfo2.electron_affinity_eV - 2.65) < 1e-12);  // 4.05 - 1.4 (Robertson Table 2)
     REQUIRE(hfo2.tunnel_mass_n == 0.11);
     REQUIRE(hfo2.tunnel_mass_p == 0.60);  // owner-supplied 2026-11-26
+    REQUIRE(hfo2.thermal.conductivity_W_cmK == 0.010);
+    REQUIRE(hfo2.thermal.conductivity_exponent == 0.0);
+    const auto al2o3 = std::get<InsulatorParameters>(*find_material("al2o3")->make({}));
+    const auto sapphire = std::get<InsulatorParameters>(*find_material("sapphire")->make({}));
+    REQUIRE(al2o3.band_gap_eV == 6.4);  // ALD (Robertson & Wallace 2015)
+    REQUIRE(sapphire.band_gap_eV == 8.8);  // crystalline, "not ALD" (Robertson 2004)
+    REQUIRE(std::abs(sapphire.electron_affinity_eV - 1.25) < 1e-12);
     REQUIRE(std::get<InsulatorParameters>(*find_material("hbn")->make({})).tunnel_mass_n == 2.21);
     // SiON: linear in x between the SiO2 tunnelling set and si3n4.
     const MaterialEntry* sion = find_material("sion");
