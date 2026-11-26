@@ -4955,6 +4955,13 @@ flat-band shift (−q Q_f / C_ox to 6e-13) and trap tests already pass.
 
 **Slices.** Slice 0: TDD1 with TDC2. Slice 1: TDD2–TDD3 with TDC3–TDC5. Slice 2: TDD4, docs and TDC6.
 
+**Slice 0 (2026-11-26).** `charge_yield` and `oxide_trapped_charge_cm2` with `[total_dose]` (13 assertions); the
+physics binary passes (146 cases). **TDC2 wording defect, put to the owner:** "f_y → 1 at 1e12 V/cm … to 1e-12
+relative" cannot hold: 1 − f_y(1e12) = 1.125e-6, analytically m (E₁ − E₀)/E. The first run's extra bound
+|f_y − 1| < 1e-6 (mine, not in TDC2) failed for that reason. The 1e-12 comparison against the closed form at 1e12
+stands and passes; the approach to 1 is checked against the first-order asymptote instead (1e-5 relative, the
+second-order term being 1e-6). The model itself is unchanged.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
