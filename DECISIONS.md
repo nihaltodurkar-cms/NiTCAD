@@ -4962,6 +4962,20 @@ relative" cannot hold: 1 − f_y(1e12) = 1.125e-6, analytically m (E₁ − E₀
 stands and passes; the approach to 1 is checked against the first-order asymptote instead (1e-5 relative, the
 second-order term being 1e-6). The model itself is unchanged.
 
+**Slice 1 (2026-11-26).** `Builder::dose_key` and `Builder::dose_charges` in `src/deck/build.cpp`, called from the
+gate contact (after the kind check, so the gate's `oxide_thickness` is used wherever it is written) and from
+`[interface]` (dose bands appended after the user's). `tests/deck/total_dose_test.cpp`, `[total_dose]`: TDC3,
+TDC4 (two cases), TDC5, and a TDC1 case (a written `fixed_charge = -0` stays −0 without a dose: the add is skipped when N_ot is 0; it failed without that guard); 69 assertions in 5 cases, which all failed with `build.cpp` stashed and pass with it. The 28 visible `build_test.cpp` cases pass. A test
+defect on the first run: the expected N_ot used 50e-7 cm where the deck reads `50nm` as 50 × 1e-7 (one ulp apart);
+the test now forms the thickness the deck's way. The non-gate refusal now reads "oxide_thickness,
+oxide_permittivity, fixed_charge and the dose keys are for a gate"; `build_test.cpp`'s expectation updated.
+Additional refusals beyond TDD3: `dose_oxide_thickness` or `interface_trap_yield` on a gate ("is for an
+[interface]"), and a gate dose without `oxide_thickness`. `dose_field` defaults to 0 (f_y = 0.096).
+
+**Slice 2 (2026-11-26).** The keys in `src/app/deck_vocabulary.cpp` (3 gate, 5 interface); the vocabulary tests
+pass (8 cases). ARCHITECTURE.md: the as-built block after Unit 65's and the radiation row (Unit 65's status there
+corrected to merged, PR #120). TDC6's suites wait for the owner's word.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

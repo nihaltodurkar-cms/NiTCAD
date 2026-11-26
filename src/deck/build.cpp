@@ -23,6 +23,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/heavy_ion.hpp"
 #include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/physics/total_dose.hpp"
 #include "NiTCAD/solve/adapt_adjoint.hpp"
 #include "NiTCAD/solve/adapt_derived.hpp"
 #include "values.hpp"
@@ -220,6 +221,22 @@ private:
     std::expected<device::Contact, base::Error> contact(const Section& s,
                                                         const device::DeviceDescription& d) const;
     std::expected<device::Interface, base::Error> interface(const Section& s) const;
+    // Unit 69 (TDD2, TDD3): a gate's or an interface's dose keys, gathered in its section's loop.
+    struct DoseKeys {
+        const Entry* dose = nullptr;
+        const Entry* field = nullptr;
+        const Entry* trapping = nullptr;
+        const Entry* thickness = nullptr;   // interface only
+        const Entry* trap_yield = nullptr;  // interface only
+    };
+    struct DoseCharges {
+        double trapped_cm2 = 0.0;  // N_ot
+        double traps_cm2 = 0.0;    // Delta N_it
+    };
+    static bool dose_key(const Entry& e, DoseKeys& k);
+    // The charges the keys give (0 and 0 without them). A gate passes its oxide thickness; an
+    // interface passes nullopt and takes `dose_oxide_thickness`.
+    std::expected<DoseCharges, base::Error> dose_charges(const DoseKeys& k, std::optional<double> gate_thickness_cm) const;
     std::expected<device::ThermalContact, base::Error> thermal_contact(const Section& s) const;
     std::expected<void, base::Error> models(assemble::PhysicsModels& m) const;
     std::expected<void, base::Error> solver(Plan& plan) const;
@@ -1192,8 +1209,10 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
     const Entry* work_function = nullptr;
     const Entry* barrier = nullptr;
     bool schottky_keys = false;
+    DoseKeys dose;
     for (const Entry& e : s.entries) {
-        if (e.key == "kind") kind = &e;
+        if (dose_key(e, dose)) gate_keys = true;
+        else if (e.key == "kind") kind = &e;
         else if (e.key == "patch") patch = &e;
         else if (e.key == "box") boxes.push_back(&e);
         else if (e.key == "oxide_thickness") {
@@ -1286,7 +1305,15 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
     else if (kind->value == "schottky") c.kind = device::ContactKind::schottky;
     else return std::unexpected(at(kind->line, "kind is ohmic, gate, electrode or schottky"));
     if (gate_keys && c.kind != device::ContactKind::gate) {
-        return std::unexpected(at(s.line, "oxide_thickness, oxide_permittivity and fixed_charge are for a gate"));
+        return std::unexpected(at(s.line, "oxide_thickness, oxide_permittivity, fixed_charge and the dose keys are for a gate"));
+    }
+    if (dose.thickness || dose.trap_yield) {
+        const Entry& e = dose.thickness ? *dose.thickness : *dose.trap_yield;
+        return std::unexpected(at(e.line, "'" + e.key + "' is for an [interface]; a gate's dose uses its oxide_thickness"));
+    }
+    if (c.kind == device::ContactKind::gate) {
+        NITCAD_DECK_TRY(q, dose_charges(dose, c.gate.oxide_thickness_cm));
+        if (q.trapped_cm2 != 0.0) c.gate.fixed_charge_cm2 += q.trapped_cm2;  // without a dose the value stays as written (-0 too)
     }
     if ((barrier || schottky_keys) && c.kind != device::ContactKind::schottky) {
         return std::unexpected(at(s.line, "barrier, richardson_n and richardson_p are for a Schottky contact"));
@@ -1336,8 +1363,10 @@ std::expected<device::Interface, base::Error> Builder::interface(const Section& 
         if (t == "acceptor") return physics::TrapType::acceptor;
         return std::unexpected(at(e.line, "a trap is donor or acceptor"));
     };
+    DoseKeys dose;
     for (const Entry& e : s.entries) {
-        if (e.key == "transport") {
+        if (dose_key(e, dose)) {
+        } else if (e.key == "transport") {
             if (e.value == "drift_diffusion") f.transport = device::InterfaceTransport::drift_diffusion;
             else if (e.value == "thermionic") f.transport = device::InterfaceTransport::thermionic_emission;
             else return std::unexpected(at(e.line, "transport is drift_diffusion or thermionic"));
@@ -1378,7 +1407,70 @@ std::expected<device::Interface, base::Error> Builder::interface(const Section& 
             return std::unexpected(unknown(e, s));
         }
     }
+    NITCAD_DECK_TRY(q, dose_charges(dose, std::nullopt));
+    if (q.trapped_cm2 != 0.0) f.fixed_charge_cm2 += q.trapped_cm2;  // as for a gate
+    if (q.traps_cm2 > 0.0) {
+        // Uniform over +-w about E_i: D_it = Delta N_it / (2 w), donor-like below, acceptor-like above.
+        const double w = physics::dose_trap_half_width_eV;
+        const double dit = q.traps_cm2 / (2.0 * w);
+        f.traps.bands.push_back({physics::TrapType::donor, dit, -w, 0.0, 1e-15, 1e-15});
+        f.traps.bands.push_back({physics::TrapType::acceptor, dit, 0.0, w, 1e-15, 1e-15});
+    }
     return f;
+}
+
+bool Builder::dose_key(const Entry& e, DoseKeys& k) {
+    const Entry** slot = e.key == "dose"                   ? &k.dose
+                         : e.key == "dose_field"           ? &k.field
+                         : e.key == "hole_trapping"        ? &k.trapping
+                         : e.key == "dose_oxide_thickness" ? &k.thickness
+                         : e.key == "interface_trap_yield" ? &k.trap_yield
+                                                           : nullptr;
+    if (slot) *slot = &e;
+    return slot != nullptr;
+}
+
+std::expected<Builder::DoseCharges, base::Error> Builder::dose_charges(const DoseKeys& k,
+                                                                       std::optional<double> gate_thickness_cm) const {
+    if (!k.dose) {
+        for (const Entry* e : {k.field, k.trapping, k.thickness, k.trap_yield}) {
+            if (e) return std::unexpected(at(e->line, "'" + e->key + "' needs 'dose'"));
+        }
+        return DoseCharges{};
+    }
+    NITCAD_DECK_TRY(dose, num(*k.dose));
+    if (!std::isfinite(dose) || dose <= 0.0) return std::unexpected(at(k.dose->line, "dose must be finite and positive"));
+    if (!k.trapping) return std::unexpected(at(k.dose->line, "dose needs 'hole_trapping'"));
+    NITCAD_DECK_TRY(trapping, num(*k.trapping));
+    if (!(trapping >= 0.0 && trapping <= 1.0)) {
+        return std::unexpected(at(k.trapping->line, "hole_trapping must lie in 0..1"));
+    }
+    double field = 0.0;
+    if (k.field) {
+        NITCAD_DECK_TRY(v, num(*k.field));
+        if (!std::isfinite(v) || v < 0.0) return std::unexpected(at(k.field->line, "dose_field must be finite and >= 0"));
+        field = v;
+    }
+    double thickness = gate_thickness_cm.value_or(0.0);
+    if (!gate_thickness_cm) {
+        if (!k.thickness) return std::unexpected(at(k.dose->line, "dose needs 'dose_oxide_thickness'"));
+        NITCAD_DECK_TRY(v, len(*k.thickness));
+        thickness = v;
+    }
+    if (!std::isfinite(thickness) || thickness <= 0.0) {
+        return std::unexpected(at(k.thickness ? k.thickness->line : k.dose->line,
+                                  k.thickness ? "dose_oxide_thickness must be finite and positive"
+                                              : "dose needs the gate's oxide_thickness"));
+    }
+    double yield = 0.0;
+    if (k.trap_yield) {
+        NITCAD_DECK_TRY(v, num(*k.trap_yield));
+        if (!std::isfinite(v) || v < 0.0) {
+            return std::unexpected(at(k.trap_yield->line, "interface_trap_yield must be finite and >= 0"));
+        }
+        yield = v;
+    }
+    return DoseCharges{physics::oxide_trapped_charge_cm2(dose, field, thickness, trapping), yield * dose};
 }
 
 std::expected<device::ThermalContact, base::Error> Builder::thermal_contact(const Section& s) const {

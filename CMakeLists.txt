@@ -794,6 +794,7 @@ add_executable(nitcad_deck_test
   tests/deck/transient_restart_test.cpp
   tests/deck/surface_mobility_test.cpp
   tests/deck/trap_tunnelling_test.cpp
+  tests/deck/total_dose_test.cpp
   tests/deck/schottky_test.cpp
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp

@@ -569,7 +569,7 @@ TEST_CASE("deck build: every mistake names its line", "[deck]") {
     expect(failure(head + "[contact c]\nkind = electrode\npatch = x_min\n[equilibrium]\n"),
            "t.deck:14: patch 'x_min' has no insulator node for this contact");
     expect(failure(head + "[contact c]\nkind = ohmic\npatch = x_min\noxide_thickness = 2nm\n[equilibrium]\n"),
-           "t.deck:12: oxide_thickness, oxide_permittivity and fixed_charge are for a gate");
+           "t.deck:12: oxide_thickness, oxide_permittivity, fixed_charge and the dose keys are for a gate");
     // Device::create's own errors come located at line 1 with their message.
     expect(failure(head + "[contact a]\nkind = ohmic\npatch = x_max\n[equilibrium]\n"), "t.deck:1: device: ");
 }
