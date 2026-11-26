@@ -166,7 +166,7 @@ constexpr std::array<KeyInfo, 4> thermal_contact_keys{{
     {"resistance", 0, false, "<K cm^2/W>", "resistance: the thermal resistance", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 31> model_keys{{
+constexpr std::array<KeyInfo, 32> model_keys{{
     {"doping_mobility", 0, false, "on", "doping-dependent mobility", on_off, {}, {}},
     {"hole_mobility", 0, false, "automatic", "automatic | caughey_thomas | masetti | klaassen | klaassen_equilibrium", hole_mobility, {}, {}},
     {"electron_mobility", 0, false, "caughey_thomas", "caughey_thomas | masetti | klaassen | klaassen_equilibrium", electron_mobility, {}, {}},
@@ -193,6 +193,7 @@ constexpr std::array<KeyInfo, 31> model_keys{{
     {"polarization", 0, false, "off", "nitride polarization charge (Unit 68)", on_off, {}, {}},
     {"polarization_scale", 0, false, "1", "polarization: share of the bound charge kept, 0..1", {}, {}, {}},
     {"c_axis", 0, false, "y", "polarization: the c-axis, substrate to surface, x | y | z (- reverses)", {}, {}, {}},
+    {"polarization_surface", 0, false, "on", "polarization: the free c-faces' bound charge (off: compensated by surface donors)", on_off, {}, {}},
     {"btbt_local", 0, false, "off", "local band-to-band tunnelling", on_off, {}, {}},
     {"btbt_nonlocal", 0, false, "off", "off | kane | direct_wkb", btbt_nonlocal, {}, {}},
     {"trap_assisted_tunnelling", 0, false, "off", "off | hurkx (trap-assisted tunnelling, with srh)",

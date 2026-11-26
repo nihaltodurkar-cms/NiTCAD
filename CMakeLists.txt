@@ -804,6 +804,7 @@ add_executable(nitcad_deck_test
   tests/deck/schottky_test.cpp
   tests/deck/sige_hbt_test.cpp
   tests/deck/polarization_test.cpp
+  tests/deck/hemt_test.cpp
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp
   tests/deck/complex_finfet_test.cpp

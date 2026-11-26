@@ -173,7 +173,7 @@ TEST_CASE("library: the families (DT3)", "[app][library]") {
     std::vector<std::string> names;
     for (const app::Example& e : library()) names.push_back(e.path.filename().string());
     CHECK(names == std::vector<std::string>{
-                       "avalanche_diode_2d.deck", "back_to_back_diodes_2d.deck", "dual_gate_mosfet_2d.deck",
+                       "algan_gan_hemt_2d.deck", "avalanche_diode_2d.deck", "back_to_back_diodes_2d.deck", "dual_gate_mosfet_2d.deck",
                        "finfet_bulk_3d.deck", "finfet_soi_3d.deck", "gaa_nanosheet_fet_3d.deck",
                        "gaa_nanowire_fet_3d.deck", "heterojunction_diode_2d.deck", "jfet_2d.deck", "mis_diode_2d.deck",
                        "moscap_1d.deck", "mosfet_2d.deck", "mosfet_3d.deck", "pin_diode_1d.deck", "pn_diode_1d.deck",

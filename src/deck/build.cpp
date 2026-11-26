@@ -1810,14 +1810,16 @@ std::expected<device::ThermalContact, base::Error> Builder::thermal_contact(cons
 // (0 <= r <= 1; a = a0 + (1 - r)(a_ref - a0)). On each mesh edge i -> j the sheet charge
 // (P_i - P_j)(c.e_ij) times the dual face's area goes half to each end, or all to the
 // semiconductor end next to an insulator or metal (P 0 there); on the free faces normal to c, P.n
-// times the face area. polarization_scale = s (0..1) scales all of it.
+// times the face area (polarization_surface = off: none there, surface donors compensating them).
+// polarization_scale = s (0..1) scales all of it.
 std::expected<void, base::Error> Builder::polarization(device::DeviceDescription& d) const {
-    const Entry *on = nullptr, *scale = nullptr, *axis = nullptr;
+    const Entry *on = nullptr, *scale = nullptr, *axis = nullptr, *surface = nullptr;
     if (const Section* s = single("models")) {
         for (const Entry& e : s->entries) {
             if (e.key == "polarization") on = &e;
             if (e.key == "polarization_scale") scale = &e;
             if (e.key == "c_axis") axis = &e;
+            if (e.key == "polarization_surface") surface = &e;
         }
     }
     bool enabled = false;
@@ -1825,7 +1827,7 @@ std::expected<void, base::Error> Builder::polarization(device::DeviceDescription
         NITCAD_DECK_TRY(v, flag(*on));
         enabled = v;
     }
-    for (const Entry* e : {scale, axis}) {
+    for (const Entry* e : {scale, axis, surface}) {
         if (e && !enabled) return std::unexpected(at(e->line, "'" + e->key + "' needs polarization = on"));
     }
     for (const RegionSpec& spec : regions_) {
@@ -1908,9 +1910,14 @@ std::expected<void, base::Error> Builder::polarization(device::DeviceDescription
         else if (insulator(j)) bound[i] += q;
         else bound[i] += 0.5 * q, bound[j] += 0.5 * q;
     }
+    bool free_faces = true;  // off: surface donors compensate the free c-faces
+    if (surface) {
+        NITCAD_DECK_TRY(v, flag(*surface));
+        free_faces = v;
+    }
     const std::string face = std::string(1, static_cast<char>('x' + c));
     for (const mesh::BoundaryPatch& p : d.mesh.boundary()) {
-        const double normal = p.name == face + "_max" ? sign : p.name == face + "_min" ? -sign : 0.0;
+        const double normal = !free_faces ? 0.0 : p.name == face + "_max" ? sign : p.name == face + "_min" ? -sign : 0.0;
         if (normal == 0.0) continue;
         for (std::size_t n = 0; n < p.nodes.size(); ++n) {
             const auto i = static_cast<std::size_t>(p.nodes[n]);
@@ -2006,7 +2013,8 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
         } else if (e.key == "impact_current_resolution") {
             NITCAD_DECK_TRY(v, num(e));
             m.impact_current_resolution = v;
-        } else if (e.key == "polarization" || e.key == "polarization_scale" || e.key == "c_axis") {
+        } else if (e.key == "polarization" || e.key == "polarization_scale" || e.key == "c_axis" ||
+                   e.key == "polarization_surface") {
             // Unit 68 slice 2: read with the device (Builder::polarization).
         } else {
             return std::unexpected(unknown(e, *s));

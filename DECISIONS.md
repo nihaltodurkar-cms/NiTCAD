@@ -5179,6 +5179,21 @@ Step 2, polarization (MAD9), the engineer's rulings (recommended, reported to th
 Check: Al0.25Ga0.75N pseudomorphic on GaN gives sigma 0.019361 C/m^2 = 1.208e13 cm^-2 (Ambacher et al.
 report about 1.1-1.3e13 for x = 0.25); a 1D stack at equilibrium holds 1.206e13 cm^-2 electrons in the well.
 
+Step 3, the HEMT and MAC10 (engineer's rulings, reported to the owner):
+- Unit 48 ruling 4 refuses a Schottky contact on a device with a thermionic interface, so the library HEMT
+  (`algan_gan_hemt_2d.deck`, Ni gate as a Schottky contact, barrier 0.83 eV) keeps the engine's continuous
+  interface; at zero gate bias (MAC10, equilibrium) the transport does not enter. Lifting the refusal is the
+  owner's call. Owner test 11 runs on a 1D n-AlGaN/n-GaN stack with ohmic contacts under both transports.
+- `[models] polarization_surface = on | off` (default on, ruling 27 unchanged): off, the free c-faces carry
+  no bound charge, taken as compensated by surface donors. The HEMT deck sets it off, since its bare
+  access surfaces would otherwise carry -3.3e13 cm^-2 and deplete the channel. A metal region cannot touch
+  a semiconductor (MAD6), so a passivation-plus-fixed-charge layout was not used.
+- The deck: source and drain reach the 2DEG from the sides through n+ regions; a lightly p-type buffer
+  (1e15) stands in for a semi-insulating one, over a substrate contact.
+MAC10 (Ambacher's n_s with this model's sigma, dEc, permittivities and GaN mass): 1D gated stack 1.037e13
+against 1.033e13 cm^-2 (+0.4 %); the library deck under the gate's middle 1.010e13 (-2.3 %). Owner test 11:
+zero current at zero bias and the terminal currents cancel to 1e-13 relative, under both transports.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a
