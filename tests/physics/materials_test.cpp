@@ -6,11 +6,17 @@
 // and parameters, independently of this code.
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cmath>
 #include <numbers>
+#include <span>
+#include <string_view>
+#include <variant>
 
 #include "NiTCAD/base/constants.hpp"
+#include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/ionization.hpp"
+#include "NiTCAD/physics/materials.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
@@ -248,4 +254,46 @@ TEST_CASE("thermionic: a set Richardson constant gives A* T^2 / (q N)") {
     bad = silicon_parameters;
     bad.radiative_cm3_s = -1e-10;
     REQUIRE_FALSE(Semiconductor::create(bad).has_value());
+}
+
+// Unit 68 MAD1 / MAC1: the registry returns the existing sets unchanged.
+TEST_CASE("material registry: existing names give the existing sets bit for bit", "[materials][unit68]") {
+    const auto semi = [](std::string_view name, std::span<const double> a = {}) {
+        const MaterialEntry* e = find_material(name);
+        REQUIRE(e != nullptr);
+        REQUIRE(e->kind == MaterialKind::semiconductor);
+        auto p = e->make(a);
+        REQUIRE(p.has_value());
+        return std::get<SemiconductorParameters>(*p);
+    };
+    REQUIRE(semi("silicon") == silicon_parameters);
+    REQUIRE(semi("silicon_legacy") == legacy_silicon_parameters);
+    REQUIRE(semi("germanium") == germanium_parameters);
+    REQUIRE(semi("gaas") == gallium_arsenide_parameters);
+    REQUIRE(semi("ingaas") == indium_gallium_arsenide_parameters);
+    REQUIRE(semi("sic_4h") == silicon_carbide_4h_parameters);
+    const std::array<double, 1> x{0.3};
+    REQUIRE(semi("algaas", x) == *algaas_parameters(0.3));
+    const std::array<double, 2> xs{0.3, 0.6};
+    REQUIRE(semi("algaas", xs) == *algaas_parameters(0.3, 0.6));
+    const std::array<double, 1> bad{0.9};
+    REQUIRE_FALSE(find_material("algaas")->make(bad).has_value());
+
+    const MaterialEntry* sio2 = find_material("sio2");
+    REQUIRE(sio2->kind == MaterialKind::insulator);
+    REQUIRE(std::get<InsulatorParameters>(*sio2->make({})) == silicon_dioxide_parameters);
+    REQUIRE(std::get<InsulatorParameters>(*find_material("insulator")->make({})).eps_r == 0.0);
+    REQUIRE(find_material("unobtainium") == nullptr);
+}
+
+TEST_CASE("material registry: names unique, arities and usage consistent", "[materials][unit68]") {
+    const auto all = material_registry();
+    REQUIRE(all.size() == 9);
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        CAPTURE(all[i].name);
+        REQUIRE(find_material(all[i].name) == &all[i]);
+        REQUIRE(all[i].arguments_min <= all[i].arguments_max);
+        REQUIRE((all[i].arguments_max == 0) == all[i].usage.empty());
+        REQUIRE_FALSE(all[i].summary.empty());
+    }
 }

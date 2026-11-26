@@ -15,6 +15,7 @@
 #include "NiTCAD/app/deck_vocabulary.hpp"
 #include "NiTCAD/app/document.hpp"
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/physics/materials.hpp"
 #include "fixtures.hpp"
 
 using namespace NiTCAD;
@@ -549,4 +550,15 @@ TEST_CASE("app vocabulary: a mesh patch's form follows the mesh type (Unit 53, F
     const app::KeyInfo* faced = app::find_key_info(*mesh, "patch x_min far", "generate3d");
     REQUIRE(faced != nullptr);
     CHECK(faced->value == "<x y z>, ...");
+}
+
+// Unit 68 MAD12: the region's material choices are the registry's names, in its order.
+TEST_CASE("deck vocabulary: material choices are the material registry", "[vocabulary][unit68]") {
+    const app::SectionInfo* region = app::find_section_info("region");
+    REQUIRE(region != nullptr);
+    const app::KeyInfo* material = app::find_key_info(*region, "material", "");
+    REQUIRE(material != nullptr);
+    const auto registry = physics::material_registry();
+    REQUIRE(material->choices.size() == registry.size());
+    for (std::size_t i = 0; i < registry.size(); ++i) REQUIRE(material->choices[i] == registry[i].name);
 }

@@ -23,6 +23,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/heavy_ion.hpp"
 #include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/physics/materials.hpp"
 #include "NiTCAD/solve/adapt_adjoint.hpp"
 #include "NiTCAD/solve/adapt_derived.hpp"
 #include "values.hpp"
@@ -297,32 +298,23 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
     if (!material) return std::unexpected(at(s.line, "[region " + s.name + "] has no 'material'"));
     const auto words = tokens(material->value);
     const std::string_view kind = words.front();
-    std::variant<physics::SemiconductorParameters, physics::InsulatorParameters> params;
-    if (kind == "algaas") {
-        if (words.size() < 2 || words.size() > 3) {
-            return std::unexpected(at(material->line, "algaas takes the Al fraction and optionally the conduction share"));
+    const physics::MaterialEntry* entry = physics::find_material(kind);
+    if (!entry) return std::unexpected(at(material->line, "unknown material '" + std::string(kind) + "'"));
+    const std::size_t count = words.size() - 1;
+    if (count < entry->arguments_min || count > entry->arguments_max) {
+        if (entry->arguments_max == 0) {
+            return std::unexpected(at(material->line, "'" + std::string(kind) + "' takes no arguments"));
         }
-        NITCAD_DECK_TRY(x, lift(material->line, number(words[1])));
-        double share = 0.85 / 1.247;
-        if (words.size() == 3) {
-            NITCAD_DECK_TRY(v, lift(material->line, number(words[2])));
-            share = v;
-        }
-        auto p = physics::algaas_parameters(x, share);
-        if (!p) return std::unexpected(located(material->line, "material", std::move(p.error())));
-        params = *p;
-    } else {
-        if (words.size() != 1) return std::unexpected(at(material->line, "'" + std::string(kind) + "' takes no arguments"));
-        if (kind == "silicon") params = physics::silicon_parameters;
-        else if (kind == "silicon_legacy") params = physics::legacy_silicon_parameters;
-        else if (kind == "germanium") params = physics::germanium_parameters;
-        else if (kind == "gaas") params = physics::gallium_arsenide_parameters;
-        else if (kind == "ingaas") params = physics::indium_gallium_arsenide_parameters;
-        else if (kind == "sic_4h") params = physics::silicon_carbide_4h_parameters;
-        else if (kind == "sio2") params = physics::silicon_dioxide_parameters;
-        else if (kind == "insulator") params = physics::InsulatorParameters{.eps_r = 0.0};
-        else return std::unexpected(at(material->line, "unknown material '" + std::string(kind) + "'"));
+        return std::unexpected(at(material->line, std::string(entry->usage)));
     }
+    std::vector<double> arguments;
+    for (std::size_t i = 1; i < words.size(); ++i) {
+        NITCAD_DECK_TRY(v, lift(material->line, number(words[i])));
+        arguments.push_back(v);
+    }
+    auto made = entry->make(arguments);
+    if (!made) return std::unexpected(located(material->line, "material", std::move(made.error())));
+    physics::MaterialParameters params = std::move(*made);
     for (const Entry& e : s.entries) {
         if (&e == material) continue;
         if (e.key == "box") { spec.boxes.push_back(&e); continue; }

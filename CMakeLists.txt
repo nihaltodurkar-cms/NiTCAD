@@ -408,6 +408,7 @@ add_library(nitcad_physics STATIC
   src/physics/thermionic_emission.cpp
   src/physics/ionization.cpp
   src/physics/insulator.cpp
+  src/physics/materials.cpp
   src/physics/interface_traps.cpp
   src/physics/impact_ionization.cpp
   src/physics/band_to_band.cpp
