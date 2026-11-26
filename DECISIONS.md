@@ -4911,6 +4911,35 @@ every new dielectric its tunnelling masses; sapphire takes one ε; wide-gap conv
 the `main` slice 0 is rebased onto. Not yet checked: that each in-hand paper gives every value the plan takes from it
 (the PDFs have not been read; a value a paper does not give falls back per MAQ2).
 
+**Amendment 3 (2026-11-26), before code: what the M19 papers give.** The 11 PDFs were read (text extracted, tables
+checked). Values below are the ones the slice-7/8 sets take; "—" means no in-hand paper gives it, and the value falls
+back to M7 per value or, where M7 has none, the material waits (MAQ15). Kormányos (M19b) is monolayer only and gives no
+bulk value; it stays as background, not as a value source. Arora & Erbe Table 1 (M19e) is the bulk source for TMD
+gaps and masses. Mobilities are room-temperature field-effect values of exfoliated multilayer FETs, flagged "fit".
+
+| Material | Gap (eV) | ε (static, out-of-plane) | Masses (m0) | Mobility (cm²/Vs) | Affinity |
+|---|---|---|---|---|---|
+| NiO | ~3.6 (M19a) | 11.7, CVD film C-V (M19a) | h 0.8–1.0, 670–1670 K (M19a); e — | h < 1, ~0.1 polycrystalline (M19a) | — |
+| MoSe2 | 1.09 indirect (M19e T1) | 8.5 (M15 T2) | e 0.53, h 0.65 (M19e T1) | 50 (M19e T1) | — |
+| MoTe2 (2H) | — | 10.4 (M15 T2) | — | — (M19c gives monolayer theory only) | — |
+| WSe2 | 1.21 indirect (M19e T1) | 7.8 (M15 T2) | 0.31 (M19e T1) | 250 (M19e T1) | — |
+| ReS2 | 1.35–1.37 indirect, exp. (M19d) | — | — | — | — |
+| ReSe2 | 1.18 indirect, exp. (M19d) | — | — | — | — |
+| InSe | 1.26 direct, > 7 layers (M19e T1; M19e Srour T5 exp.) | — | e 0.143 (M19e T1) | 1055 (M19e T1) | — |
+| GaSe | 2.0 indirect, bulk (M19e T1; Srour T5 exp. 1.995–2.03) | — | 0.6 (M19e T1) | 0.6, p-type (M19e T1) | — |
+| Black P | 0.3 (M19f; M19e T1) | — | e 0.14, h 0.18 (M19e T1) | 984 (M19e T1) | — |
+| Bi2Se3 | 0.332 ± 0.055 direct, exp. (Nechaev T1); 0.2–0.3 (Mishra) | — | tensor (Mishra; DOS mass derived, flagged) | — | — |
+| Bi2Te3 | 0.15 ± 0.05, low-limit estimate (Nechaev & Chulkov) | — | tensor (Mishra; DOS mass derived, flagged) | — | — |
+| h-BN | (M16, not in hand) | 3.76 (M15 T1; in-plane 6.93) | — | — | — |
+
+Consequences, ruled as recommended: (1) no in-hand paper gives an electron affinity for any slice-8 material or NiO;
+band alignment is what a heterojunction needs, so slice 8 and `nio` wait for one band-alignment source the owner names,
+or M7 per value where M7 has it (MAQ15). (2) `mote2_bulk` has only ε: it waits. (3) `res2_bulk` and `rese2_bulk` have
+only gaps: they wait for the ReX2 review (doi:10.1039/C6QM00373G) or another source. (4) NiO holes move by small-polaron
+hopping at room temperature per M19a; a Caughey-Thomas band mobility is recorded as a limitation in `nitcad materials
+nio`. (5) Bi2X3 masses are tensors; the set uses the DOS mass (geometric mean), flagged "derived", under MAD16's
+isotropic limitation.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a
