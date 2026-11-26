@@ -2,7 +2,10 @@
 // titled with their labels; time labels in engineering units.
 #include <catch2/catch_test_macros.hpp>
 
+#include <windows.h>
+
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
 #include "NiTCAD/device/device.hpp"
@@ -108,4 +111,39 @@ TEST_CASE("render film: time labels") {
     CHECK(time_label(325e-12) == "t = 325 ps");
     CHECK(time_label(9.9996e-10) == "t = 1.00 ns");
     CHECK(time_label(3e-15) == "t = 3.00 fs");
+}
+
+TEST_CASE("save_png: replaces the file whole, and a failed write keeps the old one (render audit)") {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "nitcad_save_png_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const fs::path file = dir / "image.png";
+    fs::path side = file;
+    side += L".partial";
+
+    REQUIRE(save_png(solid(4, 3, 10), file));
+    REQUIRE(save_png(solid(5, 2, 200), file));  // over the old one
+    CHECK_FALSE(fs::exists(side));
+    auto back = load_png(file);
+    REQUIRE(back);
+    CHECK(back->width == 5);
+    CHECK(at(*back, 0, 0) == 200);
+
+    // A file another program holds open without sharing delete cannot be replaced: the save fails and the
+    // old image stays as it was, with no side file left.
+    const HANDLE held = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    REQUIRE(held != INVALID_HANDLE_VALUE);
+    const auto failed = save_png(solid(7, 7, 50), file);
+    CloseHandle(held);
+    CHECK_FALSE(failed);
+    CHECK_FALSE(fs::exists(side));
+    back = load_png(file);
+    REQUIRE(back);
+    CHECK(back->width == 5);
+    CHECK(at(*back, 0, 0) == 200);
+
+    // A missing directory: nothing is written.
+    CHECK_FALSE(save_png(solid(2, 2, 1), dir / "missing" / "image.png"));
+    fs::remove_all(dir);
 }

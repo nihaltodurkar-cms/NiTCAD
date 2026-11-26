@@ -1,6 +1,8 @@
 #include "NiTCAD/render/streamlines.hpp"
 #include "NiTCAD/render/vectors.hpp"
 
+#include "vec.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -11,15 +13,13 @@ namespace NiTCAD::render {
 
 namespace {
 
-Point sub(const Point& a, const Point& b) noexcept { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-Point add(const Point& a, const Point& b) noexcept { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
-Point scale(const Point& a, double s) noexcept { return {a[0] * s, a[1] * s, a[2] * s}; }
-double dot(const Point& a, const Point& b) noexcept { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-double norm(const Point& a) noexcept { return std::sqrt(dot(a, a)); }
-Point lerp(const Point& a, const Point& b, double t) noexcept { return add(a, scale(sub(b, a), t)); }
-Point cross(const Point& a, const Point& b) noexcept {
-    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-}
+using vec::add;
+using vec::cross;
+using vec::dot;
+using vec::lerp;
+using vec::norm;
+using vec::scale;
+using vec::sub;
 
 // Places `count` points at the midpoints of equal shares of a distribution over pieces: piece k has
 // weight w[k], and at(k, f) is the point a fraction f into it.
@@ -123,35 +123,14 @@ Locator::Locator(const Geometry& g) : g_(&g) {
 
 std::optional<Locator::Hit> Locator::inside(std::size_t e, const Point& x) const noexcept {
     const auto n = g_->element(e);
-    const auto points = g_->mesh().points();
-    const int D = g_->dimension();
-    const Point& x0 = points[static_cast<std::size_t>(n[0])];
-    // Solve sum_k l_k (x_k - x0) = x - x0 for l_1..l_D (Cramer).
-    std::array<Point, 3> col{};
-    for (int k = 0; k < D; ++k) col[static_cast<std::size_t>(k)] = sub(points[static_cast<std::size_t>(n[static_cast<std::size_t>(k + 1)])], x0);
-    const Point r = sub(x, x0);
+    const auto w = vec::barycentric(g_->mesh().points(), n, x);
+    if (!w) return std::nullopt;
+    for (std::size_t k = 0; k < n.size(); ++k) {
+        if ((*w)[k] < -1e-10) return std::nullopt;
+    }
     Hit h;
     h.element = e;
-    if (D == 1) {
-        if (col[0][0] == 0.0) return std::nullopt;
-        h.weights[1] = r[0] / col[0][0];
-    } else if (D == 2) {
-        const double det = col[0][0] * col[1][1] - col[1][0] * col[0][1];
-        if (det == 0.0) return std::nullopt;
-        h.weights[1] = (r[0] * col[1][1] - col[1][0] * r[1]) / det;
-        h.weights[2] = (col[0][0] * r[1] - r[0] * col[0][1]) / det;
-    } else {
-        const double det = dot(col[0], cross(col[1], col[2]));
-        if (det == 0.0) return std::nullopt;
-        h.weights[1] = dot(r, cross(col[1], col[2])) / det;
-        h.weights[2] = dot(col[0], cross(r, col[2])) / det;
-        h.weights[3] = dot(col[0], cross(col[1], r)) / det;
-    }
-    h.weights[0] = 1.0;
-    for (int k = 1; k <= D; ++k) h.weights[0] -= h.weights[static_cast<std::size_t>(k)];
-    for (int k = 0; k <= D; ++k) {
-        if (h.weights[static_cast<std::size_t>(k)] < -1e-10) return std::nullopt;
-    }
+    h.weights = *w;
     return h;
 }
 
