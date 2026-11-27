@@ -295,7 +295,7 @@ TEST_CASE("material registry: existing names give the existing sets bit for bit"
 
 TEST_CASE("material registry: names unique, arities and usage consistent", "[materials][unit68]") {
     const auto all = material_registry();
-    REQUIRE(all.size() == 40);  // Unit 68 slice 2: gan, aln, inn, algan, ingan; slice 3: nine III-V entries; slice 4b ga2o3_beta
+    REQUIRE(all.size() == 41);  // Unit 68 slice 2: gan, aln, inn, algan, ingan; slice 3: nine III-V entries; slice 4b ga2o3_beta; 4a sic_4h_2004
     for (std::size_t i = 0; i < all.size(); ++i) {
         CAPTURE(all[i].name);
         // Names unique but `ingaas` (slice 3): its legacy set takes no fraction and its alloy one.

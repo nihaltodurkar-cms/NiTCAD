@@ -5241,7 +5241,25 @@ occupancy factor), so it has no forward band-to-band current and no Esaki peak; 
 diode at 0.25 nm steps with Fermi-Dirac statistics shows only noise (1e-7 A/cm^2) up to diffusion near 0.7 V.
 An energy-resolved forward tunnelling model is a later tunnelling unit's work; MAC11 waits for it.
 
-**Amendment 9 (2026-11-27): slice 4b (beta-Ga2O3, MAD11).** (Amendment 8, slice 4a, is on its own branch.) Values:
+**Amendment 8 (2026-11-27): slice 4a (4H-SiC impact ionization, MAD11).** Source M10: T. Hatakeyama, T. Watanabe,
+T. Shinohe, K. Kojima, K. Arai, N. Sano, Appl. Phys. Lett. 85, 1380 (2004), Table I, as the owner gave it
+(`sic_4h_impact_ionization_rulings.txt`, outside the repo). Owner rulings: the <0001> (c-axis) column, the vertical
+power-device direction (the engine is isotropic; <11-20> is not used, and the set is not valid for lateral
+fields); a new set `sic_4h_2004` = `sic_4h` plus the law, `sic_4h` bit-identical (and still not ionizing); one
+Chynoweth law per carrier over all fields, alpha_n = 1.76e8 exp(-3.30e7 / F), alpha_p = 3.41e8 exp(-2.50e7 / F)
+[1/cm, V/cm], fitted over about 2-5 MV/cm (outside it an extrapolation); no temperature factor (the paper gives
+none: the 300 K law at every temperature, flagged in the citations); every other value, the 70 and 220 meV
+dopant levels included, copied unchanged.
+Checks: alpha at 1, 2 and 3 MV/cm equals the source's expression bit for bit and the owner's table to its six
+digits. Breakdown (owner check 8): a 1D p+ n diode, p+ 1e19 (benchmark assumption), N_D 4e16 cm^-3, drift
+10 um, 300 K, 10 nm mesh: the electron ionization integral on the simulated field reaches 1 at 623.1 V against
+Hatakeyama's (0001) fit 1940 (1e16 / N_D)^0.8 = 640.0 V (-2.6 %, within 10 %). The reverse sweep needs automatic
+step cutting from the first step.
+Open (engineer, for the owner): with impact ionization switched on, the same diode does not settle past about
+150 V (Newton stalls with the step cut to 2^-20), far below breakdown; at 4H-SiC's leakage (n_i about 1e-8
+cm^-3) the currents the rate multiplies are near zero. The check is kept as a hidden test (`[.sic_impact]`);
+breakdown simulation of SiC with the impact-ionization model on waits for an engine fix.
+**Amendment 9 (2026-11-27): slice 4b (beta-Ga2O3, MAD11).** Values:
 the owner's file `unit68_slice4b_4c_values_2026-11-27.txt` (items 1-23, outside the repo), each with its source;
 read by the engineer: Ghosh and Singisetti, J. Appl. Phys. 122, 035702 (2017), Table I, and J. Appl. Phys. 124,
 085707 (2018), Table I (y = [010]; Fig. 1(a) of the 2017 paper draws y along b). The source-to-parameter table is
