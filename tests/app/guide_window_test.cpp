@@ -336,3 +336,57 @@ TEST_CASE("guide window: a sweep runs, the action waits for it, the report follo
     CHECK(w->guide()->report_text().starts_with("Threshold (max gm): "));
     CHECK(w->tab() == MainWindow::tab_results);
 }
+
+// --- final review fixes ---------------------------------------------------------------------------
+
+TEST_CASE("guide pane: no lesson is shown until one is picked", "[guide_window]") {
+    Parent p;
+    Recorder r;
+    GuidePane g(p.hwnd, r, 7);
+    g.set_lessons(two_lessons());
+    CHECK(g.current() == nullptr);
+    CHECK(g.heading_text() == "Pick a lesson");
+    CHECK_FALSE(IsWindowEnabled(g.action_button()));
+    g.act();
+    g.go(1);
+    CHECK(r.acted.empty());
+    HWND picker = FindWindowExW(g.hwnd(), nullptr, L"COMBOBOX", nullptr);
+    CHECK(SendMessageW(picker, CB_GETCURSEL, 0, 0) == CB_ERR);  // so picking the first lesson is a change
+}
+
+TEST_CASE("guide window: a step refuses to act on a deck that is not the lesson's", "[guide_window]") {
+    const fs::path ex = lesson_examples("guide_other_deck");
+    auto w = guide_window(ex);
+    w->execute(Command::guide);
+    w->guide_open(0);
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    // The learner opens a deck of their own; the pane still shows the lesson's step.
+    const fs::path mine = app_test::write(ex, "mine.deck", read_file(fs::path(NITCAD_EXAMPLES_DIR) / "devices" / "mosfet_2d.deck"));
+    REQUIRE(w->open_deck(mine));
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    const std::string before = w->deck().text();
+    w->guide()->act();  // "Set Na = 3e17"
+    CHECK(w->deck().text() == before);
+    CHECK(w->guide()->report_text().find("lesson") != std::string::npos);
+}
+
+TEST_CASE("guide window: a sweep with a failed run reports the runs that finished (GU5)", "[.guide_run]") {
+    const fs::path dir = app_test::scratch("guide_sweep_fail");
+    fs::create_directories(dir / "lessons");
+    const std::string deck = read_file(fs::path(NITCAD_EXAMPLES_DIR) / "devices" / "mosfet_2d.deck");
+    // tox = 0: the oxide straddle leaves the axis and that run's deck does not build.
+    app_test::write(dir / "lessons", "fail.deck",
+                    "# lesson: Fails\n# track: basics\n# order: 1\n# step: Sweep\n# Sweep it.\n"
+                    "# do: sweep tox = 10nm, 0nm\n# report: Threshold (max gm)\n" + deck);
+    auto w = guide_window(dir);
+    w->execute(Command::guide);
+    w->guide_open(0);
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    w->guide()->act();
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    pump();
+    const std::string report = w->guide()->report_text();
+    INFO(report);
+    CHECK(report.starts_with("Threshold (max gm): "));
+    CHECK(report.find(" \xE2\x86\x92 \xE2\x80\x94") != std::string::npos);  // " → —" for the run that failed
+}

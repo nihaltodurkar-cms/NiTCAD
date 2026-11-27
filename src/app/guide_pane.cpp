@@ -65,9 +65,10 @@ void GuidePane::set_lessons(std::vector<Lesson> lessons) {
         const std::string item = std::format("{} \xE2\x80\x94 {}. {}", to_string(l.track), l.order, l.title);  // "Basics — 1. ..."
         SendMessageW(picker_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(win32::widen(item).c_str()));
     }
-    lesson_ = 0;
+    // None shown until one is picked (and its deck opened): a step must not act on whatever deck is open.
+    lesson_ = lessons_.size();
     step_ = 0;
-    SendMessageW(picker_, CB_SETCURSEL, lessons_.empty() ? static_cast<WPARAM>(-1) : 0, 0);  // the first lesson shown
+    SendMessageW(picker_, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
     show_step();
 }
 

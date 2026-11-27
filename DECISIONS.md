@@ -5677,6 +5677,12 @@ mobility lowers g_m; the 51/101 meshes agree within 0.01 V and closer than 26/51
 (no g_ds figure in the app): lesson 11's output conductance, the long-channel square law (4, 12); lesson 11 asks the
 learner to compare the curves. Mutants 10/10 caught. Full suites and Debug wait for the owner's word.
 
+**Final review (2026-11-27).** Fixed: the pane opens with no lesson chosen and a step refuses on any deck but the
+lesson copy the guide opened (it could otherwise sweep or edit the learner's own deck); a guide sweep that fails
+part-way reports the finished runs ("—" for the rest) and then the error. Not built, against GU5 and GU3: the
+extractor's reason beside a missing figure (the app keeps no reason, only "—"), and lessons from the open deck's
+folder in the picker (that folder holds the learner's copies; every lesson would show twice).
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

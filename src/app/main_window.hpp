@@ -462,6 +462,7 @@ private:
     std::filesystem::path lessons_dir_;          // <examples>/lessons
     std::vector<Figure> guide_before_;           // the figures before a guide step's run (GU5)
     std::optional<LessonStep> guide_pending_;    // the step whose run or sweep is under way
+    std::filesystem::path guide_deck_;           // the lesson copy the guide opened: steps act on it only
     std::optional<std::pair<std::string, std::vector<std::string>>> sweep_request_;
     std::string sweep_text_;
     std::optional<SweepResults> sweep_results_;

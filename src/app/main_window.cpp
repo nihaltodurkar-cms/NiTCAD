@@ -1588,12 +1588,17 @@ void MainWindow::guide_open(std::size_t lesson) {
         return;
     }
     if (!open_deck(*copy)) return;
+    guide_deck_ = *copy;
     guide_pending_.reset();
     guide_->show_lesson(lesson);
 }
 
 void MainWindow::guide_act(const LessonStep& step) {
     if (!guide_ || runner_.busy()) return;
+    if (guide_deck_.empty() || document_.path() != guide_deck_) {  // never the learner's own deck
+        guide_->set_error("This step acts on the lesson's own deck: pick the lesson in the list to open it.");
+        return;
+    }
     const LessonAction& a = step.action;
     const auto apply = [&](const std::expected<std::string, std::string>& text) {
         if (!text) {
@@ -2942,8 +2947,16 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
             guide_report();  // Unit 26p (GU5): a guide step's run
         }
     }
-    if (s == RunState::failed && guide_ && std::exchange(guide_pending_, std::nullopt)) {
-        guide_->set_error(runner_.error() ? runner_.error()->message : std::string("The run failed."));
+    if (s == RunState::failed && guide_ && guide_pending_) {
+        const LessonStep step = *std::exchange(guide_pending_, std::nullopt);
+        std::string text;
+        // A guide sweep that failed part-way: the runs that finished, "—" for the rest, then why (GU5).
+        if (step.action.kind == LessonAction::Kind::sweep && runner_.sweep()) {
+            if (auto r = load_sweep(sweep_text_, document_.path(), runner_.sweep()->name, runner_.sweep()->values)) {
+                text = sweep_report(*r, sweep_figures(*r), step.report) + "\n";
+            }
+        }
+        guide_->set_error(text + (runner_.error() ? runner_.error()->message : std::string("The run failed.")));
     }
     update_command_states();
     update_taskbar(pending == Pending::run);
