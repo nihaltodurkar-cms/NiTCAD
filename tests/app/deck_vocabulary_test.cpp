@@ -411,6 +411,8 @@ TEST_CASE("app vocabulary: misspelt sections, keys and choices are suggested bac
                         if (static_cast<std::size_t>(position) >= words.size()) continue;
                         std::string bad = misspelt(choice);
                         if (choice == "algaas") bad += " 0.3";
+                        // "inaas" is one edit from both inas and inalas, so no suggestion is right; misspell it unambiguously.
+                        if (choice == "inalas") bad = "inalaz";
                         const auto paren = words[static_cast<std::size_t>(position)].find('(');
                         words[static_cast<std::size_t>(position)] =
                             bad + (paren == std::string::npos ? "" : words[static_cast<std::size_t>(position)].substr(paren));
