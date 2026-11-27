@@ -6,18 +6,18 @@
 # fixed acceptor ions. More acceptors (a larger Na) means more charge to uncover and a stronger field needed
 # to bend the bands to inversion, so the threshold voltage rises.
 #
-# The textbook relation: V_th = V_fb + 2 phi_F + sqrt(2 q eps_Si Na 2 phi_F) / C_ox, with phi_F the Fermi
-# potential of the body (it grows as ln Na) and C_ox = eps_ox / tox the oxide capacitance per area.
+# The textbook relation: Vth = Vfb + 2φF + √(2q·εSi·Na·2φF) / Cox, with φF the Fermi
+# potential of the body (it grows as ln Na) and Cox = εox / tox the oxide capacitance per area.
 # step: Sweep the doping
 # Three runs, one per body doping, each a full transfer curve. The Results tab plots each figure against Na.
 # do: sweep Na = 3e16, 1e17, 3e17
 # show: results
 # report: Threshold (max gm), Subthreshold swing
 # step: What to see
-# V_th rises with Na: the depletion charge grows as sqrt(Na) and phi_F as ln Na. The swing rises too, since a
+# Vth rises with Na: the depletion charge grows as √Na and φF as ln Na. The swing rises too, since a
 # thinner depletion layer couples the surface more strongly to the body (see the swing lesson).
 #
-# Doping is the main knob a process uses to set V_th; the price of a high Na is a lower mobility (more
+# Doping is the main knob a process uses to set Vth; the price of a high Na is a lower mobility (more
 # impurity scattering) and a worse swing.
 
 [parameters]

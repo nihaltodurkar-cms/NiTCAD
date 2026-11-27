@@ -2,18 +2,18 @@
 # track: basics
 # order: 3
 # step: The oxide as a capacitor
-# The gate controls the channel through the oxide, a capacitor of C_ox = eps_ox / tox per area. A thinner
+# The gate controls the channel through the oxide, a capacitor of Cox = εox / tox per area. A thinner
 # oxide means more capacitance: the same gate voltage holds more charge at the surface, so the gate needs
 # less voltage to reach inversion and controls the channel more firmly.
 #
-# This body is doped more heavily (Na = 3e17 cm^-3) so the effect on V_th is large.
+# This body is doped more heavily (Na = 3×10¹⁷ cm⁻³) so the effect on Vth is large.
 # step: Sweep the oxide
 # Three oxides, one transfer curve each. The Results tab plots each figure against tox.
 # do: sweep tox = 15nm, 10nm, 5nm
 # show: results
 # report: Threshold (max gm), Subthreshold swing
 # step: What to see
-# V_th falls as the oxide thins: the depletion-charge term sqrt(2 q eps_Si Na 2 phi_F) / C_ox shrinks with
+# Vth falls as the oxide thins: the depletion-charge term √(2q·εSi·Na·2φF) / Cox shrinks with
 # tox. The subthreshold swing falls too, towards its 60 mV/dec limit, because the gate's capacitance grows
 # against the depletion layer's.
 #

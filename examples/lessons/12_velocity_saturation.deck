@@ -2,9 +2,9 @@
 # track: advanced
 # order: 12
 # step: Electrons have a speed limit
-# At low fields an electron's drift velocity grows with the field, v = mu E. At tens of kV/cm it saturates
-# near 1e7 cm/s, as the electrons lose energy to optical phonons as fast as the field gives it. In a short
-# channel at a high drain bias much of the channel runs at that limit. This device: Lg = 0.25 um, Vd = 1 V,
+# At low fields an electron's drift velocity grows with the field, v = µE. At tens of kV/cm it saturates
+# near 10⁷ cm/s, as the electrons lose energy to optical phonons as fast as the field gives it. In a short
+# channel at a high drain bias much of the channel runs at that limit. This device: Lg = 0.25 µm, Vd = 1 V,
 # the field-dependent mobility on. Run it.
 # do: run
 # show: curves
@@ -20,7 +20,7 @@
 # report: Max transconductance, Threshold (max gm)
 # step: What to see
 # Without velocity saturation the transconductance rises: the constant-mobility model overestimates a short
-# transistor. With saturation, Id_sat grows nearly linearly with Vg - V_th rather than with its square, as
+# transistor. With saturation, Id,sat grows nearly linearly with Vg − Vth rather than with its square, as
 # real short-channel transistors show.
 
 [parameters]

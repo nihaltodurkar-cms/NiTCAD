@@ -5,9 +5,9 @@
 # So far the drain sat at 50 mV. Now the gate is held fixed and the drain is swept from 0 to 2 V: the output
 # characteristic Id-Vd, one curve per gate voltage.
 #
-# At small Vd the channel is a resistor and Id grows linearly. As Vd approaches Vg - V_th the channel near
-# the drain thins away (pinch-off) and the current levels off: saturation, Id_sat = (W/2L) mu C_ox
-# (Vg - V_th)^2 in the long-channel model.
+# At small Vd the channel is a resistor and Id grows linearly. As Vd approaches Vg − Vth the channel near
+# the drain thins away (pinch-off) and the current levels off: saturation, Id,sat = (W/2L) · µ · Cox
+# · (Vg − Vth)² in the long-channel model.
 # step: A family of curves
 # One output curve per gate voltage, overlaid in the Curves tab.
 # do: sweep Vg = 1, 1.5, 2
@@ -15,7 +15,7 @@
 # report: Current at the last bias
 # step: What to see
 # Each curve rises, then flattens. A higher gate voltage gives a larger saturation current, roughly with the
-# square of the overdrive Vg - V_th. The current is per unit width (A/cm): a 2D cross-section stands for a
+# square of the overdrive Vg − Vth. The current is per unit width (A/cm): a 2D cross-section stands for a
 # device of any width.
 #
 # In the Fields tab, look at the electron density at the last drain bias: the channel thins towards the drain.

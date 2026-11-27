@@ -10,7 +10,7 @@
 # pn junctions, and almost no drain current.
 # show: geometry
 # step: Turn the gate on
-# A positive gate voltage pushes holes away from the surface (depletion) and, past the threshold voltage V_th,
+# A positive gate voltage pushes holes away from the surface (depletion) and, past the threshold voltage Vth,
 # draws a thin layer of electrons to it: the inversion layer, an n-type channel joining source and drain.
 #
 # Run the transfer curve: the drain held at a small bias (Vd = 50 mV) while the gate sweeps from 0 to 2 V.
@@ -18,8 +18,8 @@
 # show: curves
 # report: Threshold (max gm), Subthreshold swing, On/off ratio
 # step: Reading the curve
-# On a log axis the current rises exponentially below V_th (the subthreshold region), then bends over into a
-# nearly linear rise above it. NiTCAD reads V_th where the transconductance g_m = dId/dVg peaks, extrapolated
+# On a log axis the current rises exponentially below Vth (the subthreshold region), then bends over into a
+# nearly linear rise above it. NiTCAD reads Vth where the transconductance gm = dId/dVg peaks, extrapolated
 # to zero current; the subthreshold swing is how many millivolts of gate voltage multiply the current by ten.
 #
 # Look at the electron density in the Fields tab at the last gate bias: the channel is a sheet a few

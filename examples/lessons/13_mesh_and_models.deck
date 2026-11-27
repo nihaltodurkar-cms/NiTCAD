@@ -15,7 +15,7 @@
 # change the device a lot.
 #
 # Models are a second error bar: the earlier lessons switched surface and field-dependent mobility. Quantum
-# confinement (quantum_confinement in [models]) shifts V_th in thin oxides and films. Report which models and
+# confinement (quantum_confinement in [models]) shifts Vth in thin oxides and films. Report which models and
 # which mesh a number came from: NiTCAD writes both into every result file's run record.
 
 [parameters]

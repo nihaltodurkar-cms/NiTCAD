@@ -19,7 +19,7 @@
 # report: Max transconductance, Threshold (max gm)
 # step: What to see
 # The peak transconductance falls: the harder the gate drives the channel, the harder it presses the
-# electrons into the interface and the lower their mobility. V_th hardly moves, since electrostatics sets it.
+# electrons into the interface and the lower their mobility. Vth hardly moves, since electrostatics sets it.
 # A simulation of a real MOSFET without a surface mobility model overestimates its current.
 
 [parameters]

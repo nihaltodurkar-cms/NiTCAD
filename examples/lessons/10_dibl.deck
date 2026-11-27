@@ -4,17 +4,17 @@
 # step: The source barrier
 # Electrons leave the source over a potential barrier the gate controls. In a short channel the drain's
 # field lowers that barrier too, so a higher drain voltage turns the transistor on earlier: drain-induced
-# barrier lowering, DIBL, quoted as the threshold shift per volt of drain bias, -dV_th/dVd in mV/V.
+# barrier lowering, DIBL, quoted as the threshold shift per volt of drain bias, −dVth/dVd in mV/V.
 #
-# This device has a 0.25 um gate.
+# This device has a 0.25 µm gate.
 # step: Sweep the drain bias
 # Three transfer curves, from a small drain bias to 1 V.
 # do: sweep Vd = 0.05, 0.5, 1
 # show: results
 # report: Threshold (max gm), Subthreshold swing
 # step: What to see
-# V_th falls as Vd rises. Take DIBL from the first and last values: (V_th at 0.05 V - V_th at 1 V) / 0.95 V.
-# Industry quotes it from a constant-current threshold; NiTCAD reads V_th at the peak transconductance, so
+# Vth falls as Vd rises. Take DIBL from the first and last values: (Vth at 0.05 V - Vth at 1 V) / 0.95 V.
+# Industry quotes it from a constant-current threshold; NiTCAD reads Vth at the peak transconductance, so
 # compare devices with one method. Try Lg = 1um in the Geometry panel and sweep again: the shift shrinks in
 # a long channel.
 

@@ -4,14 +4,14 @@
 # step: Charge sharing
 # In a long transistor the gate alone depletes the body under it. As the channel shortens, the source and
 # drain junctions deplete a growing share of that region themselves, so the gate has less charge to uncover
-# and V_th falls: threshold roll-off, the first of the short-channel effects.
+# and Vth falls: threshold roll-off, the first of the short-channel effects.
 # step: Shrink the gate
 # The mesh lines along the gate follow Lg, so each run is meshed for its own length.
 # do: sweep Lg = 1um, 0.5um, 0.25um
 # show: results
 # report: Threshold (max gm), Subthreshold swing
 # step: What to see
-# V_th falls as Lg shrinks. The usual defences are thinner oxides, shallower junctions (xj), heavier halo
+# Vth falls as Lg shrinks. The usual defences are thinner oxides, shallower junctions (xj), heavier halo
 # doping and, in the end, more gates around the channel (SOI, FinFET, gate-all-around). Try a shallower
 # junction (xj in the Geometry panel) and sweep again.
 

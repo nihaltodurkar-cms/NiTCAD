@@ -2,21 +2,21 @@
 # track: intermediate
 # order: 5
 # step: Below threshold
-# Below V_th the channel carries a diffusion current that grows as exp(q psi_s / kT) with the surface
-# potential psi_s. The gate moves psi_s only through a capacitive divider, C_ox against the depletion
-# capacitance C_dep, so the swing is SS = ln(10) (kT/q) (1 + C_dep / C_ox): at 300 K, 60 mV/dec times a
+# Below Vth the channel carries a diffusion current that grows as exp(qψs / kT) with the surface
+# potential ψs. The gate moves ψs only through a capacitive divider, Cox against the depletion
+# capacitance Cdep, so the swing is SS = ln(10) · (kT/q) · (1 + Cdep / Cox): at 300 K, 60 mV/dec times a
 # factor of at least one.
 #
 # No ordinary MOSFET switches more sharply than 60 mV per decade of current at room temperature; that limit
 # sets how low the supply voltage of a chip can go.
 # step: Sweep the doping, watch the swing
-# More doping gives a thinner depletion layer and a larger C_dep, so a worse swing.
+# More doping gives a thinner depletion layer and a larger Cdep, so a worse swing.
 # do: sweep Na = 3e16, 1e17, 3e17
 # show: results
 # report: Subthreshold swing, Threshold (max gm)
 # step: What to see
-# Every value stays above 60 mV/dec, and the swing grows with Na. To approach the limit, make C_ox large (a
-# thin oxide) and C_dep small (a lightly doped body, or a thin fully depleted film as in SOI and FinFETs).
+# Every value stays above 60 mV/dec, and the swing grows with Na. To approach the limit, make Cox large (a
+# thin oxide) and Cdep small (a lightly doped body, or a thin fully depleted film as in SOI and FinFETs).
 # Getting below it needs another mechanism: band-to-band tunnelling (the tunnel FET) or negative capacitance.
 
 [parameters]

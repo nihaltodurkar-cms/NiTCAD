@@ -4,8 +4,8 @@
 # step: Saturation is not flat
 # In the long-channel model the current is flat past pinch-off. In a real device it keeps rising: the
 # pinch-off point moves towards the source as Vd grows (channel-length modulation) and, in short channels,
-# DIBL adds to it. The slope g_ds = dId/dVd in saturation, the output conductance, limits an amplifier's
-# gain g_m / g_ds.
+# DIBL adds to it. The slope gds = dId/dVd in saturation, the output conductance, limits an amplifier's
+# gain gm / gds.
 # step: Long and short
 # Output curves at Vg = 1.5 V for a long and a short gate.
 # do: sweep Lg = 1um, 0.25um

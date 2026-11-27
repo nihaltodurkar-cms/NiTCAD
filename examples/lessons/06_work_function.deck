@@ -2,18 +2,18 @@
 # track: intermediate
 # order: 6
 # step: Flat bands
-# The gate's work function sets the flat-band voltage V_fb = phi_m - phi_s, the gate voltage at which the
-# bands under the gate are flat. Every volt of work function shifts V_fb, and so V_th, by a volt.
+# The gate's work function sets the flat-band voltage Vfb = φm − φs, the gate voltage at which the
+# bands under the gate are flat. Every volt of work function shifts Vfb, and so Vth, by a volt.
 #
 # The gate here is a metal of work function 4.1 eV, about that of n+ polysilicon. Metal gates of other work
-# functions are how modern processes set V_th without heavy channel doping.
+# functions are how modern processes set Vth without heavy channel doping.
 # step: Sweep the work function
 # Three gate metals, 0.3 eV apart, one transfer curve each.
 # do: sweep phi = 4.1, 4.4, 4.7
 # show: results
 # report: Threshold (max gm), Subthreshold swing
 # step: What to see
-# V_th rises by about 0.3 V per 0.3 eV step: the whole transfer curve slides along the gate axis. The swing
+# Vth rises by about 0.3 V per 0.3 eV step: the whole transfer curve slides along the gate axis. The swing
 # does not change, because the work function moves the bands without changing any capacitance.
 
 [parameters]
