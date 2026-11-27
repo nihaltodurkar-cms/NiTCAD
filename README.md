@@ -97,6 +97,14 @@ The `debug` preset works the same way. Builds go to `build/<preset>`. Warnings a
 To run the PARDISO tests too, configure with `-DNITCAD_MKL_RUNTIME=<path to mkl_rt.3.dll>`; without it they are
 skipped.
 
+## Windows installer
+
+`packaging\build-installer.cmd` (from an x64 Native Tools prompt with `VCPKG_ROOT` set; needs Inno Setup 6,
+`winget install JRSoftware.InnoSetup`) builds `build\installer\NiTCAD-<version>-setup.exe`. It installs per user
+without an admin prompt (all users on request), with the app, the `nitcad` command-line tool, the examples and the
+MSVC runtime; a Start-menu entry, an optional desktop shortcut, an optional PATH entry and an uninstaller. Windows 10
+or later, x64. The setup is not code-signed, so SmartScreen warns on first run.
+
 ## Usage
 
 ```text
