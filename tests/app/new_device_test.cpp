@@ -27,16 +27,16 @@ std::string read_file(const fs::path& p) {
 
 TEST_CASE("new device: the library's families, in file-name order, with their dimension", "[app][new_device]") {
     const auto f = devices::list_families(devices_dir);
-    REQUIRE(f.size() == 28);
+    REQUIRE(f.size() == 29);
     std::vector<std::string> names;
     std::vector<int> dims;
     for (const auto& x : f) {
         names.push_back(x.example.path.filename().string());
         dims.push_back(x.dimension);
     }
-    CHECK(names.front() == "avalanche_diode_2d.deck");
-    CHECK(f.front().example.title == "Avalanche diode (2D)");
-    CHECK(dims == std::vector<int>{2, 2, 2, 3, 3, 3, 3, 2, 2, 2, 1, 2, 3, 1, 1, 2, 3, 1, 2, 2, 3, 2, 2, 3, 1, 2, 2, 2});
+    CHECK(names.front() == "algan_gan_hemt_2d.deck");
+    CHECK(f.front().example.title == "AlGaN/GaN HEMT (2D)");
+    CHECK(dims == std::vector<int>{2, 2, 2, 2, 3, 3, 3, 3, 2, 2, 2, 1, 2, 3, 1, 1, 2, 3, 1, 2, 2, 3, 2, 2, 3, 1, 2, 2, 2});
     // A deck that does not build is listed, dimension 0.
     const fs::path dir = app_test::scratch("new_device_families");
     app_test::write(dir, "broken.deck", "# Broken\n# It does not build.\n[mesh]\ntype = tensor\n");

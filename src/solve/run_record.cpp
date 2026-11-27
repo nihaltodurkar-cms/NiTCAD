@@ -94,6 +94,23 @@ void material(Digest& d, const physics::SemiconductorParameters& p) {
         const physics::AlloyGapParameters& g = p.alloy_gap;
         for (const double v : {g.fraction, g.alpha_a_eV_per_K, g.beta_a_K, g.alpha_b_eV_per_K, g.beta_b_K}) d.real(v);
     }
+    // Unit 68 slice 2: the Caughey-Thomas temperature exponents and the alloy mobility, only when
+    // given (0 on every earlier set).
+    for (const physics::CaugheyThomasParameters* ct : {&p.electron_mobility, &p.hole_mobility}) {
+        if (ct->mu_min_T_exponent != 0.0 || ct->N_ref_T_exponent != 0.0 || ct->alpha_T_exponent != 0.0) {
+            for (const double v : {ct->mu_min_T_exponent, ct->N_ref_T_exponent, ct->alpha_T_exponent}) d.real(v);
+        }
+    }
+    if (const physics::AlloyMobilityParameters& a = p.alloy_mobility; a.fraction != 0.0) {
+        d.real(a.fraction);
+        d.real(a.C_mu_electron);
+        for (const physics::CaugheyThomasParameters* ct : {&a.electron_b, &a.hole_b}) {
+            for (const double v : {ct->mu_min, ct->mu_max, ct->N_ref, ct->alpha, ct->T_exponent, ct->mu_min_T_exponent,
+                                   ct->N_ref_T_exponent, ct->alpha_T_exponent}) {
+                d.real(v);
+            }
+        }
+    }
 }
 
 // The options the sweep reads: the quasi-static sweep has no continuity equations, so the
@@ -271,6 +288,7 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
     d.integers<device::RegionId>(device.node_region());
     d.reals(device.donors());
     d.reals(device.acceptors());
+    if (!device.bound_charge().empty()) d.reals(device.bound_charge());  // Unit 68 slice 2
     d.integer(device.contacts().size());
     for (const device::Contact& c : device.contacts()) {
         d.text(c.name);

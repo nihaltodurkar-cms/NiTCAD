@@ -24,7 +24,7 @@ using detail::Writer;
 namespace device_key {
 constexpr std::uint16_t mesh = 1, temperature = 2, region = 3, node_region = 4, donors = 5,
                         acceptors = 6, contact = 7, interface = 8, cells = 9, thermal_contact = 10,
-                        certificate = 11;
+                        certificate = 11, bound_charge = 12;  // 12: Unit 68 slice 2, only when given
 }
 namespace region_key {
 constexpr std::uint16_t name = 1, kind = 2, parameters = 3;  // kind 0 semiconductor, 1 insulator
@@ -142,17 +142,31 @@ void semiconductor_fields(P& p, F&& f) {
 
 // Unit 52: the energy relaxation times, written only when given (nonzero), so a device without
 // them is written as before (EC1); absent, they stay 0 (not given). Unit 68: the alloy gap
-// correction likewise (keys 70-74; 0 on every set before it).
+// correction likewise (keys 70-74; 0 on every set before it); slice 2, the Caughey-Thomas
+// temperature exponents (75-80) and the alloy mobility (81-98).
 template <class P>
 auto energy_relaxation_fields(P& p) {
-    return std::array<std::pair<std::uint16_t, decltype(&p.energy_relaxation.tau_n_s)>, 7>{
+    using F = decltype(&p.energy_relaxation.tau_n_s);
+    auto& e = p.electron_mobility;
+    auto& h = p.hole_mobility;
+    auto& a = p.alloy_mobility;
+    return std::array<std::pair<std::uint16_t, F>, 31>{
         {{68, &p.energy_relaxation.tau_n_s},
          {69, &p.energy_relaxation.tau_p_s},
          {70, &p.alloy_gap.fraction},
          {71, &p.alloy_gap.alpha_a_eV_per_K},
          {72, &p.alloy_gap.beta_a_K},
          {73, &p.alloy_gap.alpha_b_eV_per_K},
-         {74, &p.alloy_gap.beta_b_K}}};
+         {74, &p.alloy_gap.beta_b_K},
+         {75, &e.mu_min_T_exponent}, {76, &e.N_ref_T_exponent}, {77, &e.alpha_T_exponent},
+         {78, &h.mu_min_T_exponent}, {79, &h.N_ref_T_exponent}, {80, &h.alpha_T_exponent},
+         {81, &a.fraction}, {82, &a.C_mu_electron},
+         {83, &a.electron_b.mu_min}, {84, &a.electron_b.mu_max}, {85, &a.electron_b.N_ref},
+         {86, &a.electron_b.alpha}, {87, &a.electron_b.T_exponent}, {88, &a.electron_b.mu_min_T_exponent},
+         {89, &a.electron_b.N_ref_T_exponent}, {90, &a.electron_b.alpha_T_exponent},
+         {91, &a.hole_b.mu_min}, {92, &a.hole_b.mu_max}, {93, &a.hole_b.N_ref},
+         {94, &a.hole_b.alpha}, {95, &a.hole_b.T_exponent}, {96, &a.hole_b.mu_min_T_exponent},
+         {97, &a.hole_b.N_ref_T_exponent}, {98, &a.hole_b.alpha_T_exponent}}};
 }
 
 constexpr std::uint16_t thermal_record_key = 100;
@@ -502,6 +516,7 @@ std::expected<void, base::Error> save_device(const std::filesystem::path& path,
            std::vector<std::int64_t>(d.node_region().begin(), d.node_region().end()));
     w.f64s(device_key::donors, d.donors());
     w.f64s(device_key::acceptors, d.acceptors());
+    if (!d.bound_charge().empty()) w.f64s(device_key::bound_charge, d.bound_charge());
     for (const device::Contact& c : d.contacts()) w.record(device_key::contact, write_contact(c));
     for (const device::Interface& f : d.interfaces()) {
         w.record(device_key::interface, write_interface(f));
@@ -544,6 +559,8 @@ std::expected<device::Device, base::Error> load_device(const std::filesystem::pa
     NITCAD_IO_TRY(acceptors, r.f64s(device_key::acceptors));
     d.donors = std::move(donors);
     d.acceptors = std::move(acceptors);
+    NITCAD_IO_TRY(bound, r.f64s_or_empty(device_key::bound_charge));
+    d.bound_charge = std::move(bound);
     NITCAD_IO_TRY(contacts, r.records(device_key::contact));
     for (const Reader& c : contacts) {
         NITCAD_IO_TRY(contact, read_contact(c));

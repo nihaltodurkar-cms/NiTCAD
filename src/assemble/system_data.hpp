@@ -513,6 +513,7 @@ struct SystemData {
                        std::span<double> values, const TimeStep* step, bool sinks) const;
 
     std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_, auger_n_, auger_p_;
+    std::vector<double> bound_;  // Unit 68 slice 2: bound charge / Ns per node; empty: none
     std::vector<double> log_dos_n_, log_dos_p_;  // ln(Nc / n_ie), ln(Nv / n_ie)
     std::vector<double> band_shift_;             // s
     std::vector<double> donors_, acceptors_;     // N_D / Ns, N_A / Ns

@@ -17,10 +17,11 @@ using Words = std::span<const std::string_view>;
 constexpr std::array<std::string_view, 2> on_off{"on", "off"};
 constexpr std::array<std::string_view, 2> overlap_rules{"replace", "fill"};
 constexpr std::array<std::string_view, 5> mesh_types{"tensor", "generate2d", "generate3d", "extrude3d", "file"};
-constexpr std::array<std::string_view, 25> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas", "sic_4h",
+constexpr std::array<std::string_view, 30> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas", "sic_4h",
                                                      "algaas", "sio2", "insulator", "metal", "hfo2", "al2o3", "si3n4",
                                                      "zro2", "la2o3", "tio2", "ta2o5", "mgo", "aln_dielectric",
-                                                     "sapphire", "hbn", "sion", "sige", "sige_strained", "si_strained"};
+                                                     "sapphire", "hbn", "sion", "sige", "sige_strained", "si_strained",
+                                                     "gan", "aln", "inn", "algan", "ingan"};
 constexpr std::array<std::string_view, 2> dopants{"donor", "acceptor"};
 constexpr std::array<std::string_view, 3> shapes{"constant", "gaussian", "erfc"};
 constexpr std::array<std::string_view, 4> contact_kinds{"ohmic", "gate", "electrode", "schottky"};
@@ -90,7 +91,7 @@ constexpr std::array<KeyInfo, 28> mesh_keys{{
     {"path", 0, false, "<file>", "file: a mesh file", {}, {}, "file"},
 }};
 
-constexpr std::array<KeyInfo, 11> region_keys{{
+constexpr std::array<KeyInfo, 12> region_keys{{
     {"material", 0, false, "silicon", "the region's material (algaas takes its Al fraction)", materials, {}, {}},
     {"box", 0, true, "<lo hi> per dimension", "tensor meshes: the region's box", {}, {}, {}},
     {"polygon", 0, true, "<x y>, ...", "generate2d: the region's polygon", {}, {}, {}},
@@ -102,6 +103,7 @@ constexpr std::array<KeyInfo, 11> region_keys{{
     {"work_function", 0, false, "<eV>", "material = metal: the metal's work function, eV (Unit 68)", {}, {}, {}},
     {"metal", 0, false, "tin", "material = metal: a named metal in place of work_function (Unit 68)", metals, {}, {}},
 {"composition", 0, false, "linear 0 0.2 x 0.1um 0.15um", "a graded region: its material's fraction linear along an axis (Unit 68)", {}, {}, {}},
+{"relaxation", 0, false, "0", "a nitride layer's strain relaxation, 0 (pseudomorphic) .. 1 (with polarization)", {}, {}, {}},
 }};
 
 // Unit 68 (MAD4): a user material.
@@ -164,7 +166,7 @@ constexpr std::array<KeyInfo, 4> thermal_contact_keys{{
     {"resistance", 0, false, "<K cm^2/W>", "resistance: the thermal resistance", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 28> model_keys{{
+constexpr std::array<KeyInfo, 32> model_keys{{
     {"doping_mobility", 0, false, "on", "doping-dependent mobility", on_off, {}, {}},
     {"hole_mobility", 0, false, "automatic", "automatic | caughey_thomas | masetti | klaassen | klaassen_equilibrium", hole_mobility, {}, {}},
     {"electron_mobility", 0, false, "caughey_thomas", "caughey_thomas | masetti | klaassen | klaassen_equilibrium", electron_mobility, {}, {}},
@@ -188,6 +190,10 @@ constexpr std::array<KeyInfo, 28> model_keys{{
      {}},
     {"impact_ionization", 0, false, "off", "impact ionization", on_off, {}, {}},
     {"impact_current_resolution", 0, false, "0", "impact ionization: current resolution", {}, {}, {}},
+    {"polarization", 0, false, "off", "nitride polarization charge (Unit 68)", on_off, {}, {}},
+    {"polarization_scale", 0, false, "1", "polarization: share of the bound charge kept, 0..1", {}, {}, {}},
+    {"c_axis", 0, false, "y", "polarization: the c-axis, substrate to surface, x | y | z (- reverses)", {}, {}, {}},
+    {"polarization_surface", 0, false, "on", "polarization: the free c-faces' bound charge (off: compensated by surface donors)", on_off, {}, {}},
     {"btbt_local", 0, false, "off", "local band-to-band tunnelling", on_off, {}, {}},
     {"btbt_nonlocal", 0, false, "off", "off | kane | direct_wkb", btbt_nonlocal, {}, {}},
     {"trap_assisted_tunnelling", 0, false, "off", "off | hurkx (trap-assisted tunnelling, with srh)",

@@ -1753,8 +1753,8 @@ by the owner with constraints on units, signs and exclusions):**
 - Currents: a Schottky contact's conduction current is the edge flux leaving its nodes, as an ohmic contact's (in steady
   state the emission sum); in transients and small signal the nodes' stored charge counts in the contact's charge, so the
   total currents are conserved (DECISIONS.md, Unit 48 as built: the SD5 deviation).
-- Refused (invalid_input): with the electrothermal model, on a device with a thermionic-emission interface, with the
-  weighted terminal current (Unit 32).
+- Refused (invalid_input): with the electrothermal model, with the
+  weighted terminal current (Unit 32). (A thermionic-emission interface was refused too until Unit 68 slice 2.)
 - Deck `kind = schottky` with `barrier` or `work_function` and `richardson_n`, `richardson_p`; the device file stores
   the contact as a new optional record (no format version change); the run identity hashes the barrier; the CLI and app
   name the kind; render draws it as a metal contact. Example deck: `decks/schottky_diode_1d.deck`.

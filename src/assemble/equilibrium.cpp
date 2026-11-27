@@ -50,6 +50,7 @@ std::expected<SystemData::Made, base::Error> SystemData::make_equilibrium(
     s.equilibrium_ = true;
     s.volume_ = std::move(scaled->volume);
     s.doping_ = std::move(scaled->doping);
+    s.bound_ = std::move(scaled->bound_charge);
     s.n_ie_ = std::move(scaled->n_ie);
     s.log_dos_n_ = std::move(scaled->log_dos_n);
     s.log_dos_p_ = std::move(scaled->log_dos_p);
@@ -321,6 +322,8 @@ std::span<const CompositionEntry> SystemData::Terms::equilibrium_table() {
         {+E::oxide, insulators, &make_term<EquilibriumInsulatorRows>},
         {+E::quantum, density_gradient, &density_gradient_rows},
         {+E::poisson, always, &make_term<EquilibriumCharge>},
+        {+E::poisson, [](const SystemData& s, const SystemState&, M) { return !s.bound_.empty(); },
+         &bound_charge},
         {+E::gate, gated, &gate},
         {+E::interfaces, interfaces, &make_term<EquilibriumInterfaces>},
         {+E::poisson, always, &poisson_flux},

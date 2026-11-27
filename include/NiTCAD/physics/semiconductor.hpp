@@ -24,11 +24,16 @@ enum class Carrier { electron, hole };
 
 // Caughey-Thomas doping-dependent mobility for one carrier (mobility.hpp).
 struct CaugheyThomasParameters {
-    double mu_min;      // [cm^2/(V s)], temperature independent
+    double mu_min;      // [cm^2/(V s)] at 300 K
     double mu_max;      // [cm^2/(V s)] at 300 K
-    double N_ref;       // [cm^-3]
-    double alpha;       // exponent on N / N_ref
+    double N_ref;       // [cm^-3] at 300 K
+    double alpha;       // exponent on N / N_ref, at 300 K
     double T_exponent;  // mu_max(T) = mu_max (T / 300)^T_exponent
+    // Unit 68 slice 2 (amendment 6, ruling 4): mu_min, N_ref and alpha times (T / 300)^exponent;
+    // 0 (every set before it): temperature independent.
+    double mu_min_T_exponent = 0.0;
+    double N_ref_T_exponent = 0.0;
+    double alpha_T_exponent = 0.0;
 
     bool operator==(const CaugheyThomasParameters&) const = default;
 };
@@ -175,6 +180,20 @@ struct EnergyRelaxationParameters {
     bool operator==(const EnergyRelaxationParameters&) const = default;
 };
 
+// An alloy's low-field mobility (Unit 68 slice 2, amendment 6, owner revision 5): the set's own
+// Caughey-Thomas mobility is end member a's; with fraction x != 0 each carrier's mobility is
+//     1 / mu = (1 - x) / mu_a + x / mu_b + x (1 - x) / C_mu,
+// mu_a and mu_b each end member's Caughey-Thomas mobility at the node's doping and temperature;
+// the alloy-scattering term for electrons only, C_mu 0: none. fraction 0 (the default): none.
+struct AlloyMobilityParameters {
+    double fraction = 0.0;
+    double C_mu_electron = 0.0;  // [cm^2/(V s)]
+    CaugheyThomasParameters electron_b{};
+    CaugheyThomasParameters hole_b{};
+
+    bool operator==(const AlloyMobilityParameters&) const = default;
+};
+
 // An alloy's band-gap temperature correction (Unit 68 slice 1, ruling F3a), added to the gap of
 // either form:
 //     fraction [ d(T; alpha_b, beta_b) - d(T; alpha_a, beta_a) ],
@@ -216,6 +235,7 @@ struct SemiconductorParameters {
     DensityOfStatesMassParameters dos_mass{};         // Unit 35; all 0: (T / 300)^(3/2)
     EnergyRelaxationParameters energy_relaxation{};   // Unit 52; 0: not given
     AlloyGapParameters alloy_gap{};                   // Unit 68; fraction 0: none
+    AlloyMobilityParameters alloy_mobility{};         // Unit 68 slice 2; fraction 0: none
 
     bool operator==(const SemiconductorParameters&) const = default;
 };

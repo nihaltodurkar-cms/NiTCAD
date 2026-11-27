@@ -374,17 +374,11 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
     if (!scaled) return std::unexpected(std::move(scaled.error()));
     const std::size_t n = scaled->volume.size();
     const double T = scaling.temperature_K;
-    // Unit 48 (DECISIONS.md SD7): a Schottky contact is isothermal and on a device without
-    // thermionic heterointerfaces.
+    // Unit 48 (DECISIONS.md SD7): a Schottky contact is isothermal. (Thermionic heterointerfaces are
+    // allowed with it since Unit 68 slice 2, owner 2026-11-27.)
     if (std::ranges::any_of(scaled->schottky, [](std::int32_t c) { return c >= 0; })) {
         if (models.electrothermal) {
             return refuse("a Schottky contact with the electrothermal model is not supported");
-        }
-        if (std::ranges::any_of(scaled->edges,
-                                [](const detail::ScaledEdge& e) { return e.thermionic; })) {
-            return refuse(
-                "a Schottky contact on a device with a thermionic-emission interface is not "
-                "supported");
         }
     }
     if (nonlocal) {
@@ -412,6 +406,7 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
     SystemState st;
     s.volume_ = std::move(scaled->volume);
     s.doping_ = std::move(scaled->doping);
+    s.bound_ = std::move(scaled->bound_charge);
     s.n_ie_ = std::move(scaled->n_ie);
     s.log_dos_n_ = std::move(scaled->log_dos_n);
     s.log_dos_p_ = std::move(scaled->log_dos_p);

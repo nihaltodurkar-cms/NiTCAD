@@ -115,6 +115,9 @@ std::optional<base::Error> check_mobility(std::string_view group,
     if (auto e = check(group, "N_ref", ct.N_ref, Bound::positive)) return e;
     if (auto e = check(group, "alpha", ct.alpha, Bound::positive)) return e;
     if (auto e = check(group, "T_exponent", ct.T_exponent, Bound::finite)) return e;
+    if (auto e = check(group, "mu_min_T_exponent", ct.mu_min_T_exponent, Bound::finite)) return e;
+    if (auto e = check(group, "N_ref_T_exponent", ct.N_ref_T_exponent, Bound::finite)) return e;
+    if (auto e = check(group, "alpha_T_exponent", ct.alpha_T_exponent, Bound::finite)) return e;
     if (ct.mu_min > ct.mu_max) {
         // Mobility would rise with doping. check_temperature applies the same rule at T.
         return parameter_error(group, "mu_min", " exceeds mu_max", ct.mu_min);
@@ -224,6 +227,14 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
     if (auto e = check_mobility("hole_mobility.", p.hole_mobility)) {
         return std::unexpected(std::move(*e));
     }
+    if (const AlloyMobilityParameters& a = p.alloy_mobility; a.fraction != 0.0) {  // Unit 68 slice 2
+        if (!(a.fraction > 0.0 && a.fraction <= 1.0)) {
+            return std::unexpected(parameter_error("alloy_mobility.", "fraction", " must lie in [0, 1]", a.fraction));
+        }
+        if (auto e = check("alloy_mobility.", "C_mu_electron", a.C_mu_electron, non_negative)) return std::unexpected(std::move(*e));
+        if (auto e = check_mobility("alloy_mobility.electron_b.", a.electron_b)) return std::unexpected(std::move(*e));
+        if (auto e = check_mobility("alloy_mobility.hole_b.", a.hole_b)) return std::unexpected(std::move(*e));
+    }
     if (auto e = check("lifetime.", "tau_n0", p.lifetime.tau_n0, positive)) {
         return std::unexpected(std::move(*e));
     }
@@ -332,12 +343,16 @@ std::expected<void, base::Error> check_temperature(const Semiconductor& m,
     } carriers[] = {
         {"electron_mobility: mu_max(T) is not finite or is below mu_min at this temperature",
          p.electron_mobility},
+        {"alloy_mobility.electron_b: mu_max(T) is not finite or is below mu_min at this temperature",
+         p.alloy_mobility.electron_b},
+        {"alloy_mobility.hole_b: mu_max(T) is not finite or is below mu_min at this temperature",
+         p.alloy_mobility.hole_b},
         {"hole_mobility: mu_max(T) is not finite or is below mu_min at this temperature",
          p.hole_mobility},
     };
     for (const auto& c : carriers) {
         const double mu_max = detail::mu_max_at(c.ct, T);
-        if (!(std::isfinite(mu_max) && mu_max >= c.ct.mu_min)) {
+        if (!(std::isfinite(mu_max) && mu_max >= detail::mu_min_at(c.ct, T))) {
             return std::unexpected(base::Error{
                 base::ErrorCode::invalid_input, std::string{c.message},
                 base::ErrorContext{.index = std::nullopt, .value = mu_max}});

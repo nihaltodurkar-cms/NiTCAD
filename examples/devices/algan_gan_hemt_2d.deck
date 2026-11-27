@@ -1,0 +1,86 @@
+# AlGaN/GaN HEMT (2D)
+# A high-electron-mobility transistor: the transfer curve at a small drain bias.
+#
+# A thin pseudomorphic Al(x)Ga(1-x)N barrier on a GaN buffer, Ga-face, grown along +y. The polarization charge
+# at the barrier's lower interface (Unit 68, MAD9) draws a two-dimensional electron gas into the GaN below it,
+# with no doping at all; the Schottky gate on the barrier (Ni, 0.83 eV) depletes it. Source and drain reach
+# the 2DEG from the sides through n+ regions; electrons cross the barrier's interface by thermionic emission.
+# The barrier's bare surface beside the gate is taken as fully compensated by surface donors
+# (polarization_surface = off). The buffer is lightly p-type, a stand-in for a
+# semi-insulating buffer, over a substrate contact. Change a dimension or the Al fraction in the Geometry
+# tab's panel; run it (F5), then look at the electron density (Fields) and the transfer curve (Curves).
+
+[parameters]
+# group: Main
+x = 0.25  # barrier Al fraction
+tb = 25nm  # barrier thickness
+Lg = 1um  # gate length
+Lsg = 1um  # source and drain access lengths
+Tbuf = 1um  # buffer thickness
+Na = 1e15  # buffer acceptors (cm^-3)
+Nd = 1e19  # source and drain n+ donors (cm^-3)
+Ln = 100nm  # source and drain n+ widths
+phib = 0.83  # gate barrier (eV), Ni on AlGaN
+# group: Positions (derived)
+W = $Lsg + $Lg + $Lsg  # width
+y1 = $Tbuf + $tb  # barrier top, the surface
+g0 = $Lsg  # gate's left edge
+g1 = $Lsg + $Lg  # gate's right edge
+yc = $Tbuf - 50nm  # n+ and contact bottom
+ym = $Tbuf - 100nm  # mesh: 10 nm steps below the channel
+yf = $Tbuf - 20nm  # mesh: 1 nm steps above
+xd = $W - $Ln  # drain n+ left edge
+
+[mesh]
+type = tensor
+x = linspace(0, $W, 41)
+y = linspace(0, $ym, 10) + linspace($ym, $yf, 9) + linspace($yf, $y1, 46)
+
+[region buffer]
+material = gan
+
+[region barrier]
+material = algan $x
+box = 0 $W  $Tbuf $y1
+
+[interface buffer barrier]
+transport = thermionic
+
+[doping]
+profile = acceptor constant $Na
+profile = donor constant $Nd x=0:$Ln y=$yc:$y1
+profile = donor constant $Nd x=$xd:$W y=$yc:$y1
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  $yc $y1
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = $W $W  $yc $y1
+
+[contact substrate]
+kind = ohmic
+patch = y_min
+
+[contact gate]
+kind = schottky
+patch = y_max
+box = $g0 $g1  $y1 $y1
+barrier = $phib
+
+[models]
+polarization = on
+polarization_surface = off
+fermi_dirac = on
+
+[sweep]
+contact drain = 0.1
+contact gate = -7 : 0 : 0.25
+
+[output]
+sweep = algan_gan_hemt_2d.nitsweep
+device = algan_gan_hemt_2d.nitdev
+table = algan_gan_hemt_2d.csv

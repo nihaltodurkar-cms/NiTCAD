@@ -100,6 +100,7 @@ struct SystemData::Terms {
     // 1 they compute equilibrium's expressions; GE5).
     [[nodiscard]] static std::shared_ptr<const Term> gate();
     [[nodiscard]] static std::shared_ptr<const Term> poisson_flux();
+    [[nodiscard]] static std::shared_ptr<const Term> bound_charge();  // Unit 68 slice 2
     // Appends every term's own pattern entries (Term::pattern) to triplets.
     static void pattern(const SystemData& s, const SystemState& st,
                         std::vector<linalg::Triplet>& triplets);
@@ -168,6 +169,7 @@ struct SystemData::Terms {
     class InsulatorRows;
     class PoissonCharge;
     class Ionization;
+    class BoundCharge;
     class Gate;
     class Srh;
     class TrapTunnellingSrh;

@@ -26,6 +26,7 @@
 #include "NiTCAD/physics/heavy_ion.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/materials.hpp"
+#include "NiTCAD/physics/polarization.hpp"
 #include "NiTCAD/physics/total_dose.hpp"
 #include "NiTCAD/solve/adapt_adjoint.hpp"
 #include "NiTCAD/solve/adapt_derived.hpp"
@@ -92,12 +93,14 @@ struct RegionSpec {
         std::vector<const Entry*> overrides;
     };
     std::optional<Grading> grading;
+    const Entry* relaxation = nullptr;  // Unit 68 slice 2 (MAD9): a nitride layer's strain relaxation
 };
 
 // A [material] section built (Unit 68, MAD4): its set and its base's composition.
 struct UserMaterial {
     physics::MaterialParameters parameters;
     std::vector<double> composition;
+    std::string base;  // the registry base's name
 };
 
 class Builder {
@@ -185,6 +188,7 @@ private:
     std::expected<bool, base::Error> parameter(physics::MaterialParameters& params, const Entry& e) const;
     // Unit 68 (MAQ7a): each graded region split into one uniform-composition region per node layer.
     std::expected<void, base::Error> grade(device::DeviceDescription& d);
+    std::expected<void, base::Error> polarization(device::DeviceDescription& d) const;  // Unit 68 slice 2
     // The registry material `e` names, with its composition arguments (Unit 68, MAD1).
     // `composition`, when given, receives the arguments.
     std::expected<physics::MaterialParameters, base::Error> registry_material(const Entry& e,
@@ -252,6 +256,7 @@ private:
     std::map<std::string, UserMaterial, std::less<>> user_materials_;
     std::vector<RegionSpec> regions_;
     std::vector<results::MaterialRecord> graded_records_;  // Unit 68: the layers a grading adds
+    std::vector<std::size_t> graded_parent_;  // the regions_ index of each graded_records_ layer
     MeshType type_ = MeshType::tensor;
     std::string type_name_;  // the [mesh] type as written (extrude3d for a file mesh from a complex)
     bool layered_mesh_ = false;  // a layered generate2d or generate3d mesh (the only ones taking a region's overlap)
@@ -377,7 +382,7 @@ std::expected<UserMaterial, base::Error> Builder::user_material(const Section& s
     } else if (auto m = physics::Insulator::create(std::get<physics::InsulatorParameters>(params)); !m) {
         return std::unexpected(located(base->line, where, std::move(m.error())));
     }
-    return UserMaterial{std::move(params), std::move(composition)};
+    return UserMaterial{std::move(params), std::move(composition), std::string(tokens(base->value).front())};
 }
 
 std::expected<void, base::Error> Builder::user_materials() {
@@ -493,6 +498,11 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         if (e.key == "seed") { spec.seeds.push_back(&e); continue; }
         if (e.key == "extrude") { spec.extrudes.push_back(&e); continue; }
         if (e.key == "prism") { spec.prisms.push_back(&e); continue; }
+        if (e.key == "relaxation") {  // Unit 68 slice 2 (MAD9), checked with polarization
+            if (spec.relaxation) return std::unexpected(at(e.line, "a second 'relaxation'"));
+            spec.relaxation = &e;
+            continue;
+        }
         if (e.key == "overlap") {
             if (spec.overlap) return std::unexpected(at(e.line, "a second 'overlap'"));
             if (e.value != "replace" && e.value != "fill") return std::unexpected(at(e.line, "overlap is 'replace' or 'fill'"));
@@ -1417,6 +1427,7 @@ std::expected<void, base::Error> Builder::grade(device::DeviceDescription& d) {
                 for (const std::size_t i : nodes) d.node_region[i] = index;
                 record.region = name;
                 graded_records_.push_back(std::move(record));
+                graded_parent_.push_back(r);
             }
             ++k;
         }
@@ -1791,6 +1802,134 @@ std::expected<device::ThermalContact, base::Error> Builder::thermal_contact(cons
     return t;
 }
 
+// Unit 68 slice 2 (MAD9; DECISIONS.md amendment 6): with [models] polarization = on, the nitride
+// regions' bound polarization charge, lumped into the control volumes. Each region's P (Ga-face,
+// along the c-axis, `c_axis = [-]x|y|z`, default y: substrate to surface) is the spontaneous plus
+// the piezoelectric part of its strain: the thickest nitride region along c is the relaxed
+// reference, every other is pseudomorphic on it, or partly relaxed by its `relaxation = r`
+// (0 <= r <= 1; a = a0 + (1 - r)(a_ref - a0)). On each mesh edge i -> j the sheet charge
+// (P_i - P_j)(c.e_ij) times the dual face's area goes half to each end, or all to the
+// semiconductor end next to an insulator or metal (P 0 there); on the free faces normal to c, P.n
+// times the face area (polarization_surface = off: none there, surface donors compensating them).
+// polarization_scale = s (0..1) scales all of it.
+std::expected<void, base::Error> Builder::polarization(device::DeviceDescription& d) const {
+    const Entry *on = nullptr, *scale = nullptr, *axis = nullptr, *surface = nullptr;
+    if (const Section* s = single("models")) {
+        for (const Entry& e : s->entries) {
+            if (e.key == "polarization") on = &e;
+            if (e.key == "polarization_scale") scale = &e;
+            if (e.key == "c_axis") axis = &e;
+            if (e.key == "polarization_surface") surface = &e;
+        }
+    }
+    bool enabled = false;
+    if (on) {
+        NITCAD_DECK_TRY(v, flag(*on));
+        enabled = v;
+    }
+    for (const Entry* e : {scale, axis, surface}) {
+        if (e && !enabled) return std::unexpected(at(e->line, "'" + e->key + "' needs polarization = on"));
+    }
+    for (const RegionSpec& spec : regions_) {
+        if (spec.relaxation && !enabled) {
+            return std::unexpected(at(spec.relaxation->line, "'relaxation' needs [models] polarization = on"));
+        }
+    }
+    if (!enabled) return {};
+    double k = 1.0;
+    if (scale) {
+        NITCAD_DECK_TRY(v, num(*scale));
+        if (!(v >= 0.0 && v <= 1.0)) return std::unexpected(at(scale->line, "polarization_scale must lie in 0..1"));
+        k = v;
+    }
+    const int dim = d.mesh.dimension();
+    std::size_t c = dim == 1 ? 0 : 1;
+    double sign = 1.0;
+    if (axis) {
+        std::string_view v = axis->value;
+        if (v.starts_with('-')) {
+            sign = -1.0;
+            v.remove_prefix(1);
+        }
+        if (v.size() != 1 || v[0] < 'x' || v[0] > 'z' || v[0] - 'x' >= dim) {
+            return std::unexpected(at(axis->line, std::format("c_axis is x, y or z (with '-' to reverse), within this {}D mesh", dim)));
+        }
+        c = static_cast<std::size_t>(v[0] - 'x');
+    }
+    // Each region's lattice; a graded region's layers by their own composition.
+    const std::size_t R = d.regions.size(), declared = regions_.size();
+    std::vector<std::optional<physics::NitrideLattice>> lattice(R);
+    std::vector<double> relaxation(R, 0.0);
+    for (std::size_t r = 0; r < R; ++r) {
+        const RegionSpec& spec = regions_[r < declared ? r : graded_parent_[r - declared]];
+        const results::MaterialRecord* record =
+            r < declared ? (spec.record ? &*spec.record : nullptr) : &graded_records_[r - declared];
+        if (record) {
+            std::string_view name = record->material;
+            if (const auto user = user_materials_.find(name); user != user_materials_.end()) name = user->second.base;
+            lattice[r] = physics::nitride_lattice(name, record->composition.empty() ? 0.0 : record->composition[0]);
+        }
+        if (spec.relaxation) {
+            if (!lattice[r]) return std::unexpected(at(spec.relaxation->line, "'relaxation' is for a nitride region"));
+            NITCAD_DECK_TRY(v, num(*spec.relaxation));
+            if (!(v >= 0.0 && v <= 1.0)) return std::unexpected(at(spec.relaxation->line, "relaxation must lie in 0..1"));
+            relaxation[r] = v;
+        }
+    }
+    // The reference: the thickest nitride region along c (the first of equals).
+    const auto points = d.mesh.points();
+    std::vector<double> lo(R, std::numeric_limits<double>::infinity()), hi(R, -std::numeric_limits<double>::infinity());
+    for (std::size_t i = 0; i < d.node_region.size(); ++i) {
+        const auto r = static_cast<std::size_t>(d.node_region[i]);
+        lo[r] = std::min(lo[r], points[i][c]);
+        hi[r] = std::max(hi[r], points[i][c]);
+    }
+    std::optional<std::size_t> reference;
+    for (std::size_t r = 0; r < R; ++r) {
+        if (lattice[r] && (!reference || hi[r] - lo[r] > hi[*reference] - lo[*reference])) reference = r;
+    }
+    if (!reference) return std::unexpected(at(on->line, "polarization = on, but no region is a nitride"));
+    const double a_ref = lattice[*reference]->a0_A;
+    std::vector<double> P(R, 0.0);  // [cm^-2], along +c
+    for (std::size_t r = 0; r < R; ++r) {
+        if (!lattice[r]) continue;
+        const double a0 = lattice[r]->a0_A;
+        const double a = r == *reference ? a0 : a0 + (1.0 - relaxation[r]) * (a_ref - a0);
+        P[r] = k * physics::polarization_sheet_density_cm2(physics::nitride_polarization(*lattice[r], a));
+    }
+    const auto insulator = [&d](std::size_t node) {
+        return device::is_insulator(d.regions[static_cast<std::size_t>(d.node_region[node])]);
+    };
+    std::vector<double> bound(d.node_region.size(), 0.0);  // charge per node [cm^-2 cm^(D-1)]
+    for (const mesh::Edge& e : d.mesh.edges()) {
+        const auto i = static_cast<std::size_t>(e.first), j = static_cast<std::size_t>(e.second);
+        const double Pi = P[static_cast<std::size_t>(d.node_region[i])], Pj = P[static_cast<std::size_t>(d.node_region[j])];
+        if (Pi == Pj) continue;
+        const double q = (Pi - Pj) * sign * (points[j][c] - points[i][c]) / e.length * e.coupling_area;
+        if (insulator(i)) bound[j] += q;
+        else if (insulator(j)) bound[i] += q;
+        else bound[i] += 0.5 * q, bound[j] += 0.5 * q;
+    }
+    bool free_faces = true;  // off: surface donors compensate the free c-faces
+    if (surface) {
+        NITCAD_DECK_TRY(v, flag(*surface));
+        free_faces = v;
+    }
+    const std::string face = std::string(1, static_cast<char>('x' + c));
+    for (const mesh::BoundaryPatch& p : d.mesh.boundary()) {
+        const double normal = !free_faces ? 0.0 : p.name == face + "_max" ? sign : p.name == face + "_min" ? -sign : 0.0;
+        if (normal == 0.0) continue;
+        for (std::size_t n = 0; n < p.nodes.size(); ++n) {
+            const auto i = static_cast<std::size_t>(p.nodes[n]);
+            bound[i] += P[static_cast<std::size_t>(d.node_region[i])] * normal * p.areas[n];
+        }
+    }
+    const auto volumes = d.mesh.volumes();
+    for (std::size_t i = 0; i < bound.size(); ++i) bound[i] /= volumes[i];
+    d.bound_charge = std::move(bound);
+    return {};
+}
+
 std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) const {
     const Section* s = single("models");
     if (!s) return {};
@@ -1874,6 +2013,9 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
         } else if (e.key == "impact_current_resolution") {
             NITCAD_DECK_TRY(v, num(e));
             m.impact_current_resolution = v;
+        } else if (e.key == "polarization" || e.key == "polarization_scale" || e.key == "c_axis" ||
+                   e.key == "polarization_surface") {
+            // Unit 68 slice 2: read with the device (Builder::polarization).
         } else {
             return std::unexpected(unknown(e, *s));
         }
@@ -2652,6 +2794,7 @@ std::expected<Plan, base::Error> Builder::run() {
     NITCAD_DECK_CHECK(build_mesh(d));
     NITCAD_DECK_CHECK(doping(d));
     NITCAD_DECK_CHECK(grade(d));
+    NITCAD_DECK_CHECK(polarization(d));
     for (const Section& s : d_.sections) {
         if (s.kind == "contact") {
             NITCAD_DECK_TRY(c, contact(s, d));

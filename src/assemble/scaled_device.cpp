@@ -68,6 +68,10 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     s.doping.resize(n);
     s.donors.resize(n);
     s.acceptors.resize(n);
+    if (!device.bound_charge().empty()) {
+        s.bound_charge.resize(n);
+        for (std::size_t i = 0; i < n; ++i) s.bound_charge[i] = device.bound_charge()[i] / scaling.Ns;
+    }
     s.levels.resize(n);
     s.radiative.resize(n);
     s.n_ie.resize(n);

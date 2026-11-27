@@ -295,7 +295,7 @@ TEST_CASE("material registry: existing names give the existing sets bit for bit"
 
 TEST_CASE("material registry: names unique, arities and usage consistent", "[materials][unit68]") {
     const auto all = material_registry();
-    REQUIRE(all.size() == 25);
+    REQUIRE(all.size() == 30);  // Unit 68 slice 2: gan, aln, inn, algan, ingan
     for (std::size_t i = 0; i < all.size(); ++i) {
         CAPTURE(all[i].name);
         REQUIRE(find_material(all[i].name) == &all[i]);
@@ -308,7 +308,7 @@ TEST_CASE("material registry: names unique, arities and usage consistent", "[mat
 TEST_CASE("material registry: parameter paths and values agree (DK7)", "[materials][unit68]") {
     SemiconductorParameters s = silicon_parameters;
     const auto sv = parameter_values(MaterialParameters{s});
-    REQUIRE(sv.size() == 65);  // Unit 68 slice 1: the five alloy_gap paths
+    REQUIRE(sv.size() == 89);  // Unit 68: slice 1 the five alloy_gap paths; slice 2 six exponents, 18 alloy_mobility
     for (const auto& [path, value] : sv) {
         CAPTURE(path);
         double* target = semiconductor_parameter(s, path);
@@ -378,6 +378,12 @@ TEST_CASE("material registry: parameter hash sees every value (MAD3)", "[materia
     REQUIRE(parameter_hash(MaterialParameters{s}) != h);
     s = silicon_parameters;
     s.dos_mass.valence[2] += 1e-3;
+    REQUIRE(parameter_hash(MaterialParameters{s}) != h);
+    s = silicon_parameters;  // Unit 68 slice 2: the exponents and the alloy mobility count when nonzero
+    s.electron_mobility.alpha_T_exponent = 0.31;
+    REQUIRE(parameter_hash(MaterialParameters{s}) != h);
+    s = silicon_parameters;
+    s.alloy_mobility.fraction = 0.5;
     REQUIRE(parameter_hash(MaterialParameters{s}) != h);
     REQUIRE(parameter_hash(MaterialParameters{legacy_silicon_parameters}) != h);
     InsulatorParameters i = silicon_dioxide_parameters;

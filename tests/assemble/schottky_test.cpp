@@ -318,7 +318,7 @@ TEST_CASE("Schottky assemble: refusals of the device and the assembler (SC14)") 
         require_invalid(made, "insulator node");
     }
     // The assembler: Phi_Bn outside [0, Eg(T)] (by the barrier and by the work function), the
-    // electrothermal model, a thermionic-emission interface.
+    // electrothermal model; a thermionic-emission interface is accepted (Unit 68 slice 2).
     {
         Diode o;
         o.barrier.barrier_eV = 1.2;  // Eg(300 K) = 1.12 eV
@@ -365,8 +365,7 @@ TEST_CASE("Schottky assemble: refusals of the device and the assembler (SC14)") 
                           {"cathode", device::ContactKind::ohmic, std::move(right)}},
              .interfaces = {{"left", "right", device::InterfaceTransport::thermionic_emission}}});
         if (!made) FAIL(made.error().message);
-        require_invalid(System::create(*made, *assemble::make_scaling(*made), {}),
-                        "thermionic interface");
+        REQUIRE(System::create(*made, *assemble::make_scaling(*made), {}).has_value());
     }
 }
 

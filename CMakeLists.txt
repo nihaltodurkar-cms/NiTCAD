@@ -410,6 +410,8 @@ add_library(nitcad_physics STATIC
   src/physics/insulator.cpp
   src/physics/materials.cpp
   src/physics/sige.cpp
+  src/physics/nitrides.cpp
+  src/physics/polarization.cpp
   src/physics/interface_traps.cpp
   src/physics/impact_ionization.cpp
   src/physics/band_to_band.cpp
@@ -438,6 +440,7 @@ add_executable(nitcad_physics_test
   tests/physics/fermi_dirac_test.cpp
   tests/physics/materials_test.cpp
   tests/physics/sige_test.cpp
+  tests/physics/nitrides_test.cpp
   tests/physics/interface_traps_test.cpp
   tests/physics/impact_ionization_test.cpp
   tests/physics/band_to_band_test.cpp
@@ -800,6 +803,8 @@ add_executable(nitcad_deck_test
   tests/deck/total_dose_test.cpp
   tests/deck/schottky_test.cpp
   tests/deck/sige_hbt_test.cpp
+  tests/deck/polarization_test.cpp
+  tests/deck/hemt_test.cpp
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp
   tests/deck/complex_finfet_test.cpp

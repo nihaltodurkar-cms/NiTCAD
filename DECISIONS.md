@@ -5076,6 +5076,133 @@ extrinsic base beside the emitter, with an SiO2 spacer between them. At V_BE = 0
 264 (-21.3 %, a MAC9 failure): electrons injected through the emitter's side wall cross silicon, not SiGe, and
 dilute the ratio. The oxide spacer removes that path.
 
+**Amendment 6 (2026-11-27): slice 2 sources and values.** Source M2' is Levinshtein, Rumyantsev and Shur, eds.,
+*Properties of Advanced Semiconductor Materials* (Wiley 2001), ch. 1-3 (licensed copy, outside the repo). It
+supplies: permittivity; GaN and AlN gap and Varshni; masses; Nc and Nv; radiative coefficient; 300 K thermal
+conductivity; specific heat; density; lattice constants. The owner supplied the rest on 2026-11-27, items 1-30 of
+`slice2-unknowns.txt`, cited per value as "owner 2026-11-27" with the owner's own references (TU Wien IUE nitride
+tables, KAUST, AIP, Cornell; secondary).
+- InN: Eg(0) 0.69 eV, Eg(300) 0.608 eV, Varshni 0.414 meV/K and 154 K. These replace the book's 1.9-2.05 eV.
+- Affinities: GaN 4.10, AlN 2.00, InN 5.80 eV.
+- Dopants: GaN Si 0.017, Mg 0.17; AlN Si 0.25, Mg 0.51; InN Mg 0.06 eV. InN donors have no default level and
+  are fully ionized.
+- Electron mobility, Caughey-Thomas with temperature exponents (GaN, AlN, InN):
+  - mu_max 1405, 683, 10400 (gamma0 -2.85, 0.80, -3.70);
+  - mu_min 80, 29, 500 (gamma1 -0.20, -3.21, 2.39);
+  - N_ref 7.78e16, 5.0e17, 3.4e17 (gamma2 1.30, 1.21, -0.33);
+  - alpha 0.71, +0.18, 0.70 (gamma3 0.31). AlN's alpha is the owner's sign correction of the source's -0.18.
+- Holes: constant mobility 170, 14, 220.
+- Saturation velocity: electrons 2.5e7, 3.7e7, 5.0e7 cm/s (beta 1.0, 0.45, 1.0); holes 7.0e6 cm/s, beta 1.0.
+- SRH lifetimes: tau_n 10, 5, 10 ns; tau_p 20, 10, 20 ns.
+- Auger: C_n 1.25e-31, 5e-32, 7e-30; C_p 5e-32, 5e-32, 6e-30 cm^6/s.
+- Models: BGN off. Band-to-band tunnelling off. Impact ionization on for GaN only: Chynoweth
+  4.48e8 exp(-3.39e7/E) for electrons, 7.13e6 exp(-1.46e7/E) for holes.
+- Thermal-conductivity exponent delta: -0.6, -1.2, 0. NiTCAD's `conductivity_exponent` is -delta.
+- Alloys:
+  - gap bowing: AlGaN 0.8, InGaN 1.4 eV;
+  - Q_c: AlGaN 0.70, InGaN 0.58;
+  - permittivity linear;
+  - electron mass linear, plus 4.8e-3 bowing for AlGaN;
+  - mobility 1/mu = (1-x)/mu_A + x/mu_B + x(1-x)/C_mu, C_mu 40 (AlGaN) and 1e6 (InGaN);
+  - range 0 <= x <= 1.
+- Polarization:
+  - P_sp: GaN -0.034, AlN -0.090, InN -0.042 C/m^2;
+  - P_sp bowing (minus-sign form): AlGaN -0.021, InGaN -0.037;
+  - e31/e33: GaN -0.49/0.73, AlN -0.60/1.46, InN -0.57/0.97;
+  - c13/c33: GaN 106/398, AlN 108/373, InN 92/224 GPa.
+- Model rulings:
+  - partial relaxation allowed (default pseudomorphic);
+  - free-surface bound charge on;
+  - AlGaN/GaN transport thermionic;
+  - MAC10 gate barrier 0.83 eV (Ni);
+  - scalar hole DOS mass, AlN 2.7 m0.
+
+Rulings the engineer chose as recommended (the owner chooses recommended). Each is reported to the owner.
+1. Names. `aln` is free: the slice-5 dielectric is `aln_dielectric`. Slice 2 adds `gan`, `aln`, `inn`,
+   `algan <x>` and `ingan <x>`.
+2. Affinity, superseded by the owner's option A (below).
+3. AlN gap, superseded: the owner's Piprek values (below).
+4. Caughey-Thomas temperature exponents. The engine's model lets only mu_max vary with T. New optional
+   exponents for mu_min, N_ref and alpha are added; 0 keeps every existing set bit-identical (MAC1).
+5. Alloy mobility, superseded by the owner's revision (below).
+6. DOS masses. Electrons: GaN 0.20, AlN 0.40, InN 0.11 (book). Holes: GaN 1.5 (book), AlN 2.7 (owner),
+   InN 1.65 (from the book's Nv = 5.3e19 cm^-3). Interpolation: owner's revision (below).
+7. Interface transport. Thermionic is declared by the deck's `[interface]` section, as today. The library HEMT
+   deck declares it, and the engine default is unchanged.
+
+Owner's review of rulings 1-7 (2026-11-27): 1, 4 and 7 accepted; 2, 3, 5 and 6 revised:
+- Option A (alignment). chi_GaN = 4.10 eV at the 300 K reference; every other nitride, binaries included,
+  is aligned by its 300 K gap from the model's own gap functions: chi = 4.10 - Q_c [Eg(x, 300) - Eg_GaN(300)],
+  Q_c 0.70 (AlGaN) and 0.58 (InGaN). So `aln` has chi 2.2747 eV and `inn` 5.7153 eV, and the alloys meet the
+  binaries at their ends. The affinity is held at its 300 K value at every temperature (v1): an effective TCAD
+  alignment parameter, the fixed-Q_c relation calibrated at 300 K. The InGaN Q_c is extrapolated from low In
+  fractions (about 5-9 %). The book's and the owner's first affinities (AlN 2.00, InN 5.80) are not used.
+- AlN gap: Eg(0) 6.10 eV, Varshni 2.63e-3 eV/K and 2082 K (J. Piprek, ed., *Nitride Semiconductor Devices:
+  Principles and Simulation*, Wiley-VCH 2007, Section 2); Eg(300) 6.0006 eV.
+- Alloy mobility: the reciprocal rule applies once, to each end member's final Caughey-Thomas mobility at the
+  node's doping and temperature: 1/mu = (1-x)/mu_A + x/mu_B + x(1-x)/C_mu (electrons; holes without C_mu).
+- Alloy masses: electrons linear, AlGaN bowing 4.8e-3 m0 in the gap's minus form; holes by the DOS mass,
+  m(x) = [(1-x) m_A^1.5 + x m_B^1.5]^(2/3) (Nv linear).
+- InN donors: depth 0, fully ionized, a fallback, not a measured level; a `[material]` override of
+  `ionization.donor_eV` gives incomplete ionization.
+- AlN alpha +0.18 is provisional.
+
+Engineer's questions answered "choose recommended" (2026-11-27):
+- AlN electron saturation beta 1.0, not 0.45: the engine requires beta >= 1 (below it dmu/dE is infinite at
+  E = 0).
+- AlGaN mass bowing: the gap's minus form (no recommendation was given; the engineer's choice, |effect|
+  <= 0.0012 m0).
+- Alloy values not given: permittivity, lifetimes, Auger, radiative coefficient, saturation, dopant levels and
+  heat capacity linear in x.
+- Alloy thermal conductivity off (electrothermal refused), as for SiGe, until a C_kappa is supplied.
+- Alloy impact ionization off.
+- InN is refused above about 494 K, where its exponents put mu_min(T) above mu_max(T).
+
+Slice 1 left this: the material hash took every parameter path, so adding paths (its alloy gap)
+moved every set's hash. Paths added after slice 0 enter it only when nonzero (MAC1).
+
+Step 2, polarization (MAD9), the engineer's rulings (recommended, reported to the owner):
+- Lattice constants a0 from M2': GaN 3.189, AlN 3.112, InN 3.533 A (pp. 2, 32, 50). Alloys: a0, e31, e33,
+  c13 and c33 linear in x (Vegard; Ambacher's practice); P_sp with the owner's bowing.
+- The engine had fixed sheet charge only at semiconductor-insulator interfaces. The polarization charge is a
+  new optional per-node bound charge (`DeviceDescription::bound_charge`, cm^-3, empty: none, bit-identical),
+  added to the Poisson row; device files carry it (key 12) and the run identity hashes it, both only when
+  given. The deck lumps it: on each edge i -> j the sheet (P_i - P_j)(c.e_ij) times the dual face's area,
+  half to each end (all to the semiconductor end beside an insulator or metal, whose P is 0); on the free
+  faces normal to c, P.n times the face area. Side walls (edges normal to c) carry none.
+- Strain: "the thinner on the thicker" generalised: the thickest nitride region along c is the relaxed
+  reference and every other nitride region is pseudomorphic on it, or partly relaxed by its `relaxation =
+  r` (a = a0 + (1 - r)(a_ref - a0)). A graded nitride region's layers each take their own composition, so
+  the grading's bulk charge appears.
+- `c_axis = [-]x|y|z` names the c direction (substrate to surface); default y (x on a 1D mesh).
+  `polarization_scale` scales all of it, interface and surface alike.
+Check: Al0.25Ga0.75N pseudomorphic on GaN gives sigma 0.019361 C/m^2 = 1.208e13 cm^-2 (Ambacher et al.
+report about 1.1-1.3e13 for x = 0.25); a 1D stack at equilibrium holds 1.206e13 cm^-2 electrons in the well.
+
+Step 3, the HEMT and MAC10 (engineer's rulings, reported to the owner):
+- Unit 48 ruling 4 refuses a Schottky contact on a device with a thermionic interface, so the library HEMT
+  (`algan_gan_hemt_2d.deck`, Ni gate as a Schottky contact, barrier 0.83 eV) keeps the engine's continuous
+  interface; at zero gate bias (MAC10, equilibrium) the transport does not enter. Lifting the refusal is the
+  owner's call. Owner test 11 runs on a 1D n-AlGaN/n-GaN stack with ohmic contacts under both transports.
+- `[models] polarization_surface = on | off` (default on, ruling 27 unchanged): off, the free c-faces carry
+  no bound charge, taken as compensated by surface donors. The HEMT deck sets it off, since its bare
+  access surfaces would otherwise carry -3.3e13 cm^-2 and deplete the channel. A metal region cannot touch
+  a semiconductor (MAD6), so a passivation-plus-fixed-charge layout was not used.
+- The deck: source and drain reach the 2DEG from the sides through n+ regions; a lightly p-type buffer
+  (1e15) stands in for a semi-insulating one, over a substrate contact.
+MAC10 (Ambacher's n_s with this model's sigma, dEc, permittivities and GaN mass): 1D gated stack 1.037e13
+against 1.033e13 cm^-2 (+0.4 %); the library deck under the gate's middle 1.010e13 (-2.3 %). Owner test 11:
+zero current at zero bias and the terminal currents cancel to 1e-13 relative, under both transports.
+Owner 2026-11-27: lift Unit 48 ruling 4's refusal of a Schottky contact on a device with a thermionic interface.
+The refusal is removed (assembler and ARCHITECTURE 6.12; the Schottky node's rows are unchanged, a thermionic
+edge at it is an edge like any other). Checks: the 1D gated stack with its interface thermionic, the Schottky
+gate swept 0-0.6 V forward: no current at 0 V, the terminal currents cancel to 1e-8 of the largest at every
+bias; the library HEMT now declares its interface thermionic (ruling 7 as first written): I_D at V_G = 0,
+V_D = 0.1 V is 0.6297 A/cm against 0.6299 continuous (-0.03 %), currents conserved; MAC10 unchanged
+(equilibrium). The assembler test that asserted the refusal now asserts the device assembles.
+Owner 2026-11-27, "choose recommended" for the rest: the HEMT deck keeps `polarization_surface = off` (surface
+donors fully compensating the bare barrier surface) and the lightly p-type buffer over a substrate contact.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a
