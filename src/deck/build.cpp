@@ -324,7 +324,7 @@ std::expected<physics::MaterialParameters, base::Error> Builder::registry_materi
                                                                                    std::vector<double>* composition) const {
     const auto words = tokens(e.value);
     const std::string_view kind = words.front();
-    const physics::MaterialEntry* entry = physics::find_material(kind);
+    const physics::MaterialEntry* entry = physics::find_material(kind, words.size() - 1);
     if (!entry) {
         // MAC13: the nearest registry or [material] name, when it looks like a misspelling.
         std::vector<std::string_view> names;
@@ -446,7 +446,7 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         composition = &e;
     }
     if (composition) {  // Unit 68 (MAQ7a): a graded region
-        const physics::MaterialEntry* entry = physics::find_material(words.front());
+        const physics::MaterialEntry* entry = physics::find_material(words.front(), 1);
         if (!entry || entry->arguments_min != 1 || words.size() != 1) {
             return std::unexpected(at(composition->line, "a graded region names a material that takes a fraction, written "
                                                       "without it (for example 'material = sige_strained')"));
@@ -485,7 +485,7 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         std::vector<double> arguments;
         NITCAD_DECK_TRY(made, registry_material(*material, &arguments));
         params = std::move(made);
-        if (physics::find_material(words.front())->recorded) {
+        if (physics::find_material(words.front(), arguments.size())->recorded) {
             spec.record = results::MaterialRecord{s.name, std::string(words.front()), std::move(arguments), 0};
         }
     }

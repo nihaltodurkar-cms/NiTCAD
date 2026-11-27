@@ -109,7 +109,7 @@ TEST_CASE("semiconductor: every parameter is validated and the error names it") 
          [](P& p) { p.electron_mobility.T_exponent = not_a_number; }},
         {"hole_mobility.mu_min", [](P& p) { p.hole_mobility.mu_min = 600.0; }},  // > mu_max
         {"hole_mobility.N_ref", [](P& p) { p.hole_mobility.N_ref = -infinity; }},
-        {"lifetime.tau_n0", [](P& p) { p.lifetime.tau_n0 = 0.0; }},
+        {"lifetime.tau_n0", [](P& p) { p.lifetime.tau_n0 = -1e-5; }},  // 0: not given (Unit 68 slice 3)
         {"lifetime.tau_p0", [](P& p) { p.lifetime.tau_p0 = -3e-6; }},
         {"lifetime.N_ref", [](P& p) { p.lifetime.N_ref = not_a_number; }},
     };
@@ -130,6 +130,7 @@ TEST_CASE("semiconductor: zero values allowed by the legacy material sets are ac
     p.electron_mobility.mu_min = 0.0;  // legacy GE, GAAS
     p.hole_mobility.mu_min = 0.0;
     p.varshni_beta_K = 0.0;            // legacy SIC_4H
+    p.lifetime.tau_n0 = 0.0;           // Unit 68 slice 3: not given (SRH refuses the material)
     REQUIRE(Semiconductor::create(p).has_value());
 }
 

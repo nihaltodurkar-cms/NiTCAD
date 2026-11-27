@@ -25,11 +25,14 @@ struct FieldMobility {
 [[nodiscard]] FieldMobility canali_mobility(double mu0, double field_V_per_cm,
                                             const CanaliParameters& c);
 
-// The material's Canali parameters for one carrier.
-[[nodiscard]] inline const CanaliParameters& saturation(const Semiconductor& m,
-                                                        Carrier carrier) noexcept {
-    return carrier == Carrier::electron ? m.parameters().electron_saturation
-                                        : m.parameters().hole_saturation;
+// The material's Canali parameters for one carrier at temperature T [K], v_sat by its temperature
+// law (CanaliParameters::temperature_A; unchanged at 300 K and for A = 0).
+[[nodiscard]] inline CanaliParameters saturation(const Semiconductor& m, Carrier carrier,
+                                                 double T = 300.0) noexcept {
+    CanaliParameters c = carrier == Carrier::electron ? m.parameters().electron_saturation
+                                                      : m.parameters().hole_saturation;
+    if (c.temperature_A != 0.0) c.v_sat_cm_s /= 1.0 - c.temperature_A + c.temperature_A * T / 300.0;
+    return c;
 }
 
 }  // namespace NiTCAD::physics

@@ -553,15 +553,19 @@ TEST_CASE("app vocabulary: a mesh patch's form follows the mesh type (Unit 53, F
     CHECK(faced->value == "<x y z>, ...");
 }
 
-// Unit 68 MAD12: the region's material choices are the registry's names, in its order.
+// Unit 68 MAD12: the region's material choices are the registry's names, in its order, each once
+// (slice 3: `ingaas` names two entries).
 TEST_CASE("deck vocabulary: material choices are the material registry", "[vocabulary][unit68]") {
     const app::SectionInfo* region = app::find_section_info("region");
     REQUIRE(region != nullptr);
     const app::KeyInfo* material = app::find_key_info(*region, "material", "");
     REQUIRE(material != nullptr);
-    const auto registry = physics::material_registry();
-    REQUIRE(material->choices.size() == registry.size());
-    for (std::size_t i = 0; i < registry.size(); ++i) REQUIRE(material->choices[i] == registry[i].name);
+    std::vector<std::string_view> names;
+    for (const physics::MaterialEntry& e : physics::material_registry()) {
+        if (std::ranges::find(names, e.name) == names.end()) names.push_back(e.name);
+    }
+    REQUIRE(material->choices.size() == names.size());
+    for (std::size_t i = 0; i < names.size(); ++i) REQUIRE(material->choices[i] == names[i]);
 }
 
 // Unit 68 MAD14: the contact's metal choices are the metal presets, in their order.
