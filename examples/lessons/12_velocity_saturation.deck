@@ -1,0 +1,108 @@
+# lesson: Velocity saturation
+# track: advanced
+# order: 12
+# step: Electrons have a speed limit
+# At low fields an electron's drift velocity grows with the field, v = mu E. At tens of kV/cm it saturates
+# near 1e7 cm/s, as the electrons lose energy to optical phonons as fast as the field gives it. In a short
+# channel at a high drain bias much of the channel runs at that limit. This device: Lg = 0.25 um, Vd = 1 V,
+# the field-dependent mobility on. Run it.
+# do: run
+# show: curves
+# report: Max transconductance, Threshold (max gm)
+# step: Turn the field dependence off
+# Now the mobility ignores the field, as a constant-mobility model would.
+# do: edit [models] field_mobility = off
+# show: geometry
+# step: Run again
+# The same transfer curve with the model changed; the report compares it with the last run.
+# do: run
+# show: curves
+# report: Max transconductance, Threshold (max gm)
+# step: What to see
+# Without velocity saturation the transconductance rises: the constant-mobility model overestimates a short
+# transistor. With saturation, Id_sat grows nearly linearly with Vg - V_th rather than with its square, as
+# real short-channel transistors show.
+
+[parameters]
+# group: Main
+Lg = 0.25um  # Gate length
+tox = 10nm  # Oxide thickness
+Na = 1e17  # Body acceptors (cm^-3)
+Nsd = 1e20  # Source/drain donors (cm^-3)
+phi = 4.1  # Gate work function (eV)
+# group: Biases
+Vd = 1  # Drain bias (V)
+Vg = 1.5  # Gate bias (V)
+Vmax = 2  # Last bias of the swept contact (V)
+# group: Body and contacts
+Lsd = 0.5um  # Source/drain length
+xj = 0.1um  # Junction depth
+tsi = 0.99um  # Silicon depth
+ov = 50nm  # Source/drain overlap under the gate
+lat = 20nm  # Lateral spread of the source/drain
+yc = 0.8um  # Contact bottom
+gc = 5nm  # Contact gap below the oxide
+nx = 51  # Mesh lines along the gate
+# group: Positions (derived)
+x_gate = $Lsd + $Lg  # Gate end
+L = $Lsd + $Lg + $Lsd  # Device length
+x_s = $Lsd + $ov  # Source window end
+x_d = $Lsd + $Lg - $ov  # Drain window start
+y_ox = $tsi + $tox  # Oxide top
+y_ct = $tsi - $gc  # Contact top
+
+[mesh]
+type = tensor
+x = linspace(0, $Lsd, 11) + linspace($Lsd, $x_gate, $nx) + linspace($x_gate, $L, 11)
+y = linspace(0, $yc, 17) + linspace($yc, $tsi, 39) + linspace($tsi, $y_ox, 6)
+straddle y = $tsi 0.5nm
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 $L  $tsi $y_ox
+
+[doping]
+profile = acceptor constant $Na
+profile = donor gaussian $Nsd axis=y center=$tsi width=$xj x=0:$x_s lateral=$lat
+profile = donor gaussian $Nsd axis=y center=$tsi width=$xj x=$x_d:$L lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  $yc $y_ct
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = $L $L  $yc $y_ct
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = $Lsd $x_gate  $y_ox $y_ox
+electrode = metal
+work_function = $phi
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[models]
+field_mobility = on
+surface_mobility = off
+
+[solver]
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate = 0 : $Vmax : 0.05
+contact drain = $Vd
+
+[output]
+sweep = 12_velocity_saturation.nitsweep
+device = 12_velocity_saturation.nitdev
+table = 12_velocity_saturation.csv
