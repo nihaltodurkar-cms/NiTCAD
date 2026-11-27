@@ -1557,6 +1557,7 @@ void MainWindow::sweep_finished() {
     auto r = load_sweep(sweep_text_, document_.path(), s->name, s->values);
     if (!r) {
         log_line(LogLevel::error, "The sweep's results: " + r.error());
+        guide_fail("The sweep's results could not be read: " + r.error());
         return;
     }
     sweep_results_ = std::move(*r);
@@ -1661,6 +1662,11 @@ void MainWindow::guide_report() {
         guide_->set_report(run_report(guide_before_, extracted_figures(*workspace_), step.report));
     }
     if (!step.show.empty()) guide_show(step.show);
+}
+
+void MainWindow::guide_fail(const std::string& why) {
+    if (!guide_ || !std::exchange(guide_pending_, std::nullopt)) return;
+    guide_->set_error(why);
 }
 
 std::vector<std::string> MainWindow::sweep_views() const {
@@ -2923,11 +2929,13 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
     } else if (pending == Pending::run && s == RunState::done) {
         const auto stopped = runner_.stopped_early();
         const double seconds = runner_.elapsed_seconds();
+        bool fresh = false;  // this run's results are in the workspace (a guide report never shows the last run's)
         if (auto taken = runner_.take_results()) {
             auto w = workspace_from_run(std::move(taken->plan), std::move(taken->report));
             if (w) {
                 w->source = document_.path();
                 set_workspace(std::move(*w));
+                fresh = true;
                 select_tab(tab_view);
             } else {
                 set_status(status_state, w.error().message);
@@ -2943,8 +2951,10 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
                                    sw.values.size() == 1 ? "" : "s", seconds, sw.stopped ? " (stopped)" : ""),
                        sw.completed == sw.values.size() ? LogLevel::success : LogLevel::warning);
             sweep_finished();
-        } else {
+        } else if (fresh) {
             guide_report();  // Unit 26p (GU5): a guide step's run
+        } else {
+            guide_fail("The run's results could not be read.");
         }
     }
     if (s == RunState::failed && guide_ && guide_pending_) {
@@ -4052,7 +4062,7 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             GetCursorPos(&p);
             ScreenToClient(hwnd_, &p);
             const auto in = [&](const Rect& r) { return p.x >= r.x - 2 && p.x < r.right() + 2 && p.y >= r.y && p.y < r.bottom(); };
-            if (in(panes_.left_splitter) || in(panes_.right_splitter)) {
+            if (in(panes_.left_splitter) || in(panes_.right_splitter) || (state_.layout.guide_shown && in(panes_.guide_splitter))) {
                 SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
                 return TRUE;
             }
@@ -4069,12 +4079,17 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         const auto in = [&](const Rect& r) { return x >= r.x - 2 && x < r.right() + 2 && y >= r.y && y < r.bottom(); };
         const Rect& c = panes_.console_splitter;
         const bool console = x >= c.x && x < c.right() && y >= c.y - 2 && y < c.bottom() + 2;
-        dragging_splitter_ = in(panes_.left_splitter) ? 1 : in(panes_.right_splitter) ? 2 : console ? 3 : 0;
+        dragging_splitter_ = in(panes_.left_splitter)                         ? 1
+                             : in(panes_.right_splitter)                      ? 2
+                             : console                                        ? 3
+                             : state_.layout.guide_shown && in(panes_.guide_splitter)     ? 4
+                                                                              : 0;
         if (dragging_splitter_) {
             SetCapture(hwnd_);
             drag_origin_ = dragging_splitter_ == 3 ? y : x;
             drag_width_ = dragging_splitter_ == 1   ? panes_.tree.width
                           : dragging_splitter_ == 2 ? panes_.inspector.width
+                          : dragging_splitter_ == 4 ? panes_.guide.width
                                                     : panes_.console.height;
         }
         return 0;
@@ -4084,6 +4099,10 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             state_.layout.console_collapsed = false;
             const int height = std::max(drag_width_ - (GET_Y_LPARAM(l) - drag_origin_), scaled(40, dpi_));
             state_.layout.console_height = MulDiv(height, 96, dpi_);
+            layout();
+        } else if (dragging_splitter_ == 4) {  // Unit 26p: left widens the guide; layout caps it at a third
+            const int width = std::max(drag_width_ - (GET_X_LPARAM(l) - drag_origin_), scaled(min_side_96, dpi_));
+            state_.layout.guide_width = MulDiv(width, 96, dpi_);
             layout();
         } else if (dragging_splitter_) {
             const int dx = GET_X_LPARAM(l) - drag_origin_;

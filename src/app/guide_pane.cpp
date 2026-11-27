@@ -149,6 +149,7 @@ std::string GuidePane::position_text() const { return win32::text_of(position_);
 void GuidePane::show_step() {
     const LessonStep* s = current();
     win32::set_text(heading_, s ? s->heading : (lessons_.empty() ? "No lessons found" : "Pick a lesson"));
+    layout();  // the heading's height follows its text
     win32::set_text(prose_, s ? crlf(s->prose) : std::string());
     const std::string label = action_label();
     win32::set_text(action_, label.empty() ? std::string("(nothing to do: read, then Next)") : label);
@@ -171,8 +172,19 @@ void GuidePane::layout() {
     int y = m;
     MoveWindow(picker_, m, y, inner, px(300), TRUE);  // the drop-down's height; the field itself is one row
     y += row + gap;
-    MoveWindow(heading_, m, y, inner, px(22), TRUE);
-    y += px(22) + gap;
+    // The heading as tall as its wrapped text at this width (one row at least).
+    int heading_h = px(22);
+    if (HDC dc = GetDC(heading_)) {
+        HGDIOBJ old = SelectObject(dc, reinterpret_cast<HFONT>(SendMessageW(heading_, WM_GETFONT, 0, 0)));
+        const std::wstring text = win32::widen(heading_text());
+        RECT r{0, 0, inner, 0};
+        DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &r, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        SelectObject(dc, old);
+        ReleaseDC(heading_, dc);
+        heading_h = std::max(heading_h, static_cast<int>(r.bottom) + px(4));
+    }
+    MoveWindow(heading_, m, y, inner, heading_h, TRUE);
+    y += heading_h + gap;
     // From the bottom up: Back / position / Next, the report, its label, the action.
     const int bottom_row = std::max(h - m - row, y);
     const int report_h = px(84);
@@ -202,11 +214,17 @@ LRESULT CALLBACK GuidePane::proc(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
                 else if (from == self->next_) self->go(1);
                 return 0;
             }
-            if (HIWORD(w) == CBN_SELCHANGE && from == self->picker_) {
+            // A lesson opens when the list closes on it, not on each arrow key in the closed field (each open asks
+            // to discard edits and copies a deck); arrows there put the field back to the lesson shown.
+            if (from == self->picker_ && (HIWORD(w) == CBN_CLOSEUP || HIWORD(w) == CBN_SELCHANGE)) {
                 const LRESULT k = SendMessageW(self->picker_, CB_GETCURSEL, 0, 0);
-                if (k >= 0) self->host_.guide_open(static_cast<std::size_t>(k));
+                const bool dropped = SendMessageW(self->picker_, CB_GETDROPPEDSTATE, 0, 0) != 0;
+                if (HIWORD(w) == CBN_SELCHANGE && dropped) return 0;  // browsing the open list
+                if (HIWORD(w) == CBN_CLOSEUP && k >= 0 && static_cast<std::size_t>(k) != self->lesson_) {
+                    self->host_.guide_open(static_cast<std::size_t>(k));
+                }
                 // The host shows the lesson when it opened it; otherwise the picker goes back to the one shown.
-                if (self->current()) SendMessageW(self->picker_, CB_SETCURSEL, self->lesson_, 0);
+                SendMessageW(self->picker_, CB_SETCURSEL, self->current() ? self->lesson_ : static_cast<WPARAM>(-1), 0);
                 return 0;
             }
             break;

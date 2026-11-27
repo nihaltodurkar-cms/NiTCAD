@@ -417,6 +417,7 @@ private:
 
     // Unit 26p (GU3-GU5): the guide pane.
     void guide_report();  // a run or sweep the guide started has ended: its report, the step's tab
+    void guide_fail(const std::string& why);  // a guide step's run ended without results: say so, nothing pending
     void guide_show(const std::string& tab);  // a step's `show`
     void finish_sweep_dialog();
     void sweep_finished();
@@ -543,7 +544,7 @@ private:
     std::vector<KeyItem> key_items_;
 
     // Splitters.
-    int dragging_splitter_ = 0;  // 1 left, 2 right, 3 the console's (a height, along y)
+    int dragging_splitter_ = 0;  // 1 left, 2 right, 3 the console's (a height, along y), 4 the guide's
     int drag_origin_ = 0, drag_width_ = 0;
 };
 
