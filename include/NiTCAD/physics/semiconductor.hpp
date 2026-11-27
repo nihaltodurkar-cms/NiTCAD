@@ -64,6 +64,11 @@ struct CanaliParameters {
     // Mater. Sci. Semicond. Process. 3, 149 (2000), eq (2): v_sat(T) = v_sat / (1 - A + A T / 300),
     // 0 <= A <= 1; 0 (every set before it): temperature independent.
     double temperature_A = 0.0;
+    // Unit 68 slice 4b: gamma > 0 selects the transferred-electron law of Barnes et al. in place of
+    // Canali's (field_mobility.hpp), F_c its critical field [V/cm]; beta and temperature_A are then
+    // 0. All fields 0: not given (owner ruling 1), and the field-dependent models refuse the region.
+    double F_c_V_per_cm = 0.0;
+    double gamma = 0.0;
 
     bool operator==(const CanaliParameters&) const = default;
 };

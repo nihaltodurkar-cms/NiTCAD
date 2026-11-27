@@ -295,7 +295,7 @@ TEST_CASE("material registry: existing names give the existing sets bit for bit"
 
 TEST_CASE("material registry: names unique, arities and usage consistent", "[materials][unit68]") {
     const auto all = material_registry();
-    REQUIRE(all.size() == 39);  // Unit 68 slice 2: gan, aln, inn, algan, ingan; slice 3: nine III-V entries
+    REQUIRE(all.size() == 40);  // Unit 68 slice 2: gan, aln, inn, algan, ingan; slice 3: nine III-V entries; slice 4b ga2o3_beta
     for (std::size_t i = 0; i < all.size(); ++i) {
         CAPTURE(all[i].name);
         // Names unique but `ingaas` (slice 3): its legacy set takes no fraction and its alloy one.
@@ -310,8 +310,8 @@ TEST_CASE("material registry: names unique, arities and usage consistent", "[mat
 TEST_CASE("material registry: parameter paths and values agree (DK7)", "[materials][unit68]") {
     SemiconductorParameters s = silicon_parameters;
     const auto sv = parameter_values(MaterialParameters{s});
-    REQUIRE(sv.size() == 92);  // Unit 68: slice 1 the five alloy_gap paths; slice 2 six exponents, 18 alloy_mobility;
-                               // slice 3 C_mu_hole and the two saturation temperature_A
+    REQUIRE(sv.size() == 96);  // Unit 68: slice 1 the five alloy_gap paths; slice 2 six exponents, 18 alloy_mobility;
+                               // slice 3 C_mu_hole and the two saturation temperature_A; slice 4b the four Barnes fields
     for (const auto& [path, value] : sv) {
         CAPTURE(path);
         double* target = semiconductor_parameter(s, path);

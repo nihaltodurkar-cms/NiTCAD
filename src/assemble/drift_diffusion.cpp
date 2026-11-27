@@ -219,6 +219,27 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             return refuse("gate tunnelling needs a semiconductor region");
         }
     }
+    // Unit 68 slice 4b (owner ruling 1): a saturation law of all zeros is not given; energy balance
+    // is built on the Canali law, so a Barnes law (gamma > 0) is refused there too.
+    if (models.field_mobility || models.energy_balance) {
+        for (const device::Region& r : device.regions()) {
+            if (device::is_insulator(r)) continue;
+            const auto& p = std::get<physics::Semiconductor>(r.material).parameters();
+            for (const auto& [name, c] : {std::pair{"electron", &p.electron_saturation},
+                                          std::pair{"hole", &p.hole_saturation}}) {
+                const char* model = models.energy_balance ? "energy balance" : "field_mobility";
+                if (c->v_sat_cm_s == 0.0) {
+                    return std::unexpected(base::Error{base::ErrorCode::invalid_input, std::string(model) + ": region '" + r.name + "' has no " + name +
+                                  " saturation velocity; give " + name + "_saturation.v_sat_cm_s and .beta "
+                                  "in a [material] section, or switch the model off", {}});
+                }
+                if (models.energy_balance && c->gamma != 0.0) {
+                    return std::unexpected(base::Error{base::ErrorCode::invalid_input, "energy balance: region '" + r.name +
+                                  "' has the Barnes " + std::string(name) + " velocity law, which energy balance does not support", {}});
+                }
+            }
+        }
+    }
     // Unit 68 slice 3: a lifetime of 0 is not given (no transferable value for the material).
     if (models.srh) {
         for (const device::Region& r : device.regions()) {

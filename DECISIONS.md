@@ -5241,6 +5241,35 @@ occupancy factor), so it has no forward band-to-band current and no Esaki peak; 
 diode at 0.25 nm steps with Fermi-Dirac statistics shows only noise (1e-7 A/cm^2) up to diffusion near 0.7 V.
 An energy-resolved forward tunnelling model is a later tunnelling unit's work; MAC11 waits for it.
 
+**Amendment 9 (2026-11-27): slice 4b (beta-Ga2O3, MAD11).** (Amendment 8, slice 4a, is on its own branch.) Values:
+the owner's file `unit68_slice4b_4c_values_2026-11-27.txt` (items 1-23, outside the repo), each with its source;
+read by the engineer: Ghosh and Singisetti, J. Appl. Phys. 122, 035702 (2017), Table I, and J. Appl. Phys. 124,
+085707 (2018), Table I (y = [010]; Fig. 1(a) of the 2017 paper draws y along b). The source-to-parameter table is
+`papers\Unit 68\slice4bc-source-table.txt`. Owner rulings of 2026-11-27:
+(1) a saturation law of all zeros is "not given": `field_mobility` and energy balance refuse the region, naming
+the carrier; (5) the acceptor is Mg, 1.10 eV above E_v; (6) MAC18 for Ga2O3 is a reverse-biased Ni Schottky
+contact with an explicit 1.50 eV barrier (the measured I-V value on (010); the paper is to be named by the owner)
+on 20 um of n- 1e16 over 0.5 um of n+ 1e19; (7) a deck refuses a node of an n-type-only material where acceptors
+exceed donors (`MaterialEntry::n_type_only`); and, on the engineer's recommendations accepted with "go": the
+300 K indirect gap 4.43 eV held at every temperature (no bulk temperature law in hand; Onuma 2016 gives exciton
+energies), and the electrons on Ghosh's [010] Barnes law (new: `CanaliParameters::F_c_V_per_cm` and `gamma`;
+gamma > 0 selects it, gamma >= 2, beta and temperature_A 0; device-file keys 103-106, hashed only when given)
+with the Jang Caughey-Thomas mobility in Ghosh's mu0. Ghosh fitted the law to about 0.5 MV/cm only. Energy
+balance refuses a Barnes law (it is built on Canali's).
+`ga2o3_beta`: eps_r 10.87, chi 4.00, m_e 0.28 (Nc300 derived), m_h 3.4 and mu_p 10 (placeholders), CT 20 / 155 /
+1e18 / 0.8, tau 1.2e-8 s (constant), Si 30 meV, v_sat 1.5e7, F_c 1.54e5 V/cm, gamma 2.47, electron impact
+ionization 2.16e6 / 1.77e7 (one law, no temperature factor, holes none), kappa 0.228 W/(cm K) constant, rho c
+0.49 x 5.95 J/(cm^3 K); Auger, radiative, band-gap narrowing, hole saturation off.
+Checks: the values; Barnes against Ghosh's expression, its derivative against differences, its velocity peak
+(about 2e7 cm/s between 200 and 300 kV/cm, Ghosh Fig. 6); the not-given and Barnes validation; the deck guard and
+its compensation case; the field-mobility refusal.
+**MAC18 not done for beta-Ga2O3.** With the default solver settings the Ni Schottky diode converges at equilibrium
+but Newton stops near 190 V reverse (10 V steps after a ramp; about 0.27 MV/cm at the contact of the 2.4 target).
+Not the bias step (2 V steps stop near 56 V), not the mesh (20 nm throughout stops near 120 V); without SRH it
+stops at 20 V: the hole density in the depletion region (n_i about 1e-18 cm^-3) leaves the hole equation near
+singular, as with `sic_4h_2004` and impact ionization (amendment 8). No tolerance loosened; the check is the
+hidden test `[.ga2o3_mac18]` until the engine handles ultrawide-gap minority carriers.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

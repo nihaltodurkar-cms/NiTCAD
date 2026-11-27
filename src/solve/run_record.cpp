@@ -115,6 +115,10 @@ void material(Digest& d, const physics::SemiconductorParameters& p) {
     // Unit 68 slice 3: the saturation velocity's temperature law, only when given.
     for (const auto& c : {p.electron_saturation, p.hole_saturation}) {
         if (c.temperature_A != 0.0) d.real(c.temperature_A);
+        if (c.gamma != 0.0) {  // slice 4b: the Barnes law, only when given
+            d.real(c.F_c_V_per_cm);
+            d.real(c.gamma);
+        }
     }
 }
 

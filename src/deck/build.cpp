@@ -81,6 +81,7 @@ struct RegionSpec {
     const Entry* overlap = nullptr;      // Unit 26m (MT4): overlap = replace | fill, layered meshes only
     bool fill = false;
     std::optional<results::MaterialRecord> record;  // Unit 68 (MAD3): when the run records its material
+    const physics::MaterialEntry* base = nullptr;   // Unit 68 slice 4b: the registry entry or a [material]'s base
     std::optional<device::Electrode> metal;          // Unit 68 (MAD6): a metal region's electrode
     // Unit 68 (MAQ7a, slice 1): `composition = linear <x_start> <x_end> <axis> <start> <end>`, the
     // material's fraction linear along the axis between the two coordinates (held at the ends
@@ -474,6 +475,7 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         const std::array<double, 1> arg{x0};
         params = *entry->make(arg);
         spec.record = results::MaterialRecord{s.name, std::string(entry->name), {x0}, 0};
+        spec.base = entry;
         spec.grading = std::move(g);
     } else if (const auto user = user_materials_.find(words.front()); user != user_materials_.end()) {
         if (words.size() != 1) {
@@ -481,11 +483,13 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         }
         params = user->second.parameters;
         spec.record = results::MaterialRecord{s.name, user->first, user->second.composition, 0};
+        spec.base = physics::find_material(user->second.base);
     } else {
         std::vector<double> arguments;
         NITCAD_DECK_TRY(made, registry_material(*material, &arguments));
         params = std::move(made);
-        if (physics::find_material(words.front(), arguments.size())->recorded) {
+        spec.base = physics::find_material(words.front(), arguments.size());
+        if (spec.base->recorded) {
             spec.record = results::MaterialRecord{s.name, std::string(words.front()), std::move(arguments), 0};
         }
     }
@@ -2793,6 +2797,16 @@ std::expected<Plan, base::Error> Builder::run() {
     for (const RegionSpec& g : regions_) d.regions.push_back(*g.region);
     NITCAD_DECK_CHECK(build_mesh(d));
     NITCAD_DECK_CHECK(doping(d));
+    // Unit 68 slice 4b (owner ruling 7): an n-type-only material refuses a node whose acceptors exceed
+    // its donors (acceptors only as compensation). Before grading, which appends regions.
+    for (std::size_t i = 0; i < d.node_region.size(); ++i) {
+        const RegionSpec& g = regions_[d.node_region[i]];
+        if (g.base && g.base->n_type_only && d.acceptors[i] > d.donors[i]) {
+            return std::unexpected(at(g.section->line, "region '" + d.regions[d.node_region[i]].name + "': " +
+                                      std::string(g.base->name) + " is n-type only; acceptors (" + std::to_string(d.acceptors[i]) +
+                                      " cm^-3) exceed donors (" + std::to_string(d.donors[i]) + " cm^-3) at node " + std::to_string(i)));
+        }
+    }
     NITCAD_DECK_CHECK(grade(d));
     NITCAD_DECK_CHECK(polarization(d));
     for (const Section& s : d_.sections) {
