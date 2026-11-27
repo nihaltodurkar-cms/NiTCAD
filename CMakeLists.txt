@@ -1253,6 +1253,8 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME app_examples_3d COMMAND nitcad_app_test "[examples3d]")
   add_test(NAME app_window_3d COMMAND nitcad_app_window_test "[selftest3d]")
+  # Unit 26p (GU5): a guide step's sweep of the planar MOSFET and its report.
+  add_test(NAME app_window_guide_run COMMAND nitcad_app_window_test "[.guide_run]")
 endif()
 # WG1 measures the UI thread's message loop against 100 ms, so these files run with no other test beside
 # them: under ctest -j the self-test's loop stalled 494 and 611 ms and its solve ran at half speed.

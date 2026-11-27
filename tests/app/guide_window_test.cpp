@@ -193,3 +193,146 @@ TEST_CASE("guide pane: relayout at the DPI", "[guide_window]") {
         }
     }
 }
+
+// --- the guide in the main window (Task 6: GU4, GU5) -------------------------------------------------
+
+#include "main_window.hpp"
+#include "fixtures.hpp"
+#include "NiTCAD/app/commands.hpp"
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <iterator>
+
+namespace {
+
+namespace fs = std::filesystem;
+
+void pump() {
+    MSG m;
+    while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+}
+
+bool pump_until(const std::function<bool()>& done, double seconds = 600.0) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+    MSG m;
+    while (!done()) {
+        if (std::chrono::steady_clock::now() > end) return false;
+        if (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        } else {
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 5, QS_ALLINPUT);
+        }
+    }
+    return true;
+}
+
+std::string read_file(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+}
+
+// A lesson over the planar MOSFET: set Na, sweep Na, then a step whose set cannot be taken.
+fs::path lesson_examples(const std::string& name) {
+    const fs::path dir = app_test::scratch(name);
+    const std::string deck = read_file(fs::path(NITCAD_EXAMPLES_DIR) / "devices" / "mosfet_2d.deck");
+    fs::create_directories(dir / "lessons");
+    app_test::write(dir / "lessons", "test_lesson.deck",
+                    "# lesson: Test lesson\n# track: basics\n# order: 1\n"
+                    "# step: Set it\n# do: set Na = 3e17\n"
+                    "# step: Sweep it\n# do: sweep Na = 1e16, 1e17\n# show: results\n# report: Threshold (max gm)\n"
+                    "# step: A bad value\n# do: set Na = abc\n" +
+                        deck);
+    return dir;
+}
+
+std::unique_ptr<MainWindow> guide_window(const fs::path& examples) {
+    WindowOptions o;
+    o.adapter = NiTCAD::render::Adapter::warp;
+    o.show = false;
+    o.quit_on_close = false;
+    o.examples_dir = examples;
+    o.examples_copy_dir = examples / "copies";
+    auto w = MainWindow::create(o);
+    REQUIRE(w);
+    return w;
+}
+
+}  // namespace
+
+TEST_CASE("guide window: View > Guide toggles the pane", "[guide_window]") {
+    auto w = guide_window(lesson_examples("guide_toggle"));
+    CHECK(w->guide() == nullptr);
+    w->execute(Command::guide);
+    REQUIRE(w->guide() != nullptr);
+    CHECK((GetWindowLongPtrW(w->guide()->hwnd(), GWL_STYLE) & WS_VISIBLE) != 0);  // the test window itself is hidden
+    CHECK(w->guide()->lessons().size() == 1);
+    w->execute(Command::guide);
+    CHECK((GetWindowLongPtrW(w->guide()->hwnd(), GWL_STYLE) & WS_VISIBLE) == 0);
+}
+
+TEST_CASE("guide window: a lesson opens as a copy", "[guide_window]") {
+    const fs::path ex = lesson_examples("guide_copy");
+    const std::string original = read_file(ex / "lessons" / "test_lesson.deck");
+    auto w = guide_window(ex);
+    w->execute(Command::guide);
+    w->guide_open(0);
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));  // the deck's build after opening it
+    CHECK(w->document().path() == ex / "copies" / "test_lesson.deck");
+    CHECK(w->guide()->heading_text() == "Set it");
+    CHECK(read_file(ex / "lessons" / "test_lesson.deck") == original);
+}
+
+TEST_CASE("guide window: a set edits one line, and Undo takes it back", "[guide_window]") {
+    auto w = guide_window(lesson_examples("guide_set"));
+    w->execute(Command::guide);
+    w->guide_open(0);
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));  // the deck's build after opening it
+    const std::string before = w->deck().text();
+    REQUIRE(before.find("Na = 1e17") != std::string::npos);
+    w->guide()->act();
+    const std::string after = w->deck().text();
+    CHECK(after.find("Na = 3e17") != std::string::npos);
+    CHECK(after.size() == before.size());  // one value of the same length changed, nothing else
+    w->execute(Command::tab_geometry);
+    pump();
+    w->execute(Command::undo);
+    CHECK(w->deck().text() == before);
+}
+
+TEST_CASE("guide window: an action's error keeps the step", "[guide_window]") {
+    auto w = guide_window(lesson_examples("guide_error"));
+    w->execute(Command::guide);
+    w->guide_open(0);
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));  // the deck's build after opening it
+    const std::string before = w->deck().text();
+    w->guide()->go(2);
+    w->guide()->act();
+    CHECK(w->guide()->step() == 2);
+    CHECK(w->guide()->report_text().find("Na") != std::string::npos);
+    CHECK(w->deck().text() == before);
+}
+
+TEST_CASE("guide window: a sweep runs, the action waits for it, the report follows (GU5)", "[.guide_run]") {
+    auto w = guide_window(lesson_examples("guide_sweep"));
+    w->execute(Command::guide);
+    w->guide_open(0);
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));  // the deck's build after opening it
+    w->guide()->go(1);
+    w->guide()->act();
+    REQUIRE(w->runner().sweep());
+    CHECK(w->runner().sweep()->name == "Na");
+    CHECK(w->runner().busy());
+    CHECK_FALSE(IsWindowEnabled(w->guide()->action_button()));
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->sweep_results() != nullptr; }));
+    pump();
+    CHECK(IsWindowEnabled(w->guide()->action_button()));
+    CHECK(w->guide()->report_text().starts_with("Threshold (max gm): "));
+    CHECK(w->tab() == MainWindow::tab_results);
+}

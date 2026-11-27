@@ -2182,3 +2182,14 @@ bool GeometryPage::dimension_up() {
 }
 
 }  // namespace NiTCAD::app
+
+namespace NiTCAD::app {
+
+void GeometryPage::edit_text(const std::string& text) {
+    history_.record(host_.geometry_deck());  // one undo for the edit
+    apply_text(text);
+    reload_dimensions();
+    invalidate();
+}
+
+}  // namespace NiTCAD::app
