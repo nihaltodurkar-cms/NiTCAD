@@ -5314,14 +5314,16 @@ solves J D du = -F, D the diagonal of the column scales (a density's own value, 
 du is the step in ln n; each row is then divided by its largest entry (row equilibration; the solution is
 unchanged by it). A density is updated as n exp(dn / n) with dn / n within +-ln 10, the same factor-10 bound as
 the plain step, so it stays positive and cannot underflow from a bounded step; the update size measures |dn| / n
-with no floor. The equations, statistics and residual are unchanged: no n_i floor, no doping, no injection.
+with no floor (with impact ionization its 1e-8 floor stays: measured, with no floor the SiC diode below does
+not converge at 10 V, the minority rows limited by the rounding of the generation, as Unit 19 found). The equations, statistics and residual are unchanged: no n_i floor, no doping, no injection.
 Off by default, every existing result bit-identical; refused with the line search (whose trials reuse the
 unscaled Jacobian). Owner ruling 2026-11-27: MAC18 may switch it on and still counts as default settings
 otherwise. Checks: the Ga2O3 MAC18 diode now reaches 1750 V, peak field 2.414 MV/cm (target 2.4; visible test,
 8 s); at 0-10 V the potential agrees with the plain step to 1e-9 V and the electrons above 1e6 cm^-3 to 1e-6
-relative; at 0 V n p is constant to 1e-6 across the device through 50 decades of holes. Open: SiC with impact
-ionization (`[.sic_impact]`, physics/materials-sic-ii, not merged) and diamond MAC18 (not registered) are to
-be run with it when those branches meet this one.
+relative; at 0 V n p is constant to 1e-6 across the device through 50 decades of holes. SiC with impact ionization
+(`[.sic_impact]`, physics/materials-sic-ii, unmerged; run on a temporary uncommitted pick of c426214): with the
+step on, the p+ n diode settles at 90 % of breakdown (560 V; about 150 V without it). To be made visible with
+the step on when that branch meets this one. Open: diamond MAC18 (not registered).
 
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain

@@ -1638,8 +1638,9 @@ double System::update_size(std::span<const double> x, std::span<const double> dx
             continue;
         }
         const double n = x[data_->m_ * i + 1], p = x[data_->m_ * i + 2];
-        // The log-density step (amendment 11) resolves every density to its own size: no floor.
-        const double local = state_->log_densities_  ? 0.0
+        // The log-density step (amendment 11) resolves every density to its own size: no floor, but with
+        // impact ionization the generation rounding above still limits a deep minority, so its floor stays.
+        const double local = state_->log_densities_  ? (data_->generation_ ? floor : 0.0)
                              : state_->minority_floor_ ? std::max(floor, eps * std::max(n, p))
                                                        : floor;
         size =
