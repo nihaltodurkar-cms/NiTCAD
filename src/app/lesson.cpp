@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -235,7 +237,62 @@ std::expected<std::string, std::string> set_entry(std::string_view deck_text, st
     return out;
 }
 
-std::string sweep_report(const SweepResults&, const SweepFigures&, const std::vector<std::string>&) { return {}; }
-std::string run_report(const std::vector<Figure>&, const std::vector<Figure>&, const std::vector<std::string>&) { return {}; }
+namespace {
+
+constexpr std::string_view arrow = " \xE2\x86\x92 ", dash = "\xE2\x80\x94";  // " → ", "—"
+
+std::string number(double v) { return std::isfinite(v) ? std::format("{:.3g}", v) : std::string(dash); }
+
+std::string with_unit(std::string line, std::string_view unit) {
+    if (!unit.empty()) line += " " + std::string(unit);
+    return line;
+}
+
+const Figure* find_figure(const std::vector<Figure>& fs, std::string_view name) {
+    const auto it = std::ranges::find(fs, name, &Figure::name);
+    return it == fs.end() ? nullptr : &*it;
+}
+
+void append_line(std::string& out, const std::string& line) {
+    if (!out.empty()) out += '\n';
+    out += line;
+}
+
+}  // namespace
+
+std::string sweep_report(const SweepResults& s, const SweepFigures& f, const std::vector<std::string>& figures) {
+    std::string out;
+    for (const std::string& name : figures) {
+        const auto col = std::ranges::find(f.names, name);
+        if (col == f.names.end()) {
+            append_line(out, name + ": " + std::string(dash));
+            continue;
+        }
+        const auto j = static_cast<std::size_t>(col - f.names.begin());
+        std::string line = name + ": ";
+        for (std::size_t i = 0; i < s.runs.size(); ++i) {
+            if (i > 0) line += arrow;
+            const auto row = std::ranges::find(f.runs, i);
+            line += row == f.runs.end() ? std::string(dash) : number(f.rows[static_cast<std::size_t>(row - f.runs.begin())][j]);
+        }
+        append_line(out, with_unit(std::move(line), f.units[j]));
+    }
+    return out;
+}
+
+std::string run_report(const std::vector<Figure>& before, const std::vector<Figure>& after,
+                       const std::vector<std::string>& figures) {
+    std::string out;
+    for (const std::string& name : figures) {
+        const Figure* a = find_figure(after, name);
+        if (!a) {
+            append_line(out, name + ": " + std::string(dash));
+            continue;
+        }
+        const Figure* b = find_figure(before, name);
+        append_line(out, with_unit(name + ": " + (b ? number(b->value) + std::string(arrow) : std::string()) + number(a->value), a->unit));
+    }
+    return out;
+}
 
 }  // namespace NiTCAD::app

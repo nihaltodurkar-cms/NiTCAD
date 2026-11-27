@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -123,4 +124,58 @@ TEST_CASE("lesson: set_entry changes one line", "[lesson]") {
     CHECK(out->find("Na = 1e16  # body acceptors") != std::string::npos);
     CHECK_FALSE(set_entry(body, "models", "auger", "on"));
     CHECK_FALSE(set_entry(body, "solver", "max_cuts", "6"));
+}
+
+namespace {
+
+// Three runs of a sweep; the figures of those loaded (the runs' indices), by hand.
+SweepResults three_runs() {
+    SweepResults s;
+    s.name = "Na";
+    s.runs.resize(3);
+    s.runs[0].value = "1e16";
+    s.runs[1].value = "1e17";
+    s.runs[2].value = "1e18";
+    return s;
+}
+
+SweepFigures figures(std::vector<std::size_t> runs, std::vector<std::vector<double>> rows) {
+    SweepFigures f;
+    f.names = {"Threshold (max gm)", "On/off ratio"};
+    f.units = {"V", ""};
+    f.runs = std::move(runs);
+    f.rows = std::move(rows);
+    return f;
+}
+
+}  // namespace
+
+TEST_CASE("lesson: sweep report lists values in order (GU5)", "[lesson]") {
+    const auto f = figures({0, 1, 2}, {{0.31, 1.2e6}, {0.58, 3e7}, {0.92, 4.5e8}});
+    CHECK(sweep_report(three_runs(), f, {"Threshold (max gm)"}) == "Threshold (max gm): 0.31 → 0.58 → 0.92 V");
+    CHECK(sweep_report(three_runs(), f, {"Threshold (max gm)", "On/off ratio"}) ==
+          "Threshold (max gm): 0.31 → 0.58 → 0.92 V\nOn/off ratio: 1.2e+06 → 3e+07 → 4.5e+08");
+}
+
+TEST_CASE("lesson: report with a failed run (GU5)", "[lesson]") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const auto f = figures({0, 2}, {{0.31, nan}, {0.92, 4.5e8}});  // run 1 did not load; run 0 has no on/off
+    CHECK(sweep_report(three_runs(), f, {"Threshold (max gm)", "On/off ratio"}) ==
+          "Threshold (max gm): 0.31 → — → 0.92 V\nOn/off ratio: — → — → 4.5e+08");
+}
+
+TEST_CASE("lesson: a figure no run has (GU5)", "[lesson]") {
+    const auto f = figures({0, 1, 2}, {{0.31, 1e6}, {0.58, 1e6}, {0.92, 1e6}});
+    CHECK(sweep_report(three_runs(), f, {"Subthreshold swing"}) == "Subthreshold swing: —");
+    CHECK(run_report({}, {}, {"Subthreshold swing"}) == "Subthreshold swing: —");
+}
+
+TEST_CASE("lesson: run report before and after (GU5)", "[lesson]") {
+    const std::vector<Figure> before{{.name = "Subthreshold swing", .value = 88.0, .unit = "mV/dec"}};
+    const std::vector<Figure> after{{.name = "Subthreshold swing", .value = 71.04, .unit = "mV/dec"},
+                                    {.name = "Threshold (max gm)", .value = 0.4567, .unit = "V"}};
+    CHECK(run_report(before, after, {"Subthreshold swing"}) == "Subthreshold swing: 88 → 71 mV/dec");
+    CHECK(run_report({}, after, {"Threshold (max gm)"}) == "Threshold (max gm): 0.457 V");  // no run before
+    CHECK(run_report(before, after, {"Subthreshold swing", "Threshold (max gm)"}) ==
+          "Subthreshold swing: 88 → 71 mV/dec\nThreshold (max gm): 0.457 V");
 }
