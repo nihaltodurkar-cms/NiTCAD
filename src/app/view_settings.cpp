@@ -435,6 +435,10 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
             apply_camera(*f, o);
             set_look(*f, o.enhanced ? Look::enhanced : Look::classic);  // Unit 26f (KD5): after every overlay
             f->show_axis_box = o.axis_box;  // Unit 26h (JD1, JQ3)
+            if (o.aurora) {  // white over a soft lavender, as the theme's canvas
+                f->background_top = {1.0f, 1.0f, 1.0f};
+                f->background_bottom = {0.90f, 0.92f, 0.98f};
+            }
         }
         return scene;
     };

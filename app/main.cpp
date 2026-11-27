@@ -3,7 +3,7 @@
 //
 //   nitcad-app [<deck>] [--adapter auto|gpu|warp] [--debug-layer]
 //   nitcad-app --self-test <deck> --out <image.png> [view options]   (self_test.hpp; exit 0, 1, 64 or 77)
-//   nitcad-app --capture <image.png> <deck> [--size <w>x<h>]   (the window drawn into a PNG, off-screen; 1600x968)
+//   nitcad-app --capture <image.png> <deck> [--size <w>x<h>] [--aurora]   (the window drawn into a PNG, off-screen; 1600x968)
 //
 // Per-monitor DPI aware (v2); the common controls of version 6.
 // The application's headers come first: objbase.h defines `interface` as a macro, which a member of that
@@ -52,7 +52,7 @@ int fail(const std::string& message) {
 // the PNG. Its client area is copied by PrintWindow from its own window (not the screen: no other application is in
 // the image), and the device view, a Direct3D swap chain PrintWindow does not see, is the renderer's read-back image
 // put in its place. The deck is opened as the application opens it (its results when its run wrote them).
-int capture(const std::filesystem::path& png, const std::filesystem::path& deck, int width, int height) {
+int capture(const std::filesystem::path& png, const std::filesystem::path& deck, int width, int height, bool aurora) {
     using namespace NiTCAD;
     app::WindowOptions options;
     options.show = false;
@@ -89,6 +89,7 @@ int capture(const std::filesystem::path& png, const std::filesystem::path& deck,
         }
         return done();
     };
+    if (aurora) window->execute(app::Command::aurora_theme);  // no state file here: nothing is saved
     if (!window->open_deck(deck)) return fail("cannot open " + deck.string() + ": " + window->status(0));
     // A deck that does not build ends the wait at once (as --self-test's), not after the time limit.
     const auto failed = [&] { return window->runner().state() == app::RunState::failed; };
@@ -197,7 +198,7 @@ int usage(const std::wstring& message) {
     MessageBoxW(nullptr,
                 (message + L"\n\nnitcad-app [<deck>] [--adapter auto|gpu|warp] [--debug-layer]\n"
                            L"nitcad-app --self-test <deck> --out <image.png> [view options]\n"
-                           L"nitcad-app --capture <image.png> <deck> [--size <w>x<h>]")
+                           L"nitcad-app --capture <image.png> <deck> [--size <w>x<h>] [--aurora]")
                     .c_str(),
                 L"NiTCAD", MB_ICONERROR);
     return 64;
@@ -235,14 +236,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if (!args.empty() && args[0] == L"--capture") {
         attach_parent_console();
         int width = 1600, height = 968;
+        const bool aurora = !args.empty() && args.back() == L"--aurora";  // the Aurora theme (View > Aurora theme)
+        if (aurora) args.pop_back();
         const bool sized = args.size() == 5 && args[3] == L"--size";
         if (!(args.size() == 3 || sized) || (sized && !parse_size(args[4], width, height))) {
-            std::fprintf(stdout, "usage: nitcad-app --capture <image.png> <deck> [--size <w>x<h>] (w, h > 0)\n");
+            std::fprintf(stdout, "usage: nitcad-app --capture <image.png> <deck> [--size <w>x<h>] [--aurora] (w, h > 0)\n");
             std::fflush(stdout);
             CoUninitialize();
             return 64;
         }
-        const int status = capture(args[1], args[2], width, height);
+        const int status = capture(args[1], args[2], width, height, aurora);
         CoUninitialize();
         return status;
     }

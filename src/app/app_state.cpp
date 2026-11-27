@@ -65,6 +65,7 @@ std::string serialize(const AppState& s) {
     out += "hover_readout = " + std::string(s.hover_readout ? "1" : "0") + "\n";
     out += "enhanced_look = " + std::string(s.enhanced_look ? "1" : "0") + "\n";
     out += "axis_box = " + std::string(s.axis_box ? "1" : "0") + "\n";
+    out += "aurora = " + std::string(s.aurora ? "1" : "0") + "\n";
     return out;
 }
 
@@ -124,6 +125,8 @@ AppState parse_state(std::string_view text) {
             s.enhanced_look = v != 0;
         } else if (key == "axis_box" && integer(value, v)) {
             s.axis_box = v != 0;
+        } else if (key == "aurora" && integer(value, v)) {
+            s.aurora = v != 0;
         }
     }
     return s;

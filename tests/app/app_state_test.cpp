@@ -104,3 +104,14 @@ TEST_CASE("app state 26p: the guide pane's place is saved; old files have it hid
     CHECK(old.layout.guide_width == 0);
     CHECK(app::parse_state("guide_width = -4\n").layout.guide_width == 0);
 }
+
+TEST_CASE("app state: the Aurora theme is saved; old files have it off", "[app]") {
+    CHECK_FALSE(app::parse_state("# NiTCAD application state\nrecent = a.deck\n").aurora);
+    app::AppState s;
+    CHECK_FALSE(s.aurora);
+    s.aurora = true;
+    CHECK(app::serialize(s).find("aurora = 1\n") != std::string::npos);
+    CHECK(app::parse_state(app::serialize(s)).aurora);
+    s.aurora = false;
+    CHECK_FALSE(app::parse_state(app::serialize(s)).aurora);
+}
