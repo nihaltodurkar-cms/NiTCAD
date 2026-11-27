@@ -186,6 +186,7 @@ template <NewtonSystem System>
     // simplified correction.
     std::vector<double> x0, x1, f_trial, dx_bar;
     std::vector<double> scale;  // the residual test's row scales s_i (LineSearch)
+    std::vector<double> column_scale;  // the log-density step's column scales (amendment 11)
     if (search.enabled) {
         f_trial.resize(n);
         dx_bar.resize(n);
@@ -224,6 +225,33 @@ template <NewtonSystem System>
             residual = std::max(residual, std::abs(f[i]));
             rhs[i] = -f[i];
         }
+        // The log-density step (assemble::set_log_densities, amendment 11): J D (D^-1 dx) = -F with
+        // D the system's column scales, each row then divided by its largest entry; dx = D du.
+        bool scaled = false;
+        if constexpr (requires { system.log_density_scales(x, std::span<double>{}); }) {
+            column_scale.resize(n);
+            scaled = system.log_density_scales(x, column_scale);
+            if (scaled) {
+                if (search.enabled) {
+                    return invalid("the log-density step does not support the line search", 0.0);
+                }
+                const auto offsets = jacobian.row_offsets();
+                const auto indices = jacobian.col_indices();
+                const auto values = jacobian.values();
+                for (std::size_t r = 0; r < n; ++r) {
+                    const auto begin = static_cast<std::size_t>(offsets[r]);
+                    const auto end = static_cast<std::size_t>(offsets[r + 1]);
+                    double largest = 0.0;
+                    for (std::size_t k = begin; k < end; ++k) {
+                        values[k] *= column_scale[static_cast<std::size_t>(indices[k])];
+                        largest = std::max(largest, std::abs(values[k]));
+                    }
+                    const double row = largest > 0.0 && std::isfinite(largest) ? 1.0 / largest : 1.0;
+                    for (std::size_t k = begin; k < end; ++k) values[k] *= row;
+                    rhs[r] *= row;
+                }
+            }
+        }
         auto factored = solver.factorize(jacobian);
         if (!factored) {
             base::Error e = std::move(factored.error());
@@ -241,6 +269,9 @@ template <NewtonSystem System>
             base::Error e = std::move(solved.error());
             e.message = "Newton iteration " + std::to_string(iteration) + ": " + e.message;
             return std::unexpected(std::move(e));
+        }
+        if (scaled) {
+            for (std::size_t i = 0; i < n; ++i) dx[i] *= column_scale[i];
         }
         const std::span<const double> step = dx;
         const double update = measure(x, step);

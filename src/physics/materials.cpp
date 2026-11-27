@@ -1,6 +1,7 @@
 #include "NiTCAD/physics/materials.hpp"
 
 #include "NiTCAD/physics/iii_v.hpp"
+#include "NiTCAD/physics/gallium_oxide.hpp"
 #include "NiTCAD/physics/nitrides.hpp"
 #include "NiTCAD/physics/sige.hpp"
 
@@ -46,7 +47,8 @@ namespace {
     NITCAD_CT_EXPONENTS(X, hole_mobility) X(alloy_mobility.fraction)                           \
     X(alloy_mobility.C_mu_electron) NITCAD_CT(X, alloy_mobility.electron_b)                    \
     NITCAD_CT(X, alloy_mobility.hole_b) NITCAD_THERMAL_PARAMETERS(X) X(alloy_mobility.C_mu_hole)  \
-    X(electron_saturation.temperature_A) X(hole_saturation.temperature_A)
+    X(electron_saturation.temperature_A) X(hole_saturation.temperature_A) X(electron_saturation.F_c_V_per_cm) \
+    X(electron_saturation.gamma) X(hole_saturation.F_c_V_per_cm) X(hole_saturation.gamma)
 
 // Unit 51 (GD5, GD10): an insulator's gate-tunnelling band data after its permittivity and heat.
 #define NITCAD_INSULATOR_PARAMETERS(X)                                                         \
@@ -509,6 +511,44 @@ std::expected<MaterialParameters, base::Error> iii_v_binary(std::span<const doub
     return make();
 }
 
+// --- beta-Ga2O3 (MAD11; slice 4b, amendment 9) -------------------------------------------------
+
+// The owner's values of 2026-11-27, each from its source; [010] throughout (owner ruling 2).
+constexpr std::array<Citation, 12> ga2o3_sources{{
+    {"C. Fiedler et al., ECS J. Solid State Sci. Technol. 8, Q3083 (2019)", "eps_r perpendicular to (010), 10.87"},
+    {"T. Onuma et al., Jpn. J. Appl. Phys. 54, 112601 (2015); M. Higashiwaki et al., AAPPS Bull. 32, 3 (2022)",
+     "300 K indirect gap 4.43 eV, held at every temperature (no bulk temperature law in hand)"},
+    {"Y. Mohamed et al., Appl. Phys. Lett. 101, 132106 (2012)", "electron affinity 4.00 eV"},
+    {"M. Higashiwaki et al., AAPPS Bull. 32, 3 (2022)", "electron DOS mass 0.28, one valley"},
+    {"Li et al., Nanomaterials 16, 961 (2026), Table 1", "hole DOS mass 3.4, a minority-carrier placeholder"},
+    {"Jang, Atmaca, Cha, Micromachines 13, 1185 (2022)",
+     "electron Caughey-Thomas mobility (300 K, no temperature exponents); SRH lifetimes 1.2e-8 s"},
+    {"RSC Advances (2026), doi:10.1039/D6RA02684B, Table 1", "hole mobility 10, constant, a placeholder"},
+    {"K. Ghosh, U. Singisetti, J. Appl. Phys. 122, 035702 (2017), Table I, y = [010]",
+     "electron Barnes law: v_sat 1.5e7 cm/s, F_c 1.54e5 V/cm, gamma 2.47 (fitted to about 0.5 MV/cm)"},
+    {"K. Ghosh, U. Singisetti, J. Appl. Phys. 124, 085707 (2018), Table I, y = [010]",
+     "electron impact ionization A 2.16e6 /cm, B 1.77e7 V/cm (fitted 1-8 MV/cm); holes none"},
+    {"A. T. Neal et al., Appl. Phys. Lett. 113, 062101 (2018)", "Si donor 30 meV; Mg acceptor 1.10 eV above E_v"},
+    {"Crystals 15, 909 (2025)", "[010] thermal conductivity 0.228 W/(cm K); c_p 0.49 J/(g K) times rho 5.95 g/cm^3"},
+    {"NiTCAD: no value given (owner rulings 2026-11-27)",
+     "off: gap temperature law, Auger, radiative, band-gap narrowing, hole saturation law, hole impact ionization, "
+     "impact-ionization temperature factor, band-to-band tunnelling, thermal-conductivity exponent"},
+}};
+constexpr auto ga2o3_cites = semiconductor_cites(
+    {11, "default"}, std::array<ParameterCitation, 14>{{{"eps_r", 0, "measured"},
+                                                        {"Eg0_eV", 1, "approximate"},
+                                                        {"electron_affinity_eV", 2, "measured"},
+                                                        {"Nc300", 3, "derived"},
+                                                        {"Nv300", 4, "approximate"},
+                                                        {"electron_mobility.", 5, "fit"},
+                                                        {"lifetime.", 5, "secondary"},
+                                                        {"hole_mobility.", 6, "approximate"},
+                                                        {"electron_saturation.", 7, "fit"},
+                                                        {"impact_ionization.electron.", 8, "fit"},
+                                                        {"impact_ionization.electron.switch_V_per_cm", 11, "default"},
+                                                        {"ionization.", 9, "measured"},
+                                                        {"thermal.conductivity_W_cmK", 10, "measured"},
+                                                        {"thermal.heat_capacity_J_cm3K", 10, "derived"}}});
 // --- 4H-SiC with impact ionization (MAD11; slice 4a, amendment 8) ------------------------------
 
 // `sic_4h` and the <0001> Chynoweth law of Hatakeyama et al. (owner rulings 2026-11-27): one law
@@ -539,7 +579,7 @@ constexpr auto sic_2004_cites = semiconductor_cites(
                                                       {"impact_ionization.hole.switch_V_per_cm", 3, "default"},
                                                       {"impact_ionization.phonon_energy_eV", 3, "default"}}});
 
-constexpr std::array<MaterialEntry, 40> registry{{
+constexpr std::array<MaterialEntry, 41> registry{{
     {"silicon", MaterialKind::semiconductor, 0, 0, "", "silicon, Couderc band set (default)", silicon_sources,
      fixed_semiconductor<silicon_parameters>},
     {"silicon_legacy", MaterialKind::semiconductor, 0, 0, "", "silicon, the legacy set", legacy_silicon_sources,
@@ -622,6 +662,8 @@ constexpr std::array<MaterialEntry, 40> registry{{
     {"inalas", MaterialKind::semiconductor, 1, 1, "inalas takes the In fraction x, 0 <= x <= 1",
      "In(x)Al(1-x)As between AlAs (x = 0) and InAs (x = 1) (no SRH lifetimes)", iii_v_sources,
      nitride_alloy<inalas_parameters>, iii_v_alloy_cites, true},
+    {"ga2o3_beta", MaterialKind::semiconductor, 0, 0, "", "beta-Ga2O3 along [010], n-type only (300 K gap; Barnes electron law)",
+     ga2o3_sources, nitride_binary<ga2o3_beta_parameters>, ga2o3_cites, true, true},
     {"sic_4h_2004", MaterialKind::semiconductor, 0, 0, "",
      "4H-SiC with Hatakeyama 2004 impact ionization along <0001> (c-axis; 300 K coefficients)", sic_2004_sources,
      fixed_semiconductor<silicon_carbide_4h_2004_parameters>, sic_2004_cites, true},
@@ -740,10 +782,12 @@ std::uint64_t parameter_hash(const MaterialParameters& m) {
     bytes(&kind, 1);
     // Paths added after slice 0 enter only when nonzero, so a set's hash does not move when the
     // parameter list grows (MAC1): the alloy gap (slice 1), the alloy mobility and the
-    // Caughey-Thomas exponents (slice 2), the saturation velocity's temperature law (slice 3).
+    // Caughey-Thomas exponents (slice 2), the saturation velocity's temperature law (slice 3), the Barnes law
+    // (slice 4b).
     const auto added_later = [](std::string_view p) {
         return p.starts_with("alloy_gap.") || p.starts_with("alloy_mobility.") || p.ends_with(".mu_min_T_exponent") ||
-               p.ends_with(".N_ref_T_exponent") || p.ends_with(".alpha_T_exponent") || p.ends_with(".temperature_A");
+               p.ends_with(".N_ref_T_exponent") || p.ends_with(".alpha_T_exponent") || p.ends_with(".temperature_A") ||
+               p.ends_with(".F_c_V_per_cm") || p.ends_with(".gamma");
     };
     for (const auto& [path, v] : parameter_values(m)) {
         if (v == 0.0 && added_later(path)) continue;

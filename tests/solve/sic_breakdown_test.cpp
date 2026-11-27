@@ -97,16 +97,15 @@ TEST_CASE("sic_4h_2004: a p+ n diode breaks down within 10 % of Hatakeyama's (00
     CHECK(std::abs(V_bd / target - 1.0) <= 0.10);
 }
 
-// Open (amendment 8): with impact ionization on, the same diode does not settle past about 150 V
-// (Newton stalls with the step cut to 2^-20), far below breakdown: at 4H-SiC's leakage (n_i about
-// 1e-8 cm^-3) the currents the ionization rate multiplies are near zero. Hidden until the engine
-// handles it; run with [.sic_impact].
-TEST_CASE("sic_4h_2004: the p+ n diode with impact ionization on settles at 90 % of breakdown", "[.sic_impact]") {
+// Amendments 8, 11: with impact ionization on and the plain Newton step the diode does not settle past about
+// 150 V (n_i about 1e-8 cm^-3: the minority rows unresolved); with the log-density step it reaches 90 %.
+TEST_CASE("sic_4h_2004: the p+ n diode with impact ionization on settles at 90 % of breakdown", "[sic][unit68]") {
     const device::Device d = diode();
     const double V_bd = 623.0;  // the ionization-integral breakdown of the test above
     solve::BiasOptions on;
     on.models.impact_ionization = true;
     on.step_control.max_cuts = 20;
+    on.log_densities = true;  // amendment 11
     std::vector<std::vector<double>> up;
     for (double V = 0.0; V <= 0.9 * V_bd; V += 10.0) up.push_back({-V, 0.0});
     up.push_back({-0.9 * V_bd, 0.0});

@@ -17,12 +17,12 @@ using Words = std::span<const std::string_view>;
 constexpr std::array<std::string_view, 2> on_off{"on", "off"};
 constexpr std::array<std::string_view, 2> overlap_rules{"replace", "fill"};
 constexpr std::array<std::string_view, 5> mesh_types{"tensor", "generate2d", "generate3d", "extrude3d", "file"};
-constexpr std::array<std::string_view, 39> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas", "sic_4h",
+constexpr std::array<std::string_view, 40> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas", "sic_4h",
                                                      "algaas", "sio2", "insulator", "metal", "hfo2", "al2o3", "si3n4",
                                                      "zro2", "la2o3", "tio2", "ta2o5", "mgo", "aln_dielectric",
                                                      "sapphire", "hbn", "sion", "sige", "sige_strained", "si_strained",
                                                      "gan", "aln", "inn", "algan", "ingan", "gaas_2001", "inp", "inas", "gap",
-                                                     "alas", "gasb", "insb", "inalas", "sic_4h_2004"};
+                                                     "alas", "gasb", "insb", "inalas", "ga2o3_beta", "sic_4h_2004"};
 constexpr std::array<std::string_view, 2> dopants{"donor", "acceptor"};
 constexpr std::array<std::string_view, 3> shapes{"constant", "gaussian", "erfc"};
 constexpr std::array<std::string_view, 4> contact_kinds{"ohmic", "gate", "electrode", "schottky"};
@@ -205,7 +205,7 @@ constexpr std::array<KeyInfo, 32> model_keys{{
     {"energy_balance", 0, false, "off", "carrier temperatures (energy balance)", on_off, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 32> solver_keys{{
+constexpr std::array<KeyInfo, 33> solver_keys{{
     {"equations", 0, false, "drift_diffusion", "drift_diffusion | equilibrium_poisson", equations, {}, {}},
     {"max_iterations", 0, false, "100", "Newton iterations per point", {}, {}, {}},
     {"tol_update", 0, false, "1e-8", "convergence: largest scaled update", {}, {}, {}},
@@ -238,6 +238,7 @@ constexpr std::array<KeyInfo, 32> solver_keys{{
     {"weighted_current", 0, false, "off", "weighted terminal current", on_off, {}, {}},
     {"rates", 0, false, "on", "store generation-recombination rates", on_off, {}, {}},
     {"minority_floor", 0, false, "off", "densities against eps of the majority", on_off, {}, {}},
+    {"log_densities", 0, false, "off", "Newton steps densities in ln n (ultrawide gaps)", on_off, {}, {}},
 }};
 
 constexpr std::array<KeyInfo, 4> sweep_keys{{

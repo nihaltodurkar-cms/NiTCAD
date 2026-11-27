@@ -306,6 +306,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
     auto system = assemble::System::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
     set_minority_floor(*system, steady.minority_floor);
+    set_log_densities(*system, steady.log_densities);
     assemble::System& dd = *system;
     // Unit 32: the weighted current of every traced point (the first comes from sweep_bias).
     std::optional<detail::WeightedCurrents> weighted;

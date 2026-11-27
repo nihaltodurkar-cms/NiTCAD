@@ -40,6 +40,7 @@ std::expected<System, base::Error> make_system(const device::Device& device, con
     if (!dd) return std::unexpected(dd.error());
     s.dd.emplace(std::move(*dd));
     set_minority_floor(*s.dd, options.minority_floor);
+    set_log_densities(*s.dd, options.log_densities);
     if (auto ok = s.dd->set_bias(bias_V); !ok) return std::unexpected(ok.error());
     return s;
 }

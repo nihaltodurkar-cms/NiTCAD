@@ -62,6 +62,9 @@ struct MaterialEntry {
     // Whether a run records a region of this material (RunRecord::materials). False for the names
     // before Unit 68, so their result files do not change (MAC1); true for every material it adds.
     bool recorded = false;
+    // Unit 68 slice 4b (owner ruling 7): a deck refuses a node of this material whose acceptors exceed
+    // its donors (acceptors only as compensation). beta-Ga2O3.
+    bool n_type_only = false;
 };
 
 // Every registry entry, in listing order.

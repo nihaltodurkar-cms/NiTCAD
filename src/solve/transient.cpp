@@ -292,6 +292,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     auto system = assemble::System::create(device, *scaling, models);
     if (!system) return std::unexpected(std::move(system.error()));
     set_minority_floor(*system, steady.minority_floor);
+    set_log_densities(*system, steady.log_densities);
     if (thermal) (void)set_thermal_bias(*system, thermal_bias);  // checked
     const assemble::System& dd = *system;
 

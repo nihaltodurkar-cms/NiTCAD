@@ -48,7 +48,7 @@ constexpr std::array<KeySpec, 28> model_keys{{
     {"energy_balance", "off", "carrier temperatures (energy balance)"},
 }};
 
-constexpr std::array<KeySpec, 30> solver_keys{{
+constexpr std::array<KeySpec, 31> solver_keys{{
     {"equations", "drift_diffusion", "drift_diffusion | equilibrium_poisson"},
     {"max_iterations", "100", "Newton iterations per point"},
     {"tol_update", "1e-8", "convergence: largest scaled update"},
@@ -79,6 +79,7 @@ constexpr std::array<KeySpec, 30> solver_keys{{
     {"weighted_current", "off", "weighted terminal current"},
     {"rates", "on", "store generation-recombination rates"},
     {"minority_floor", "off", "densities against eps of the majority"},
+    {"log_densities", "off", "Newton steps densities in ln n (ultrawide gaps)"},
 }};
 
 constexpr std::array<KeySpec, 5> transient_keys{{{"integrator", "bdf2", "bdf2 | backward_euler"},

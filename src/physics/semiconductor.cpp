@@ -100,9 +100,22 @@ std::optional<base::Error> check_band_to_band(const BandToBandParameters& b) {
 }
 
 // beta >= 1 keeps dmu/dE finite at E = 0 (the legacy only required beta > 0; its silicon values
-// are 2 and 1).
+// are 2 and 1). Unit 68 slice 4b: all zero is "not given" (owner ruling 1); gamma >= 2 keeps the
+// Barnes law's dmu/dE finite at E = 0.
 std::optional<base::Error> check_saturation(std::string_view group, const CanaliParameters& c) {
+    if (c == CanaliParameters{.v_sat_cm_s = 0.0, .beta = 0.0}) return std::nullopt;
     if (auto e = check(group, "v_sat_cm_s", c.v_sat_cm_s, Bound::positive)) return e;
+    if (c.gamma != 0.0 || c.F_c_V_per_cm != 0.0) {
+        if (auto e = check(group, "F_c_V_per_cm", c.F_c_V_per_cm, Bound::positive)) return e;
+        if (!(c.gamma >= 2.0 && std::isfinite(c.gamma))) {
+            return parameter_error(group, "gamma", " must be at least 2", c.gamma);
+        }
+        if (c.beta != 0.0) return parameter_error(group, "beta", " must be 0 with the Barnes law", c.beta);
+        if (c.temperature_A != 0.0) {
+            return parameter_error(group, "temperature_A", " must be 0 with the Barnes law", c.temperature_A);
+        }
+        return std::nullopt;
+    }
     if (auto e = check(group, "beta", c.beta, Bound::finite)) return e;
     if (c.beta < 1.0) return parameter_error(group, "beta", " must be at least 1", c.beta);
     if (!(c.temperature_A >= 0.0 && c.temperature_A <= 1.0)) {

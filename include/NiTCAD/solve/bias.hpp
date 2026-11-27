@@ -88,6 +88,10 @@ struct BiasOptions {
     // at its node, so a deep minority's rounding does not hold a point. Off by default: a material
     // whose minorities converge (4H-SiC) can stall with it on.
     bool minority_floor = false;
+    // The log-density step (assemble::set_log_densities; DECISIONS.md amendment 11): Newton steps
+    // the densities in ln n with scaled columns and rows, for ultrawide gaps whose minorities plain
+    // densities do not resolve (Ga2O3, SiC with impact ionization, diamond). Off by default.
+    bool log_densities = false;
     // Electrothermal (models.electrothermal, Unit 23): per bias point, the temperature of each
     // thermal contact in K, in the device's thermal-contact order; empty: the device's own at
     // every point. Read only with the model on.

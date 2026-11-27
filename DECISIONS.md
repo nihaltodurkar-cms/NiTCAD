@@ -5259,6 +5259,89 @@ Open (engineer, for the owner): with impact ionization switched on, the same dio
 150 V (Newton stalls with the step cut to 2^-20), far below breakdown; at 4H-SiC's leakage (n_i about 1e-8
 cm^-3) the currents the rate multiplies are near zero. The check is kept as a hidden test (`[.sic_impact]`);
 breakdown simulation of SiC with the impact-ionization model on waits for an engine fix.
+**Amendment 9 (2026-11-27): slice 4b (beta-Ga2O3, MAD11).** Values:
+the owner's file `unit68_slice4b_4c_values_2026-11-27.txt` (items 1-23, outside the repo), each with its source;
+read by the engineer: Ghosh and Singisetti, J. Appl. Phys. 122, 035702 (2017), Table I, and J. Appl. Phys. 124,
+085707 (2018), Table I (y = [010]; Fig. 1(a) of the 2017 paper draws y along b). The source-to-parameter table is
+`papers\Unit 68\slice4bc-source-table.txt`. Owner rulings of 2026-11-27:
+(1) a saturation law of all zeros is "not given": `field_mobility` and energy balance refuse the region, naming
+the carrier; (5) the acceptor is Mg, 1.10 eV above E_v; (6) MAC18 for Ga2O3 is a reverse-biased Ni Schottky
+contact with an explicit 1.50 eV barrier (the measured I-V value on (010); the paper is to be named by the owner)
+on 20 um of n- 1e16 over 0.5 um of n+ 1e19; (7) a deck refuses a node of an n-type-only material where acceptors
+exceed donors (`MaterialEntry::n_type_only`); and, on the engineer's recommendations accepted with "go": the
+300 K indirect gap 4.43 eV held at every temperature (no bulk temperature law in hand; Onuma 2016 gives exciton
+energies), and the electrons on Ghosh's [010] Barnes law (new: `CanaliParameters::F_c_V_per_cm` and `gamma`;
+gamma > 0 selects it, gamma >= 2, beta and temperature_A 0; device-file keys 103-106, hashed only when given)
+with the Jang Caughey-Thomas mobility in Ghosh's mu0. Ghosh fitted the law to about 0.5 MV/cm only. Energy
+balance refuses a Barnes law (it is built on Canali's).
+`ga2o3_beta`: eps_r 10.87, chi 4.00, m_e 0.28 (Nc300 derived), m_h 3.4 and mu_p 10 (placeholders), CT 20 / 155 /
+1e18 / 0.8, tau 1.2e-8 s (constant), Si 30 meV, v_sat 1.5e7, F_c 1.54e5 V/cm, gamma 2.47, electron impact
+ionization 2.16e6 / 1.77e7 (one law, no temperature factor, holes none), kappa 0.228 W/(cm K) constant, rho c
+0.49 x 5.95 J/(cm^3 K); Auger, radiative, band-gap narrowing, hole saturation off.
+Checks: the values; Barnes against Ghosh's expression, its derivative against differences, its velocity peak
+(about 2e7 cm/s between 200 and 300 kV/cm, Ghosh Fig. 6); the not-given and Barnes validation; the deck guard and
+its compensation case; the field-mobility refusal.
+**MAC18 not done for beta-Ga2O3.** With the default solver settings the Ni Schottky diode converges at equilibrium
+but Newton stops near 190 V reverse (10 V steps after a ramp; about 0.27 MV/cm at the contact of the 2.4 target).
+Not the bias step (2 V steps stop near 56 V), not the mesh (20 nm throughout stops near 120 V); without SRH it
+stops at 20 V: the hole density in the depletion region (n_i about 1e-18 cm^-3) leaves the hole equation near
+singular, as with `sic_4h_2004` and impact ionization (amendment 8). No tolerance loosened; the check is the
+hidden test `[.ga2o3_mac18]` until the engine handles ultrawide-gap minority carriers.
+
+**Amendment 10 (2026-11-27): slice 4c infrastructure (diamond transport laws; no material).** Owner rulings of
+2026-11-27 ("for 4c"): build the shared laws now; do not register `diamond` until Cheng 2023 (gap), Pernot and
+Koizumi 2008 (electron mobility) and Rashid 2008 (hole mobility) are read. Source read by the engineer:
+Is-haqzai, Deniz, Kroeninger, Weingarten, Diamond Relat. Mater. 164, 113558 (2026) (arXiv 2601.10807), Eqs. (5),
+(10), (11), (30), Tables 10 and 11. `physics/drift_velocity.hpp`: the Caughey-Thomas law in velocity form for any
+beta > 0, with dv/dE = mu0 (1 + x^beta)^(-1 - 1/beta) returned directly (mu0 at E = 0, where d mu / dE is
+singular for beta < 1; the beta >= 1 check on Canali laws is unchanged); the piecewise electron law, its switch
+field where the two branches meet, E_t = E_c [(v_s / (E_c mu01))^beta - 1]^(1/beta) (0.0852 V/um for Table 11,
+in place of the paper's fixed 0.08, where they differ by 2 %): a continuity-corrected form of the published
+model, not its exact reproduction; the low-field mobility is the caller's (doping dependent: the electron
+mu01, the hole mu0 = v_s / E_c,eff), v_s, E_c and beta the published ones, an engineering extension not
+validated by Table 11; Table 11 at 300 K only (Table 10's scaling covers 0.009-0.41 V/um and disagrees with
+Table 11 at 300 K). Rashid's hole law (review Eqs. (10)-(11)) maps onto the existing Caughey-Thomas
+parameters (alpha = gamma2, N_ref(T) = C0 (T / 300)^(-m1 / gamma2)): `rashid_mobility`, no Masetti law. Not
+wired into the assembler: no material carries the laws yet.
+Checks: Table 11 at 0.009, 0.08, 0.56, 1 and 12 V/um to four digits (the owner's regression points; the 0.56
+row recomputed by the engineer, electrons 4.903e6 and holes 6.927e6 cm/s, the owner's 4.859e6 and 6.865e6
+being about 0.9 % off: 6.865e6 is the hole value at E_c = 0.55 V/um); mu0,2 = v_s / E_c gives 4748 and 2744;
+E_t and continuity there, also for other mu01; dv/dE against differences for beta 0.41-2 and mu0 at E = 0;
+saturation to v_s; the Rashid mapping against its direct formula over T and N (synthetic coefficients).
+
+Amendment 10, continued (owner handoff `Claude_NiTCAD_Diamond_Ga2O3_Decisions.txt`, 2026-11-27): (A2) the 0.56 V/um
+values 4.903e6 and 6.927e6 cm/s accepted; (A4) Rashid et al., IEEE TED 55, 2744 (2008), read: Table III's
+T <= 343 K branch only (mu_max0 3443, n_max -1.55, mu_min0 55, n_min 2.5, m1 -2, C0 1.12e14, gamma2 0.589; N_ref
+exponent +3.40), valid to 343 K, the 343-600 K branch (4399, -3.4) not carried; (A5) fed undoped it gives 3443
+(3390 at 1e11) against Table 11's 2744: a known discrepancy, not rescaled; (A6) B 0.37 and P 0.57 eV kept (Rashid:
+360 and 590 meV), impact ionization off, the boron guards 7e18 / 1e20 kept; (A1) electrons by Pernot and Koizumi's
+law once read, 1880 rejected; diamond waits for that and Cheng 2023's Eg(T) (B1, B2). Rashid's Table III is a
+test fixture until diamond is registered.
+
+**Amendment 11 (2026-11-27): the log-density Newton step (owner handoff A3; opt-in).** Diagnosis, on the
+beta-Ga2O3 MAC18 diode at 190 V with the default settings: every stalled iteration has a converged residual
+(4e-13) and an infinite update size. `apply_update` bounds a density to [x / 10, 10 x] per iteration; a hole
+density the linear step keeps lowering falls tenfold per iteration until it underflows to 0, where the bound
+holds it and `update_size` measures it as infinite. The points before it "converge" with holes the equations do
+not determine: about 1e-238 cm^-3 and non-monotone in the depletion region, 1e-15 to 1e-18 in the neutral n-
+region against n_i^2 / N_D about 2e-52. Plain densities resolve a correction only to about eps of the largest
+density (1e19 here), and the update size floors densities below 1e-20 of it. The existing opt-in aids do not
+carry it: the minority floor stops at 190 V, the line search at 10 V, step cutting at 100 V, all three at 250 V.
+The step (`solver: log_densities = on`, `BiasOptions::log_densities`, `assemble::set_log_densities`): Newton
+solves J D du = -F, D the diagonal of the column scales (a density's own value, every other unknown 1), so
+du is the step in ln n; each row is then divided by its largest entry (row equilibration; the solution is
+unchanged by it). A density is updated as n exp(dn / n) with dn / n within +-ln 10, the same factor-10 bound as
+the plain step, so it stays positive and cannot underflow from a bounded step; the update size measures |dn| / n
+with no floor (with impact ionization its 1e-8 floor stays: measured, with no floor the SiC diode below does
+not converge at 10 V, the minority rows limited by the rounding of the generation, as Unit 19 found). The equations, statistics and residual are unchanged: no n_i floor, no doping, no injection.
+Off by default, every existing result bit-identical; refused with the line search (whose trials reuse the
+unscaled Jacobian). Owner ruling 2026-11-27: MAC18 may switch it on and still counts as default settings
+otherwise. Checks: the Ga2O3 MAC18 diode now reaches 1750 V, peak field 2.414 MV/cm (target 2.4; visible test,
+8 s); at 0-10 V the potential agrees with the plain step to 1e-9 V and the electrons above 1e6 cm^-3 to 1e-6
+relative; at 0 V n p is constant to 1e-6 across the device through 50 decades of holes. SiC with impact ionization
+(`[.sic_impact]`, physics/materials-sic-ii, unmerged; run on a temporary uncommitted pick of c426214): with the
+step on, the p+ n diode settles at 90 % of breakdown (560 V; about 150 V without it). To be made visible with
+the step on when that branch meets this one. Open: diamond MAC18 (not registered).
 
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain

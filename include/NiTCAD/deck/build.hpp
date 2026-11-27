@@ -118,6 +118,8 @@
 //                     rates = on | off  (Unit 45: store the generation-recombination rates; on)
 //                     minority_floor = on | off  (Unit 50: densities against eps of the node's
 //                       majority in the update size; off)
+//                     log_densities = on | off  (amendment 11: Newton steps the densities in ln n,
+//                       for ultrawide gaps; off; not with the line search)
 //   [equilibrium]     (empty) the analysis is the equilibrium solve, or
 //   [sweep]           contact <name> = <series>  (a series: one value held at every point, a comma
 //                       list or first : last : step; all series longer than one value have the

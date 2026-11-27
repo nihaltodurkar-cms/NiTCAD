@@ -8,6 +8,11 @@
 // holes. The legacy applies it lagged (frozen at the previous Newton iterate); NiTCAD returns the
 // exact derivative in E so the assembler can differentiate through it (ARCHITECTURE.md 6.2,
 // Unit 13).
+//
+// Unit 68 slice 4b: with CanaliParameters::gamma > 0, the transferred-electron law of Barnes et
+// al. (the form of K. Ghosh, U. Singisetti, J. Appl. Phys. 122, 035702 (2017), Table I):
+//     mu(E) = (mu0 + (v_sat / E) (E / F_c)^gamma) / (1 + (E / F_c)^gamma),
+// mu(0) = mu0; the velocity peaks and falls toward v_sat (negative differential mobility).
 #pragma once
 
 #include "NiTCAD/physics/semiconductor.hpp"

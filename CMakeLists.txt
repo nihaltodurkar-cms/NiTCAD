@@ -411,6 +411,8 @@ add_library(nitcad_physics STATIC
   src/physics/materials.cpp
   src/physics/sige.cpp
   src/physics/nitrides.cpp
+  src/physics/gallium_oxide.cpp
+  src/physics/drift_velocity.cpp
   src/physics/iii_v.cpp
   src/physics/polarization.cpp
   src/physics/interface_traps.cpp
@@ -442,6 +444,8 @@ add_executable(nitcad_physics_test
   tests/physics/materials_test.cpp
   tests/physics/sige_test.cpp
   tests/physics/nitrides_test.cpp
+  tests/physics/ga2o3_test.cpp
+  tests/physics/drift_velocity_test.cpp
   tests/physics/iii_v_test.cpp
   tests/physics/sic_2004_test.cpp
   tests/physics/interface_traps_test.cpp
@@ -806,6 +810,7 @@ add_executable(nitcad_deck_test
   tests/deck/trap_tunnelling_test.cpp
   tests/deck/total_dose_test.cpp
   tests/deck/schottky_test.cpp
+  tests/deck/ga2o3_test.cpp
   tests/deck/sige_hbt_test.cpp
   tests/deck/polarization_test.cpp
   tests/deck/iii_v_test.cpp

@@ -115,6 +115,10 @@ void material(Digest& d, const physics::SemiconductorParameters& p) {
     // Unit 68 slice 3: the saturation velocity's temperature law, only when given.
     for (const auto& c : {p.electron_saturation, p.hole_saturation}) {
         if (c.temperature_A != 0.0) d.real(c.temperature_A);
+        if (c.gamma != 0.0) {  // slice 4b: the Barnes law, only when given
+            d.real(c.F_c_V_per_cm);
+            d.real(c.gamma);
+        }
     }
 }
 
@@ -245,6 +249,7 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
     // Unit 32: recorded only when on, so the runs without it keep their identity.
     if (o.weighted_current) s.emplace_back("weighted_current", 1.0);
     if (o.minority_floor) s.emplace_back("minority_floor", 1.0);  // Unit 50: likewise
+    if (o.log_densities) s.emplace_back("log_densities", 1.0);  // amendment 11: only when on
     return s;
 }
 

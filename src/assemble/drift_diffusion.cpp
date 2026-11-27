@@ -219,6 +219,27 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             return refuse("gate tunnelling needs a semiconductor region");
         }
     }
+    // Unit 68 slice 4b (owner ruling 1): a saturation law of all zeros is not given; energy balance
+    // is built on the Canali law, so a Barnes law (gamma > 0) is refused there too.
+    if (models.field_mobility || models.energy_balance) {
+        for (const device::Region& r : device.regions()) {
+            if (device::is_insulator(r)) continue;
+            const auto& p = std::get<physics::Semiconductor>(r.material).parameters();
+            for (const auto& [name, c] : {std::pair{"electron", &p.electron_saturation},
+                                          std::pair{"hole", &p.hole_saturation}}) {
+                const char* model = models.energy_balance ? "energy balance" : "field_mobility";
+                if (c->v_sat_cm_s == 0.0) {
+                    return std::unexpected(base::Error{base::ErrorCode::invalid_input, std::string(model) + ": region '" + r.name + "' has no " + name +
+                                  " saturation velocity; give " + name + "_saturation.v_sat_cm_s and .beta "
+                                  "in a [material] section, or switch the model off", {}});
+                }
+                if (models.energy_balance && c->gamma != 0.0) {
+                    return std::unexpected(base::Error{base::ErrorCode::invalid_input, "energy balance: region '" + r.name +
+                                  "' has the Barnes " + std::string(name) + " velocity law, which energy balance does not support", {}});
+                }
+            }
+        }
+    }
     // Unit 68 slice 3: a lifetime of 0 is not given (no transferable value for the material).
     if (models.srh) {
         for (const device::Region& r : device.regions()) {
@@ -1617,8 +1638,11 @@ double System::update_size(std::span<const double> x, std::span<const double> dx
             continue;
         }
         const double n = x[data_->m_ * i + 1], p = x[data_->m_ * i + 2];
-        const double local =
-            state_->minority_floor_ ? std::max(floor, eps * std::max(n, p)) : floor;
+        // The log-density step (amendment 11) resolves every density to its own size: no floor, but with
+        // impact ionization the generation rounding above still limits a deep minority, so its floor stays.
+        const double local = state_->log_densities_  ? (data_->generation_ ? floor : 0.0)
+                             : state_->minority_floor_ ? std::max(floor, eps * std::max(n, p))
+                                                       : floor;
         size =
             std::max({size, std::abs(dx[data_->m_ * i]),
                       n > 0.0 ? std::abs(dx[data_->m_ * i + 1]) / std::max(n, local) : infinity,
@@ -1717,6 +1741,19 @@ double System::natural_size(std::span<const double> x_ref, std::span<const doubl
     return size;
 }
 
+bool System::log_density_scales(std::span<const double> x, std::span<double> columns) const {
+    NITCAD_EXPECTS(x.size() == unknowns() && columns.size() == unknowns());
+    if (!state_->log_densities_ || data_->equilibrium_) return false;
+    std::fill(columns.begin(), columns.end(), 1.0);
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        if (data_->insulator_[i] != 0) continue;
+        for (const std::size_t k : {data_->m_ * i + 1, data_->m_ * i + 2}) {
+            if (x[k] > 0.0) columns[k] = x[k];
+        }
+    }
+    return true;
+}
+
 void System::apply_update(std::span<double> x, std::span<const double> dx,
                                   double max_update) const {
     NITCAD_EXPECTS(x.size() == unknowns() && dx.size() == unknowns());
@@ -1741,7 +1778,11 @@ void System::apply_update(std::span<double> x, std::span<const double> dx,
         }
         if (data_->insulator_[i] != 0) continue;  // the densities stay 0
         for (const std::size_t k : {data_->m_ * i + 1, data_->m_ * i + 2}) {
-            x[k] = std::clamp(x[k] + dx[k], 0.1 * x[k], 10.0 * x[k]);
+            if (state_->log_densities_ && x[k] > 0.0) {  // amendment 11: a step in ln n, the same factor-10 bound
+                x[k] *= std::exp(std::clamp(dx[k] / x[k], -std::numbers::ln10, std::numbers::ln10));
+            } else {
+                x[k] = std::clamp(x[k] + dx[k], 0.1 * x[k], 10.0 * x[k]);
+            }
         }
     }
     if (data_->density_gradient_) {  // Unit 62 (QP9): the quantum potentials, as psi

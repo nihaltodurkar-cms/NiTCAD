@@ -397,6 +397,7 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
     auto system = assemble::System::create(device, *scaling, options.models);
     if (!system) return std::unexpected(std::move(system.error()));
     set_minority_floor(*system, options.minority_floor);
+    set_log_densities(*system, options.log_densities);
     if (thermal && !heat_sinks_complete(*system)) {
         return std::unexpected(invalid(
             "electrothermal: a connected part of the device has no thermal contact, so a steady "
@@ -414,6 +415,7 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
         models.btbt_nonlocal = assemble::NonlocalTunnelling::off;
         plain.emplace(*assemble::System::create(device, *scaling, models));  // as above
         set_minority_floor(*plain, options.minority_floor);
+        set_log_densities(*plain, options.log_densities);
         plain_solver.emplace(*linalg::LinearSolver::create(options.linear));        // as above
     }
     results::Sweep sweep;
