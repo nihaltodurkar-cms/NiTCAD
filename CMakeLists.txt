@@ -443,6 +443,7 @@ add_executable(nitcad_physics_test
   tests/physics/sige_test.cpp
   tests/physics/nitrides_test.cpp
   tests/physics/iii_v_test.cpp
+  tests/physics/sic_2004_test.cpp
   tests/physics/interface_traps_test.cpp
   tests/physics/impact_ionization_test.cpp
   tests/physics/band_to_band_test.cpp
@@ -728,6 +729,7 @@ add_executable(nitcad_solve_test
   tests/solve/trace_resume_test.cpp
   tests/solve/small_signal_test.cpp
   tests/solve/impact_ionization_test.cpp
+  tests/solve/sic_breakdown_test.cpp
   tests/solve/btbt_test.cpp
   tests/solve/electrothermal_test.cpp
   tests/solve/energy_balance_test.cpp
