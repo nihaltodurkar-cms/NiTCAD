@@ -163,7 +163,7 @@ TEST_CASE("guide pane: picking a lesson asks the host", "[guide_window]") {
     REQUIRE(picker);
     CHECK(SendMessageW(picker, CB_GETCOUNT, 0, 0) == 2);
     SendMessageW(picker, CB_SETCURSEL, 1, 0);
-    SendMessageW(g.hwnd(), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(picker), CBN_SELCHANGE), reinterpret_cast<LPARAM>(picker));
+    SendMessageW(g.hwnd(), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(picker), CBN_CLOSEUP), reinterpret_cast<LPARAM>(picker));
     CHECK(r.opened == std::vector<std::size_t>{1});
 }
 
@@ -389,4 +389,58 @@ TEST_CASE("guide window: a sweep with a failed run reports the runs that finishe
     INFO(report);
     CHECK(report.starts_with("Threshold (max gm): "));
     CHECK(report.find(" \xE2\x86\x92 \xE2\x80\x94") != std::string::npos);  // " → —" for the run that failed
+}
+
+// --- deferred minors (Unit 26p follow-up) ---------------------------------------------------------
+
+TEST_CASE("guide pane: arrow keys in the closed picker open nothing; Enter in the open list does", "[guide_window]") {
+    Parent p;
+    Recorder r;
+    GuidePane g(p.hwnd, r, 7);
+    g.set_lessons(two_lessons());
+    HWND picker = FindWindowExW(g.hwnd(), nullptr, L"COMBOBOX", nullptr);
+    REQUIRE(picker);
+    SendMessageW(picker, WM_KEYDOWN, VK_DOWN, 0);
+    SendMessageW(picker, WM_KEYDOWN, VK_DOWN, 0);
+    CHECK(r.opened.empty());
+    SendMessageW(picker, CB_SETCURSEL, 1, 0);  // the list (which a hidden window cannot drop) closes on lesson 1
+    SendMessageW(g.hwnd(), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(picker), CBN_CLOSEUP), reinterpret_cast<LPARAM>(picker));
+    CHECK(r.opened == std::vector<std::size_t>{1});
+}
+
+TEST_CASE("guide pane: a long heading wraps above the prose in a narrow pane", "[guide_window]") {
+    Parent p;
+    Recorder r;
+    GuidePane g(p.hwnd, r, 7);
+    auto lessons = two_lessons();
+    lessons[0].steps[0].heading = "Subthreshold swing and the sixty millivolt limit";
+    g.set_lessons(lessons);
+    g.show_lesson(0);
+    MoveWindow(g.hwnd(), 0, 0, 180, 600, TRUE);
+    HWND heading = nullptr;
+    for (HWND c = GetWindow(g.hwnd(), GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        wchar_t t[128]{};
+        GetWindowTextW(c, t, 128);
+        if (std::wstring(t) == L"Subthreshold swing and the sixty millivolt limit") heading = c;
+    }
+    REQUIRE(heading);
+    RECT h{}, prose{};
+    GetWindowRect(heading, &h);
+    GetWindowRect(g.prose_edit(), &prose);
+    CHECK(h.bottom - h.top >= 2 * 16);  // two lines at least
+    CHECK(prose.top >= h.bottom);
+}
+
+TEST_CASE("guide window: the guide's splitter drags its width and the width is kept", "[guide_window]") {
+    auto w = guide_window(lesson_examples("guide_splitter"));
+    w->execute(Command::guide);
+    const Rect s = w->panes().guide_splitter;
+    const int before = w->panes().guide.width;
+    REQUIRE(before > 100);
+    const int x = s.x + s.width / 2, y = s.y + s.height / 2;
+    SendMessageW(w->hwnd(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(x, y));
+    SendMessageW(w->hwnd(), WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(x + 40, y));
+    SendMessageW(w->hwnd(), WM_LBUTTONUP, 0, MAKELPARAM(x + 40, y));
+    CHECK(w->panes().guide.width == before - 40);
+    CHECK(w->app_state().layout.guide_width > 0);
 }
