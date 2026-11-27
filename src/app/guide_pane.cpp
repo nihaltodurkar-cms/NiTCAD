@@ -56,6 +56,7 @@ GuidePane::~GuidePane() {
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
         DestroyWindow(hwnd_);
     }
+    if (back_brush_) DeleteObject(back_brush_);
 }
 
 void GuidePane::set_lessons(std::vector<Lesson> lessons) {
@@ -103,6 +104,13 @@ void GuidePane::set_busy(bool busy) {
     busy_ = busy;
     const LessonStep* s = current();
     EnableWindow(action_, s && s->action.kind != LessonAction::Kind::none && !busy_);
+}
+
+void GuidePane::set_colors(std::optional<Colors> colors) {
+    colors_ = colors;
+    if (back_brush_) DeleteObject(back_brush_);
+    back_brush_ = colors_ ? CreateSolidBrush(colors_->back) : nullptr;
+    RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 void GuidePane::set_dpi(int dpi, HFONT font, HFONT bold) {
@@ -231,9 +239,20 @@ LRESULT CALLBACK GuidePane::proc(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
         }
         case WM_CTLCOLORSTATIC: {
             HDC dc = reinterpret_cast<HDC>(w);
-            SetTextColor(dc, reinterpret_cast<HWND>(l) == self->report_ && self->error_ ? error_ink : GetSysColor(COLOR_WINDOWTEXT));
-            SetBkColor(dc, GetSysColor(COLOR_WINDOW));
-            return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+            HWND from = reinterpret_cast<HWND>(l);
+            const auto& c = self->colors_;
+            const bool muted = from == self->report_label_ || from == self->position_;
+            SetTextColor(dc, from == self->report_ && self->error_ ? (c ? c->error : error_ink)
+                             : c                                    ? (muted ? c->muted : c->ink)
+                                                                    : GetSysColor(COLOR_WINDOWTEXT));
+            SetBkColor(dc, c ? c->back : GetSysColor(COLOR_WINDOW));
+            return reinterpret_cast<LRESULT>(c ? self->back_brush_ : GetSysColorBrush(COLOR_WINDOW));
+        }
+        case WM_ERASEBKGND: {  // the pane's own background in the theme's colour
+            RECT r{};
+            GetClientRect(hwnd, &r);
+            FillRect(reinterpret_cast<HDC>(w), &r, self->colors_ ? self->back_brush_ : GetSysColorBrush(COLOR_WINDOW));
+            return 1;
         }
         case WM_SIZE:
             self->layout();

@@ -38,9 +38,9 @@ std::string text_of(HWND window) {
 
 void set_text(HWND window, std::string_view utf8) { SetWindowTextW(window, widen(utf8).c_str()); }
 
-HFONT ui_font(int dpi, bool bold) {
+HFONT ui_font(int dpi, bool bold, const wchar_t* face) {
     return CreateFontW(-MulDiv(9, dpi, 72), 0, 0, 0, bold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, face);
 }
 
 HFONT code_font(int dpi) {

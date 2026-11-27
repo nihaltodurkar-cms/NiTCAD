@@ -13,7 +13,7 @@ constexpr std::uint16_t vk_tab = 0x09, vk_space = 0x20, vk_end = 0x23, vk_home =
 
 constexpr std::array<std::string_view, 7> bar{"&File", "&Edit", "&Device", "&Mesh", "&Physics", "&Simulation", "&View"};
 
-constexpr std::array<CommandInfo, 70> list{{
+constexpr std::array<CommandInfo, 71> list{{
     {Command::new_deck, "&File", "&New deck", {'N', true}, "Ctrl+N"},
     {Command::new_device, "&File", "New de&vice...", {'N', true, true}, "Ctrl+Shift+N"},
     {Command::open_deck, "&File", "&Open deck...", {'O', true}, "Ctrl+O"},
@@ -67,6 +67,7 @@ constexpr std::array<CommandInfo, 70> list{{
     {Command::mesh_quality, "&View", "Mesh &quality", {'Q', true, true}, "Ctrl+Shift+Q"},
     {Command::show_regions, "&View", "S&how every region", {'H', true, true}, "Ctrl+Shift+H"},
     {Command::hover_readout, "&View", "Displa&y hover readout", {}, ""},
+    {Command::aurora_theme, "&View", "Aurora theme (&Z)", {}, ""},
     // Unit 26h (JD4): the numpad keys are the view's own (viewport.cpp), as the arrows are, so the deck
     // editor still types digits.
     {Command::view_front, "&View", "&Front", {}, "Num 1", "Loo&k from"},

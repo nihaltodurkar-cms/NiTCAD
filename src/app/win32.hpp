@@ -18,7 +18,7 @@ namespace NiTCAD::app::win32 {
 void set_text(HWND window, std::string_view utf8);
 
 // The UI font and the deck's fixed-pitch font at a DPI (points: 9 and 10). The caller deletes them.
-[[nodiscard]] HFONT ui_font(int dpi, bool bold = false);
+[[nodiscard]] HFONT ui_font(int dpi, bool bold = false, const wchar_t* face = L"Segoe UI");
 [[nodiscard]] HFONT code_font(int dpi);
 
 // A window's DPI (96 when unknown).

@@ -1222,7 +1222,7 @@ add_library(nitcad_app_window STATIC
   src/app/new_device_dialog.cpp
   src/app/sweep_dialog.cpp
   src/app/guide_pane.cpp)
-target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid dwmapi advapi32 d2d1 dwrite)
+target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid dwmapi uxtheme advapi32 d2d1 dwrite)
 # The start page lists the examples beside the executable, else the source tree's (26-3, VQ11).
 target_compile_definitions(nitcad_app_window PRIVATE NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
 target_include_directories(nitcad_app_window PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/app")

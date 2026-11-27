@@ -29,6 +29,7 @@ enum class Command : std::uint16_t {
     view_front, view_back, view_left, view_right, view_top, view_bottom, view_isometric,  // Unit 26h (JD4)
     tab_geometry,  // Unit 26k (GD6)
     guide,         // Unit 26p (GU3)
+    aurora_theme,  // the Aurora theme on or off
     // The Device, Mesh, Physics and Simulation menus' sections and keys (VQ13) are numbered from here.
     section_first = 1000,
     key_first = 2000,

@@ -1103,8 +1103,8 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         }
         base.perspective = lighting.perspective ? 1.0f : 0.0f;
         base.style = 1.0f;
-        const float top[4] = {0.86f, 0.89f, 0.93f, 1.0f};
-        const float bottom[4] = {0.99f, 0.99f, 1.0f, 1.0f};
+        const float top[4] = {s.background_top[0], s.background_top[1], s.background_top[2], 1.0f};
+        const float bottom[4] = {s.background_bottom[0], s.background_bottom[1], s.background_bottom[2], 1.0f};
         std::memcpy(base.bg_top, top, sizeof top);
         std::memcpy(base.bg_bottom, bottom, sizeof bottom);
         base.view_rect[0] = view.left * supersample;

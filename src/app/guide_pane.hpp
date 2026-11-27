@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,10 @@ public:
     void set_error(const std::string& text);  // shown in the report's place; the step stays
     void set_busy(bool busy);                 // the action button off while a run is busy
     void set_dpi(int dpi, HFONT font, HFONT bold);
+    struct Colors {
+        COLORREF back, ink, muted, error;
+    };
+    void set_colors(std::optional<Colors> colors);  // a theme's (the Aurora theme); none: the system's
     void act();  // as the action button
 
     [[nodiscard]] std::size_t lesson() const noexcept { return lesson_; }
@@ -68,6 +73,8 @@ private:
     bool error_ = false;
     int dpi_ = 96;
     HFONT font_ = nullptr, bold_ = nullptr;
+    std::optional<Colors> colors_;
+    HBRUSH back_brush_ = nullptr;  // colors_->back
 };
 
 }  // namespace NiTCAD::app

@@ -146,6 +146,9 @@ struct FieldScene {
     bool ground_shadow = true;
     // Unit 26h (JD1, JQ3): the enhanced look's axis box with um ticks (axes3d.hpp); classic never draws it.
     bool show_axis_box = true;
+    // The enhanced look's background gradient, top and bottom (KD4); the Aurora theme sets its own.
+    Float3 background_top{0.86f, 0.89f, 0.93f};
+    Float3 background_bottom{0.99f, 0.99f, 1.0f};
     // Unit 26o (BSD3): what each scene axis measures, for the axis box's ticks and titles; empty, x, y and z in um.
     std::optional<std::array<SceneAxis, 3>> axes;
     // Unit 26o (BSD6): a 3D band surface's plane in its device, drawn in a corner inset (plane_inset_figure).

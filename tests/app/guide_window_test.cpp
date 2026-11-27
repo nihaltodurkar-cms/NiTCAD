@@ -444,3 +444,57 @@ TEST_CASE("guide window: the guide's splitter drags its width and the width is k
     CHECK(w->panes().guide.width == before - 40);
     CHECK(w->app_state().layout.guide_width > 0);
 }
+
+TEST_CASE("guide pane: a theme's colours paint its text and background; none is the system's", "[guide_window]") {
+    Parent p;
+    Recorder r;
+    GuidePane g(p.hwnd, r, 7);
+    g.set_lessons(two_lessons());
+    HWND label = nullptr;  // "What happened"
+    for (HWND c = GetWindow(g.hwnd(), GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        wchar_t t[64]{};
+        GetWindowTextW(c, t, 64);
+        if (std::wstring(t) == L"What happened") label = c;
+    }
+    REQUIRE(label);
+    HDC dc = GetDC(label);
+    const auto paint = [&] {
+        return SendMessageW(g.hwnd(), WM_CTLCOLORSTATIC, reinterpret_cast<WPARAM>(dc), reinterpret_cast<LPARAM>(label));
+    };
+    paint();
+    CHECK(GetBkColor(dc) == GetSysColor(COLOR_WINDOW));
+    g.set_colors(GuidePane::Colors{RGB(255, 255, 255), RGB(27, 34, 64), RGB(90, 100, 136), RGB(238, 75, 106)});
+    paint();
+    CHECK(GetBkColor(dc) == RGB(255, 255, 255));
+    CHECK(GetTextColor(dc) == RGB(90, 100, 136));  // a label in the muted ink
+    g.set_colors(std::nullopt);
+    paint();
+    CHECK(GetTextColor(dc) == GetSysColor(COLOR_WINDOWTEXT));
+    ReleaseDC(label, dc);
+}
+
+TEST_CASE("guide window: View > Aurora theme colours the guide; off gives it back the system's", "[guide_window]") {
+    auto w = guide_window(lesson_examples("guide_aurora"));
+    w->execute(Command::guide);
+    REQUIRE(w->guide());
+    HWND pane = w->guide()->hwnd();
+    HWND label = nullptr;  // "What happened", in the theme's muted ink
+    for (HWND c = GetWindow(pane, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        wchar_t t[64]{};
+        GetWindowTextW(c, t, 64);
+        if (std::wstring(t) == L"What happened") label = c;
+    }
+    REQUIRE(label);
+    HDC dc = GetDC(label);
+    const auto ink = [&] {
+        SendMessageW(pane, WM_CTLCOLORSTATIC, reinterpret_cast<WPARAM>(dc), reinterpret_cast<LPARAM>(label));
+        return GetTextColor(dc);
+    };
+    if (w->aurora_on()) w->execute(Command::aurora_theme);
+    CHECK(ink() == GetSysColor(COLOR_WINDOWTEXT));
+    w->execute(Command::aurora_theme);
+    CHECK(ink() == RGB(90, 100, 136));  // the theme's ink2
+    w->execute(Command::aurora_theme);
+    CHECK(ink() == GetSysColor(COLOR_WINDOWTEXT));
+    ReleaseDC(label, dc);
+}

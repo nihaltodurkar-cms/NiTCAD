@@ -5,6 +5,7 @@
 #include <span>
 #include <richedit.h>  // Unit 26j: the console
 #include <dwmapi.h>     // ZD6: the title bar's theme
+#include <uxtheme.h>    // SetWindowTheme: the Aurora theme's status bar
 #include <shobjidl.h>   // ZD5: ITaskbarList3
 #include <windowsx.h>
 
@@ -181,6 +182,43 @@ std::wstring menu_text(const CommandInfo& c) {
     return t;
 }
 
+
+// The Aurora theme (View > Aurora theme): a cool light canvas, white panels, indigo accents, soft status colours.
+namespace aurora {
+constexpr COLORREF canvas = RGB(238, 242, 251), surface = RGB(255, 255, 255), field = RGB(244, 246, 253),
+                   line = RGB(227, 232, 244), ink = RGB(27, 34, 64), ink2 = RGB(90, 100, 136), ink3 = RGB(154, 163, 191),
+                   primary = RGB(91, 91, 246), primary_soft = RGB(236, 235, 255), mint = RGB(15, 169, 122),
+                   amber = RGB(217, 130, 0), coral = RGB(238, 75, 106);
+
+// The theme's text face: Segoe UI Variable (Windows 11), else Segoe UI.
+const wchar_t* face() {
+    static const wchar_t* const f = [] {
+        LOGFONTW lf{};
+        lf.lfCharSet = DEFAULT_CHARSET;
+        wcscpy_s(lf.lfFaceName, L"Segoe UI Variable Text");
+        bool found = false;
+        HDC dc = GetDC(nullptr);
+        EnumFontFamiliesExW(
+            dc, &lf, [](const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM p) -> int { return *reinterpret_cast<bool*>(p) = true, 0; },
+            reinterpret_cast<LPARAM>(&found), 0);
+        ReleaseDC(nullptr, dc);
+        return found ? L"Segoe UI Variable Text" : L"Segoe UI";
+    }();
+    return f;
+}
+
+// A rounded rectangle filled and edged (GDI's RoundRect: the corners are not antialiased).
+void round_fill(HDC dc, const RECT& r, int radius, COLORREF fill, COLORREF edge) {
+    HBRUSH b = CreateSolidBrush(fill);
+    HPEN p = CreatePen(PS_SOLID, 1, edge);
+    HGDIOBJ old_b = SelectObject(dc, b), old_p = SelectObject(dc, p);
+    RoundRect(dc, r.left, r.top, r.right, r.bottom, radius, radius);
+    SelectObject(dc, old_b);
+    SelectObject(dc, old_p);
+    DeleteObject(b);
+    DeleteObject(p);
+}
+}  // namespace aurora
 }  // namespace
 
 // --- creation -------------------------------------------------------------------------------------
@@ -238,6 +276,9 @@ MainWindow::~MainWindow() {
     }
     if (font_) DeleteObject(font_);
     if (bold_) DeleteObject(bold_);
+    for (HBRUSH b : {canvas_brush_, field_brush_}) {
+        if (b) DeleteObject(b);
+    }
     if (com_) CoUninitialize();  // after the taskbar list's release
 }
 
@@ -291,6 +332,7 @@ bool MainWindow::create_children() {
         SendMessageW(tabs_, TCM_INSERTITEMW, static_cast<WPARAM>(SendMessageW(tabs_, TCM_GETITEMCOUNT, 0, 0)),
                      reinterpret_cast<LPARAM>(&item));
     }
+    SetWindowSubclass(tabs_, tabs_proc, 1, reinterpret_cast<DWORD_PTR>(this));  // the Aurora theme's pills
     viewport_ = std::make_unique<Viewport>(hwnd_, *this, id_viewport);
     deck_ = std::make_unique<DeckPane>(hwnd_, *this, id_deck);
     start_ = std::make_unique<StartPage>(hwnd_, *this, id_start);
@@ -317,6 +359,7 @@ bool MainWindow::create_children() {
             SendMessageW(tabs, TCM_INSERTITEMW, static_cast<WPARAM>(SendMessageW(tabs, TCM_GETITEMCOUNT, 0, 0)),
                          reinterpret_cast<LPARAM>(&item));
         }
+        SetWindowSubclass(tabs, tabs_proc, 1, reinterpret_cast<DWORD_PTR>(this));
     }
     console_points_ = make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
                            console_panel_, id_console_points, WS_EX_CLIENTEDGE);
@@ -613,6 +656,7 @@ void MainWindow::update_command_states() {
     check(Command::hover_readout, state_.hover_readout);
     check(Command::guide, state_.layout.guide_shown);
     if (guide_) guide_->set_busy(runner_.busy());
+    check(Command::aurora_theme, state_.aurora);
 }
 
 // --- layout and DPI --------------------------------------------------------------------------------
@@ -621,8 +665,8 @@ void MainWindow::apply_dpi(int dpi) {
     dpi_ = dpi;
     if (font_) DeleteObject(font_);
     if (bold_) DeleteObject(bold_);
-    font_ = win32::ui_font(dpi);
-    bold_ = win32::ui_font(dpi, true);
+    font_ = state_.aurora ? win32::ui_font(dpi, false, aurora::face()) : win32::ui_font(dpi);
+    bold_ = state_.aurora ? win32::ui_font(dpi, true, aurora::face()) : win32::ui_font(dpi, true);
     const auto set = [&](HWND h) { SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE); };
     for (HWND h : {toolbar_, status_, tree_, tabs_, metrics_}) set(h);
     for (HWND c = GetWindow(inspector_, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) set(c);
@@ -817,6 +861,17 @@ constexpr std::array<Icon, 10> tree_icons{{{0xE950, RGB(47, 111, 214)}, {0, RGB(
                                            {0xE7B3, icon_soft}, {0xE9D9, icon_ink}, {0xE76C, icon_soft},
                                            {0xE9F9, icon_ink}}};
 
+// The Aurora theme's icons (its palette is at the top of the file).
+namespace aurora {
+constexpr std::array<Icon, 11> toolbar_icons{{{0xE8A5, ink2}, {0xE838, ink2}, {0xE74E, ink2}, {0xE73E, ink2},
+                                              {0xE768, primary}, {0xE71A, coral}, {0xE740, ink2}, {0xE81D, ink2},
+                                              {0xED5E, ink2}, {0xE9D9, ink2}, {0xE7B8, ink2}}};
+constexpr std::array<Icon, 10> tree_icons{{{0xE950, primary}, {0, RGB(127, 166, 232)}, {0, RGB(242, 198, 109)},
+                                           {0xE945, amber}, {0xE80A, ink2}, {0xE890, ink2}, {0xE7B3, ink3},
+                                           {0xE9D9, ink2}, {0xE76C, ink3}, {0xE9F9, ink2}}};
+
+}  // namespace aurora
+
 }  // namespace
 
 void MainWindow::make_icons() {
@@ -826,13 +881,124 @@ void MainWindow::make_icons() {
     }
     const int size = scaled(16, dpi_);
     missing_icons_ = 0;
-    toolbar_images_ = icon_list(size, toolbar_icons, false, &missing_icons_);
-    toolbar_disabled_ = icon_list(size, toolbar_icons, true);
-    tree_images_ = icon_list(size, tree_icons, false, &missing_icons_);
+    const std::span<const Icon> bar = state_.aurora ? std::span<const Icon>(aurora::toolbar_icons) : toolbar_icons;
+    toolbar_images_ = icon_list(size, bar, false, &missing_icons_);
+    toolbar_disabled_ = icon_list(size, bar, true);
+    tree_images_ = icon_list(size, state_.aurora ? std::span<const Icon>(aurora::tree_icons) : tree_icons, false,
+                             &missing_icons_);
     SendMessageW(toolbar_, TB_SETBITMAPSIZE, 0, toolbar_images_ ? MAKELPARAM(size, size) : MAKELPARAM(0, 0));
     SendMessageW(toolbar_, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(toolbar_images_));
     SendMessageW(toolbar_, TB_SETDISABLEDIMAGELIST, 0, reinterpret_cast<LPARAM>(toolbar_disabled_));
     TreeView_SetImageList(tree_, tree_images_, TVSIL_NORMAL);
+}
+
+void MainWindow::apply_theme() {
+    const bool on = state_.aurora;
+    if (!canvas_brush_) canvas_brush_ = CreateSolidBrush(aurora::canvas);
+    if (!field_brush_) field_brush_ = CreateSolidBrush(aurora::field);
+    SetClassLongPtrW(hwnd_, GCLP_HBRBACKGROUND,
+                     reinterpret_cast<LONG_PTR>(on ? canvas_brush_ : GetSysColorBrush(COLOR_BTNFACE)));
+    // Flat panels on the canvas: no sunken edges in the theme (the classic look keeps them).
+    const auto edge = [&](HWND h) {
+        if (!h) return;
+        const LONG_PTR ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        SetWindowLongPtrW(h, GWL_EXSTYLE, on ? ex & ~WS_EX_CLIENTEDGE : ex | WS_EX_CLIENTEDGE);
+        SetWindowPos(h, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    };
+    for (HWND h : {tree_, console_points_, console_}) edge(h);
+    wchar_t cls[16]{};
+    for (HWND c = GetWindow(inspector_, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        GetClassNameW(c, cls, 16);
+        if (std::wstring_view(cls) != L"Edit") continue;
+        edge(c);
+        const LONG_PTR st = GetWindowLongPtrW(c, GWL_STYLE);  // a hairline instead
+        SetWindowLongPtrW(c, GWL_STYLE, on ? st | WS_BORDER : st & ~WS_BORDER);
+        SetWindowPos(c, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+    TreeView_SetBkColor(tree_, on ? aurora::surface : static_cast<COLORREF>(-1));
+    TreeView_SetTextColor(tree_, on ? aurora::ink : static_cast<COLORREF>(-1));
+    TreeView_SetLineColor(tree_, on ? aurora::line : CLR_DEFAULT);
+    // The status bar takes a colour only unthemed.
+    SetWindowTheme(status_, on ? L"" : nullptr, on ? L"" : nullptr);
+    SendMessageW(status_, SB_SETBKCOLOR, 0, on ? static_cast<LPARAM>(aurora::canvas) : static_cast<LPARAM>(CLR_DEFAULT));
+    device_view_.aurora = curve_view_.aurora = on;
+    guide_theme();
+    apply_title_theme();
+    apply_dpi(dpi_);  // the fonts and icons
+    TreeView_SetItemHeight(tree_, on ? scaled(26, dpi_) : -1);
+    RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+    refresh();  // the view's background
+}
+
+// The Aurora theme's toolbar: the canvas behind, a white pill under a hot or checked button (edged and indigo when checked).
+LRESULT MainWindow::draw_toolbar(NMTBCUSTOMDRAW& cd) {
+    switch (cd.nmcd.dwDrawStage) {
+    case CDDS_PREPAINT: {
+        RECT r;
+        GetClientRect(toolbar_, &r);
+        FillRect(cd.nmcd.hdc, &r, canvas_brush_);
+        return CDRF_NOTIFYITEMDRAW;
+    }
+    case CDDS_ITEMPREPAINT: {
+        const UINT st = cd.nmcd.uItemState;
+        // The item state leaves out a check button's check: asked of the toolbar.
+        const bool checked = (st & (CDIS_CHECKED | CDIS_SELECTED)) != 0 ||
+                             SendMessageW(toolbar_, TB_ISBUTTONCHECKED, cd.nmcd.dwItemSpec, 0) != 0;
+        if (checked || (st & CDIS_HOT) != 0) {
+            RECT r = cd.nmcd.rc;
+            InflateRect(&r, -scaled(1, dpi_), -scaled(2, dpi_));
+            aurora::round_fill(cd.nmcd.hdc, r, scaled(10, dpi_), aurora::surface, checked ? aurora::primary : aurora::line);
+        }
+        SelectObject(cd.nmcd.hdc, font_);  // the font the buttons were measured in
+        cd.clrText = (st & CDIS_DISABLED) != 0 ? aurora::ink3 : checked ? aurora::primary : aurora::ink;
+        return TBCDRF_NOEDGES | TBCDRF_NOBACKGROUND | TBCDRF_NOOFFSET | TBCDRF_NOETCHEDEFFECT | TBCDRF_USECDCOLORS |
+               CDRF_NEWFONT;
+    }
+    default: return CDRF_DODEFAULT;
+    }
+}
+
+// The Aurora theme's tab strips: the canvas, the selected tab a white pill with indigo text. The classic look passes
+// everything on.
+LRESULT CALLBACK MainWindow::tabs_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR data) {
+    auto* self = reinterpret_cast<MainWindow*>(data);
+    if (!self->state_.aurora) return DefSubclassProc(hwnd, message, w, l);
+    if (message == WM_ERASEBKGND) return 1;
+    if (message != WM_PAINT && message != WM_PRINTCLIENT) return DefSubclassProc(hwnd, message, w, l);
+    PAINTSTRUCT ps{};
+    HDC target = message == WM_PAINT ? BeginPaint(hwnd, &ps) : reinterpret_cast<HDC>(w);  // PrintWindow's DC
+    RECT c;
+    GetClientRect(hwnd, &c);
+    HDC dc = CreateCompatibleDC(target);
+    HBITMAP bmp = CreateCompatibleBitmap(target, c.right, c.bottom);
+    HGDIOBJ old_bmp = SelectObject(dc, bmp);
+    FillRect(dc, &c, self->canvas_brush_);
+    SetBkMode(dc, TRANSPARENT);
+    const int n = TabCtrl_GetItemCount(hwnd), selected = TabCtrl_GetCurSel(hwnd);
+    const int pad = scaled(1, self->dpi_);
+    HGDIOBJ old_font = SelectObject(dc, self->font_);
+    for (int k = 0; k < n; ++k) {
+        RECT r;
+        TabCtrl_GetItemRect(hwnd, k, &r);
+        InflateRect(&r, -pad, -pad);
+        wchar_t text[64]{};
+        TCITEMW item{};
+        item.mask = TCIF_TEXT;
+        item.pszText = text;
+        item.cchTextMax = 64;
+        TabCtrl_GetItem(hwnd, k, &item);
+        const bool on = k == selected;
+        if (on) aurora::round_fill(dc, r, scaled(12, self->dpi_), aurora::surface, aurora::line);
+        SetTextColor(dc, on ? aurora::primary : aurora::ink2);
+        DrawTextW(dc, text, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    SelectObject(dc, old_font);
+    BitBlt(target, 0, 0, c.right, c.bottom, dc, 0, 0, SRCCOPY);
+    SelectObject(dc, old_bmp);
+    DeleteObject(bmp);
+    DeleteDC(dc);
+    if (message == WM_PAINT) EndPaint(hwnd, &ps);
+    return 0;
 }
 
 void MainWindow::set_section_folded(int section, bool folded) {
@@ -848,6 +1014,41 @@ void MainWindow::draw_section_header(const DRAWITEMSTRUCT& d) {
     const int section = static_cast<int>(d.CtlID) - id_section_first;
     HDC dc = d.hDC;
     RECT r = d.rcItem;
+    if (state_.aurora) {  // a spaced-out title on white, a hairline above, the chevron in a soft chip
+        HBRUSH white = CreateSolidBrush(aurora::surface);
+        FillRect(dc, &r, white);
+        DeleteObject(white);
+        if (section > 0) {
+            RECT line{r.left + scaled(12, dpi_), r.top, r.right - scaled(12, dpi_), r.top + 1};
+            HBRUSH edge = CreateSolidBrush(aurora::line);
+            FillRect(dc, &line, edge);
+            DeleteObject(edge);
+        }
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, aurora::ink2);
+        HGDIOBJ old = SelectObject(dc, bold_);
+        const int extra = SetTextCharacterExtra(dc, scaled(1, dpi_));
+        RECT text{r.left + scaled(14, dpi_), r.top, r.right - scaled(36, dpi_), r.bottom};
+        const wchar_t* title = section == sec_slice && settings().kind == ViewKind::band_surface
+                                   ? L"PLANE AND CLIP"
+                                   : section_titles[static_cast<std::size_t>(section)];
+        DrawTextW(dc, title, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SetTextCharacterExtra(dc, extra);
+        const int chip = scaled(20, dpi_);
+        RECT box{r.right - scaled(12, dpi_) - chip, (r.top + r.bottom - chip) / 2, r.right - scaled(12, dpi_),
+                 (r.top + r.bottom + chip) / 2};
+        aurora::round_fill(dc, box, scaled(8, dpi_), aurora::field, aurora::field);
+        SelectObject(dc, font_);
+        SetTextColor(dc, aurora::ink2);
+        DrawTextW(dc, section_folded(section) ? L"▸" : L"▾", 1, &box, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, old);
+        if ((d.itemState & ODS_FOCUS) != 0) {
+            RECT f = r;
+            InflateRect(&f, -2, -2);
+            DrawFocusRect(dc, &f);
+        }
+        return;
+    }
     HBRUSH band = CreateSolidBrush(RGB(244, 245, 248));
     FillRect(dc, &r, band);
     DeleteObject(band);
@@ -1295,6 +1496,15 @@ LRESULT MainWindow::on_console_notify(const NMHDR& n, LPARAM l) {
             if (k >= points_.states.size()) return CDRF_DODEFAULT;
             const PointState st = points_.states[k];
             const bool status = static_cast<std::size_t>(cd->iSubItem) + 1 == points_.columns.size();
+            if (state_.aurora) {
+                cd->clrTextBk = st == PointState::live ? aurora::primary_soft : aurora::surface;
+                cd->clrText = st == PointState::pending ? aurora::ink3
+                              : st == PointState::warning ? aurora::amber
+                              : st == PointState::live    ? aurora::primary
+                              : status                    ? aurora::mint
+                                                          : aurora::ink;
+                return CDRF_NEWFONT;
+            }
             cd->clrTextBk = st == PointState::live ? RGB(232, 241, 254) : GetSysColor(COLOR_WINDOW);
             cd->clrText = st == PointState::pending ? RGB(160, 166, 174)
                           : st == PointState::warning ? RGB(168, 115, 12)
@@ -1669,6 +1879,12 @@ void MainWindow::guide_fail(const std::string& why) {
     guide_->set_error(why);
 }
 
+void MainWindow::guide_theme() {
+    if (!guide_) return;
+    guide_->set_colors(state_.aurora ? std::optional(GuidePane::Colors{aurora::surface, aurora::ink, aurora::ink2, aurora::coral})
+                                     : std::nullopt);
+}
+
 std::vector<std::string> MainWindow::sweep_views() const {
     std::vector<std::string> out;
     if (!sweep_results_) return out;
@@ -1698,6 +1914,7 @@ void MainWindow::default_settings() {
     curve_view_ = {};
     device_view_.enhanced = curve_view_.enhanced = state_.enhanced_look;  // Unit 26f (KD5)
     device_view_.axis_box = curve_view_.axis_box = state_.axis_box;  // Unit 26h (JQ3)
+    device_view_.aurora = curve_view_.aurora = state_.aurora;
     if (!workspace_) return;
     const auto views = available_views(*workspace_, run_b());
     const bool results = workspace_->has_results();
@@ -3040,6 +3257,15 @@ void MainWindow::apply_title_theme() {
     const BOOL dark = dark_title_ ? TRUE : FALSE;
     // Fails where the attribute is not known (before Windows 10 20H1): the title bar stays light.
     (void)DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    // The Aurora theme's title bar on its canvas (Windows 11; ignored before). Left alone in the classic look.
+    if (state_.aurora || aurora_title_) {
+        const bool on = state_.aurora && !dark_title_;
+        const COLORREF caption = on ? aurora::canvas : DWMWA_COLOR_DEFAULT;
+        const COLORREF text = on ? aurora::ink : DWMWA_COLOR_DEFAULT;
+        (void)DwmSetWindowAttribute(hwnd_, DWMWA_CAPTION_COLOR, &caption, sizeof(caption));
+        (void)DwmSetWindowAttribute(hwnd_, DWMWA_TEXT_COLOR, &text, sizeof(text));
+        aurora_title_ = state_.aurora;
+    }
     ++title_theme_updates_;
 }
 
@@ -3495,6 +3721,12 @@ void MainWindow::execute(Command c) {
         update_command_states();
         set_status(status_state, state_.hover_readout ? "Hover readout on." : "Hover readout off.");
         return;
+    case Command::aurora_theme:  // saved in the app state; off keeps the classic look
+        state_.aurora = !state_.aurora;
+        apply_theme();
+        update_command_states();
+        set_status(status_state, state_.aurora ? "Aurora theme on." : "Aurora theme off.");
+        return;
     case Command::next_tab: select_tab((tab_ + 1) % tab_count); return;
     case Command::previous_tab: select_tab((tab_ + tab_count - 1) % tab_count); return;
     case Command::next_pane: focus_next_pane(); return;
@@ -3510,6 +3742,7 @@ void MainWindow::execute(Command c) {
         if (state_.layout.guide_shown && !guide_) {
             guide_ = std::make_unique<GuidePane>(hwnd_, *this, id_guide);
             guide_->set_dpi(dpi_, font_, bold_);
+            guide_theme();
             guide_->set_lessons(list_lessons(lessons_dir_));
         }
         layout();
@@ -3895,7 +4128,13 @@ LRESULT CALLBACK MainWindow::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARA
             return 0;
         case WM_CTLCOLORSTATIC:
             SetBkMode(reinterpret_cast<HDC>(w), TRANSPARENT);
+            if (self->state_.aurora) SetTextColor(reinterpret_cast<HDC>(w), aurora::ink2);
             return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+        case WM_CTLCOLOREDIT:  // the Aurora theme's boxes on a soft field
+            if (!self->state_.aurora) break;
+            SetBkColor(reinterpret_cast<HDC>(w), aurora::field);
+            SetTextColor(reinterpret_cast<HDC>(w), aurora::ink);
+            return reinterpret_cast<LRESULT>(self->field_brush_);
         default:
             break;
         }
@@ -3937,6 +4176,7 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             set_status(status_adapter, "no Direct3D 12 device");
         }
         apply_dpi(win32::dpi_of(hwnd_));
+        if (state_.aurora) apply_theme();
         update_title();
         // The bundled examples (VQ11): beside the executable, else in the source tree of this build.
         if (options_.examples_dir.empty()) {
@@ -3964,6 +4204,11 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         layout();
         return 0;
     }
+    case WM_CTLCOLORSTATIC:  // the metrics strip on the Aurora theme's canvas
+        if (!state_.aurora) break;
+        SetBkColor(reinterpret_cast<HDC>(w), aurora::canvas);
+        SetTextColor(reinterpret_cast<HDC>(w), aurora::ink2);
+        return reinterpret_cast<LRESULT>(canvas_brush_);
     case WM_GETMINMAXINFO: {
         auto* mm = reinterpret_cast<MINMAXINFO*>(l);
         mm->ptMinTrackSize = {scaled(800, dpi_), scaled(520, dpi_)};
@@ -3980,6 +4225,9 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
     }
     case WM_NOTIFY: {
         const auto* n = reinterpret_cast<const NMHDR*>(l);
+        if (n->hwndFrom == toolbar_ && n->code == NM_CUSTOMDRAW && state_.aurora) {
+            return draw_toolbar(*reinterpret_cast<NMTBCUSTOMDRAW*>(l));
+        }
         if (n->hwndFrom == tabs_ && n->code == TCN_SELCHANGE) {
             select_tab(static_cast<int>(SendMessageW(tabs_, TCM_GETCURSEL, 0, 0)));
             return 0;
