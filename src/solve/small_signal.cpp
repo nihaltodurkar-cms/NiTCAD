@@ -71,6 +71,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     auto system = assemble::System::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
     set_minority_floor(*system, steady.minority_floor);
+    set_log_densities(*system, steady.log_densities);
 
     // The operating points. sweep_bias checks the points and the initial state.
     auto sweep = sweep_bias(device, points, steady, initial, control);

@@ -83,14 +83,13 @@ TEST_CASE("ga2o3_beta: field mobility is refused, the holes having no saturation
     CHECK(s.error().message.find("'ga2o3'") != std::string::npos);
 }
 
-// MAC18 NOT DONE for beta-Ga2O3 (amendment 9): with the default solver settings Newton stops near 190 V
-// (about 0.27 MV/cm at the contact, of 2.4). Not the bias step (2 V steps stop sooner, near 56 V),
-// not the mesh (20 nm throughout stops near 120 V); without SRH it stops at 20 V: the hole density
-// in the depletion region (n_i about 1e-18 cm^-3) leaves the hole equation near singular. Hidden
-// until the engine handles it, as `sic_4h_2004` with impact ionization; run with [.ga2o3_mac18].
+// MAC18 for beta-Ga2O3 (amendments 9, 11): with the default solver settings Newton stops near 190 V, the
+// depletion-region holes (n_i about 1e-18 cm^-3) unresolved in plain densities until one underflows to
+// 0. With the log-density step (owner, 2026-11-27: the opt-in step counts for MAC18) it reaches 1750 V.
 TEST_CASE("ga2o3_beta MAC18: the Ni Schottky n- n+ diode reverse-biased to 2.4 MV/cm converges",
-          "[.ga2o3_mac18]") {
-    const deck::Plan p = must(diode(mac18_doping));
+          "[ga2o3][unit68]") {
+    deck::Plan p = must(diode(mac18_doping));
+    p.options.log_densities = true;  // amendment 11 (owner: the opt-in step counts for MAC18)
     // The one-sided depletion estimate of the bias that puts 2.4 MV/cm at the contact, rounded up.
     const double E_target = 2.4e6;
     const double V_estimate = 10.87 * base::eps0_F_per_cm * E_target * E_target / (2.0 * base::q_C * 1e16);
@@ -110,4 +109,51 @@ TEST_CASE("ga2o3_beta MAC18: the Ni Schottky n- n+ diode reverse-biased to 2.4 M
     const double peak = peak_field(p.device, s->points.back().fields.potential_V);
     std::printf("ga2o3 MAC18: %.0f V reverse, peak field %.3f MV/cm (target 2.4)\n", -points.back()[0], peak / 1e6);
     CHECK(peak >= E_target);
+}
+
+// The log-density step (DECISIONS.md amendment 11) on the MAC18 diode at low bias: the same
+// equations, so the plain step's potential and electrons; and holes resolved to their own size,
+// which the plain step does not (at 190 V its neutral n- holes sat near 1e-15 cm^-3, n_i^2 / N_D near 2e-52).
+TEST_CASE("log densities: the Ga2O3 diode keeps the plain solution and resolves its holes",
+          "[log_densities][unit68]") {
+    std::vector<std::vector<double>> points;
+    for (double V : {0.0, 0.01, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0}) points.push_back({-V, 0.0});
+    deck::Plan plain = must(diode(mac18_doping));
+    deck::Plan log = must(diode(mac18_doping));
+    log.options.log_densities = true;
+    const auto a = solve::sweep_bias(plain.device, points, plain.options);
+    const auto b = solve::sweep_bias(log.device, points, log.options);
+    REQUIRE(a.has_value());
+    REQUIRE(b.has_value());
+    REQUIRE_FALSE(a->stopped.has_value());
+    REQUIRE_FALSE(b->stopped.has_value());
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        CAPTURE(k);
+        const auto& f = a->points[k].fields;
+        const auto& g = b->points[k].fields;
+        for (std::size_t i = 0; i < f.potential_V.size(); ++i) {
+            CHECK(std::abs(f.potential_V[i] - g.potential_V[i]) < 1e-9);
+            if (f.n_cm3[i] > 1e6) CHECK(std::abs(g.n_cm3[i] / f.n_cm3[i] - 1.0) < 1e-6);
+        }
+    }
+    // At 0 V, equilibrium: n p is n_i^2 at every node (Boltzmann statistics, no gap narrowing),
+    // through 50 decades of holes.
+    const auto& e = b->points[0].fields;
+    double lo = e.n_cm3[0] * e.p_cm3[0], hi = lo;
+    for (std::size_t i = 0; i < e.n_cm3.size(); ++i) {
+        REQUIRE(e.p_cm3[i] > 0.0);
+        lo = std::min(lo, e.n_cm3[i] * e.p_cm3[i]);
+        hi = std::max(hi, e.n_cm3[i] * e.p_cm3[i]);
+    }
+    CHECK(hi / lo - 1.0 < 1e-6);
+}
+
+TEST_CASE("log densities: refused with the line search", "[log_densities][unit68]") {
+    deck::Plan p = must(diode(mac18_doping));
+    p.options.log_densities = true;
+    p.options.newton.line_search.enabled = true;
+    const std::vector<std::vector<double>> points{{0.0, 0.0}, {-1.0, 0.0}};
+    const auto s = solve::sweep_bias(p.device, points, p.options);
+    const bool refused = !s.has_value() || s->stopped.has_value();
+    CHECK(refused);
 }

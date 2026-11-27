@@ -28,6 +28,10 @@ void set_minority_floor(System& system, bool on) noexcept {
     SystemData::state_of(system).minority_floor_ = on;
 }
 bool minority_floor(const System& system) noexcept { return state(system).minority_floor_; }
+void set_log_densities(System& system, bool on) noexcept {
+    SystemData::state_of(system).log_densities_ = on;
+}
+bool log_densities(const System& system) noexcept { return state(system).log_densities_; }
 
 // --- currents.hpp ----------------------------------------------------------------------------
 

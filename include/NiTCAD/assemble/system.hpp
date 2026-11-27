@@ -413,6 +413,9 @@ public:
     // 1). Measured at x_ref for both corrections of a step. In thermal equilibrium: psi alone.
     [[nodiscard]] double natural_size(std::span<const double> x_ref,
                                       std::span<const double> dx) const;
+    // The log-density step (set_log_densities below; off: returns false and leaves `columns`): each
+    // unknown's column scale, a density its own value (a step in ln n), every other unknown 1.
+    bool log_density_scales(std::span<const double> x, std::span<double> columns) const;
 
     // The internals, for src/assemble alone (the key cannot be made outside it): the model data
     // the copies share and the state each owns.
@@ -443,5 +446,13 @@ private:
 // measures every density against at least eps of the larger density at its node.
 void set_minority_floor(System& system, bool on) noexcept;
 [[nodiscard]] bool minority_floor(const System& system) noexcept;
+
+// The log-density step (DECISIONS.md amendment 11; off by default, results unchanged): Newton steps
+// each density in ln n, its Jacobian column scaled by the density and every row by its largest
+// entry; a density is updated as n exp(dn / n), dn / n within +-ln 10, and measured as |dn| / n
+// with no floor. The equations are unchanged. For deep minorities (n_i to 1e-27 cm^-3), which
+// plain densities resolve only to eps of the largest density. Not with the line search.
+void set_log_densities(System& system, bool on) noexcept;
+[[nodiscard]] bool log_densities(const System& system) noexcept;
 
 }  // namespace NiTCAD::assemble

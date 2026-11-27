@@ -679,6 +679,7 @@ struct SystemState {
     std::vector<double> thermal_rise_;   // per thermal contact: (T_c - T0) / T0
     std::vector<double> held_;  // hold_temperatures: tau_n, tau_p per node (empty: not held)
     bool minority_floor_ = false;  // Unit 50 RD2, set_minority_floor
+    bool log_densities_ = false;   // amendment 11, set_log_densities
     // Nonlocal tunnelling: the frozen paths, their layouts, and the pattern's triplets without the
     // terms' own entries (Term::pattern).
     TunnelPaths paths_;

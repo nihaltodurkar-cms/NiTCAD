@@ -83,7 +83,7 @@ TEST_CASE("app deck sections: the menus and the keys they offer", "[app]") {
     CHECK(app::to_string(app::DeckMenu::physics) == "Physics");
     CHECK(app::menu_sections(app::DeckMenu::device).front().kind == "device");
     CHECK(app::menu_sections(app::DeckMenu::physics).size() == 1);
-    CHECK(app::find_section_spec("solver")->keys.size() == 30);  // Unit 58: preconditioner, amg_*
+    CHECK(app::find_section_spec("solver")->keys.size() == 31);  // Unit 58: preconditioner, amg_*
     CHECK(app::find_section_spec("unknown") == nullptr);
     const auto keys_of = [](const std::string& text, const char* kind) {
         std::vector<std::string> out;
@@ -99,7 +99,7 @@ TEST_CASE("app deck sections: the menus and the keys they offer", "[app]") {
     // A key the section has is not offered again.
     const std::string with = app_test::diode_device + "[solver]\nmax_iterations = 50\n";
     const auto solver = keys_of(with, "solver");
-    CHECK(solver.size() == 29);
+    CHECK(solver.size() == 30);
     CHECK(std::ranges::find(solver, "max_iterations") == solver.end());
 }
 

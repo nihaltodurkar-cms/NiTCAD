@@ -205,7 +205,7 @@ constexpr std::array<KeyInfo, 32> model_keys{{
     {"energy_balance", 0, false, "off", "carrier temperatures (energy balance)", on_off, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 32> solver_keys{{
+constexpr std::array<KeyInfo, 33> solver_keys{{
     {"equations", 0, false, "drift_diffusion", "drift_diffusion | equilibrium_poisson", equations, {}, {}},
     {"max_iterations", 0, false, "100", "Newton iterations per point", {}, {}, {}},
     {"tol_update", 0, false, "1e-8", "convergence: largest scaled update", {}, {}, {}},
@@ -238,6 +238,7 @@ constexpr std::array<KeyInfo, 32> solver_keys{{
     {"weighted_current", 0, false, "off", "weighted terminal current", on_off, {}, {}},
     {"rates", 0, false, "on", "store generation-recombination rates", on_off, {}, {}},
     {"minority_floor", 0, false, "off", "densities against eps of the majority", on_off, {}, {}},
+    {"log_densities", 0, false, "off", "Newton steps densities in ln n (ultrawide gaps)", on_off, {}, {}},
 }};
 
 constexpr std::array<KeyInfo, 4> sweep_keys{{

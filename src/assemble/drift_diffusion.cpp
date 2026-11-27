@@ -1638,8 +1638,10 @@ double System::update_size(std::span<const double> x, std::span<const double> dx
             continue;
         }
         const double n = x[data_->m_ * i + 1], p = x[data_->m_ * i + 2];
-        const double local =
-            state_->minority_floor_ ? std::max(floor, eps * std::max(n, p)) : floor;
+        // The log-density step (amendment 11) resolves every density to its own size: no floor.
+        const double local = state_->log_densities_  ? 0.0
+                             : state_->minority_floor_ ? std::max(floor, eps * std::max(n, p))
+                                                       : floor;
         size =
             std::max({size, std::abs(dx[data_->m_ * i]),
                       n > 0.0 ? std::abs(dx[data_->m_ * i + 1]) / std::max(n, local) : infinity,
@@ -1738,6 +1740,19 @@ double System::natural_size(std::span<const double> x_ref, std::span<const doubl
     return size;
 }
 
+bool System::log_density_scales(std::span<const double> x, std::span<double> columns) const {
+    NITCAD_EXPECTS(x.size() == unknowns() && columns.size() == unknowns());
+    if (!state_->log_densities_ || data_->equilibrium_) return false;
+    std::fill(columns.begin(), columns.end(), 1.0);
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        if (data_->insulator_[i] != 0) continue;
+        for (const std::size_t k : {data_->m_ * i + 1, data_->m_ * i + 2}) {
+            if (x[k] > 0.0) columns[k] = x[k];
+        }
+    }
+    return true;
+}
+
 void System::apply_update(std::span<double> x, std::span<const double> dx,
                                   double max_update) const {
     NITCAD_EXPECTS(x.size() == unknowns() && dx.size() == unknowns());
@@ -1762,7 +1777,11 @@ void System::apply_update(std::span<double> x, std::span<const double> dx,
         }
         if (data_->insulator_[i] != 0) continue;  // the densities stay 0
         for (const std::size_t k : {data_->m_ * i + 1, data_->m_ * i + 2}) {
-            x[k] = std::clamp(x[k] + dx[k], 0.1 * x[k], 10.0 * x[k]);
+            if (state_->log_densities_ && x[k] > 0.0) {  // amendment 11: a step in ln n, the same factor-10 bound
+                x[k] *= std::exp(std::clamp(dx[k] / x[k], -std::numbers::ln10, std::numbers::ln10));
+            } else {
+                x[k] = std::clamp(x[k] + dx[k], 0.1 * x[k], 10.0 * x[k]);
+            }
         }
     }
     if (data_->density_gradient_) {  // Unit 62 (QP9): the quantum potentials, as psi
