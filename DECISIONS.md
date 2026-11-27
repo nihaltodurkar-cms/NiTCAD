@@ -5291,6 +5291,15 @@ being about 0.9 % off: 6.865e6 is the hole value at E_c = 0.55 V/um); mu0,2 = v_
 E_t and continuity there, also for other mu01; dv/dE against differences for beta 0.41-2 and mu0 at E = 0;
 saturation to v_s; the Rashid mapping against its direct formula over T and N (synthetic coefficients).
 
+Amendment 10, continued (owner handoff `Claude_NiTCAD_Diamond_Ga2O3_Decisions.txt`, 2026-11-27): (A2) the 0.56 V/um
+values 4.903e6 and 6.927e6 cm/s accepted; (A4) Rashid et al., IEEE TED 55, 2744 (2008), read: Table III's
+T <= 343 K branch only (mu_max0 3443, n_max -1.55, mu_min0 55, n_min 2.5, m1 -2, C0 1.12e14, gamma2 0.589; N_ref
+exponent +3.40), valid to 343 K, the 343-600 K branch (4399, -3.4) not carried; (A5) fed undoped it gives 3443
+(3390 at 1e11) against Table 11's 2744: a known discrepancy, not rescaled; (A6) B 0.37 and P 0.57 eV kept (Rashid:
+360 and 590 meV), impact ionization off, the boron guards 7e18 / 1e20 kept; (A1) electrons by Pernot and Koizumi's
+law once read, 1880 rejected; diamond waits for that and Cheng 2023's Eg(T) (B1, B2). Rashid's Table III is a
+test fixture until diamond is registered.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a

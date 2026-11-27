@@ -26,7 +26,7 @@ double relative(double a, double b) { return std::abs(a / b - 1.0); }
 
 TEST_CASE("drift velocity: Table 11 at the owner's regression fields", "[drift_velocity][unit68]") {
     struct Row {
-        double E_V_per_um, v_n, v_p;  // owner's table, four digits; the 0.56 row recomputed (amendment 10)
+        double E_V_per_um, v_n, v_p;  // [V/um], [cm/s]: owner's table, four digits; 0.56 V/um as accepted (A2)
     };
     for (const Row& r : {Row{0.009, 1.692e5, 2.396e5}, Row{0.08, 1.504e6, 1.813e6}, Row{0.56, 4.903e6, 6.927e6},
                          Row{1.0, 6.441e6, 8.903e6}, Row{12.0, 1.443e7, 1.403e7}}) {
@@ -77,7 +77,7 @@ TEST_CASE("drift velocity: dv/dE analytic, mu0 at E = 0 for beta < 1", "[drift_v
 }
 
 TEST_CASE("drift velocity: Rashid's mobility on the Caughey-Thomas parameters", "[drift_velocity][unit68]") {
-    // Synthetic coefficients (Rashid's own wait for the paper).
+    // Synthetic coefficients: the mapping itself, over T and N.
     const double mu_min0 = 120.0, n_min = -0.6, mu_max0 = 2000.0, n_max = -2.2, C0 = 3e17, m1 = 1.4, g2 = 0.7;
     SemiconductorParameters p = silicon_parameters;
     p.hole_mobility = rashid_mobility(mu_min0, n_min, mu_max0, n_max, C0, m1, g2);
@@ -91,4 +91,20 @@ TEST_CASE("drift velocity: Rashid's mobility on the Caughey-Thomas parameters", 
             CHECK(relative(caughey_thomas_mobility(m, Carrier::hole, N, T), direct) < 1e-13);
         }
     }
+}
+
+TEST_CASE("drift velocity: Rashid Table III, T <= 343 K branch, as the diamond hole fixture (owner A4, A5)",
+          "[drift_velocity][unit68]") {
+    // Rashid et al. (2008) Table III, the T <= 343 K column; the 343-600 K branch (mu_max0 4399,
+    // n_max -3.4) is not carried. Valid only to 343 K. Not a registered material.
+    constexpr CaugheyThomasParameters rashid = rashid_mobility(55.0, 2.5, 3443.0, -1.55, 1.12e14, -2.0, 0.589);
+    CHECK(relative(rashid.N_ref_T_exponent, 2.0 / 0.589) < 1e-15);  // m1 < 0: +3.40, sign kept
+    SemiconductorParameters p = silicon_parameters;
+    p.hole_mobility = rashid;
+    const Semiconductor m = *Semiconductor::create(p);
+    // Rashid Fig. 6 at N_A(i') = 1e11: about 3400 at 300 K; 3390 by the formula.
+    CHECK(std::abs(caughey_thomas_mobility(m, Carrier::hole, 1e11, 300.0) - 3390.0) < 1.0);
+    CHECK(caughey_thomas_mobility(m, Carrier::hole, 0.0, 300.0) == 3443.0);
+    // Known discrepancy (A5): undoped 3443 against Is-haqzai Table 11's 2744 (v_s / E_c); not rescaled.
+    CHECK(relative(3443.0, holes.v_sat_cm_s / holes.E_c_V_per_cm) > 0.2);
 }
