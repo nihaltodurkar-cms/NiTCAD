@@ -105,6 +105,9 @@ std::optional<base::Error> check_saturation(std::string_view group, const Canali
     if (auto e = check(group, "v_sat_cm_s", c.v_sat_cm_s, Bound::positive)) return e;
     if (auto e = check(group, "beta", c.beta, Bound::finite)) return e;
     if (c.beta < 1.0) return parameter_error(group, "beta", " must be at least 1", c.beta);
+    if (!(c.temperature_A >= 0.0 && c.temperature_A <= 1.0)) {
+        return parameter_error(group, "temperature_A", " must lie in [0, 1]", c.temperature_A);
+    }
     return std::nullopt;
 }
 
@@ -232,13 +235,14 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
             return std::unexpected(parameter_error("alloy_mobility.", "fraction", " must lie in [0, 1]", a.fraction));
         }
         if (auto e = check("alloy_mobility.", "C_mu_electron", a.C_mu_electron, non_negative)) return std::unexpected(std::move(*e));
+        if (auto e = check("alloy_mobility.", "C_mu_hole", a.C_mu_hole, non_negative)) return std::unexpected(std::move(*e));
         if (auto e = check_mobility("alloy_mobility.electron_b.", a.electron_b)) return std::unexpected(std::move(*e));
         if (auto e = check_mobility("alloy_mobility.hole_b.", a.hole_b)) return std::unexpected(std::move(*e));
     }
-    if (auto e = check("lifetime.", "tau_n0", p.lifetime.tau_n0, positive)) {
+    if (auto e = check("lifetime.", "tau_n0", p.lifetime.tau_n0, non_negative)) {
         return std::unexpected(std::move(*e));
     }
-    if (auto e = check("lifetime.", "tau_p0", p.lifetime.tau_p0, positive)) {
+    if (auto e = check("lifetime.", "tau_p0", p.lifetime.tau_p0, non_negative)) {
         return std::unexpected(std::move(*e));
     }
     if (auto e = check("lifetime.", "N_ref", p.lifetime.N_ref, positive)) {

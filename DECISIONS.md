@@ -5203,6 +5203,44 @@ V_D = 0.1 V is 0.6297 A/cm against 0.6299 continuous (-0.03 %), currents conserv
 Owner 2026-11-27, "choose recommended" for the rest: the HEMT deck keeps `polarization_surface = off` (surface
 donors fully compensating the bare barrier surface) and the lightly p-type buffer over a substrate contact.
 
+**Amendment 7 (2026-11-27): slice 3 (III-V, MAD10) sources, values and rulings.** The owner's values (two rounds,
+`slice3-unknowns.txt` and the F-H addendum, outside the repo) from M1 (Vurgaftman, Meyer, Ram-Mohan 2001: gaps,
+Varshni, valleys, electron masses, Luttinger gamma_1 and gamma_2, VBOs, InGaAs and InAlAs bowing), Sotoodeh,
+Khalid and Rezazadeh, J. Appl. Phys. 87, 2890 (2000) (Caughey-Thomas mobility), Palankovski (thesis 2000) and
+Quay et al. (2000) (saturation velocity and its coefficient A; the alloy C_mu), and handbook and owner values
+(permittivity, lifetimes, Auger, radiative, thermal); each parameter cites its source and basis in the
+registry, "approximate" where the owner marked a value provisional or a placeholder. Implementation:
+`include/NiTCAD/physics/iii_v.hpp`.
+Owner rulings: (1) affinities from M1's VBOs, GaAs 4.07 eV the anchor, at each set's 300 K fundamental gap; (2)
+`gaas` and `ingaas` (no fraction) stay bit-identical and unrecorded; a new `gaas_2001` (M1 bands, Sotoodeh
+mobility, Quay saturation, tau 180 / 30 ns, kappa 0.55 (300/T)^1.25) is the alloys' GaAs end; (3) GaP and AlAs
+conduct in their X valleys (three ellipsoids, (m_l m_t^2)^(1/3) 3^(2/3)); InAs and InP X masses are for the three
+valleys together; hole DOS masses from the [001] heavy and light holes; full ionization; band-gap narrowing and
+impact ionization off; beta 2 (an engine default); SRH lifetimes as given, none for InSb (Auger-limited) and the
+alloys (process-specific); InGaAs and InAlAs x the In fraction in [0, 1], bowing as M1, other values linear,
+C_mu 1e6 for both carriers, kappa (1 - x) k_A + x k_B - C_k x (1 - x) (C_k 1.41 and 2.27 W/(cm K)) with
+(T/300)^-1.17; alloy impact ionization off; no slice-3 library deck.
+Engine additions (all opt-in; every earlier set and its hash unchanged): CanaliParameters::temperature_A (Quay,
+v_sat / (1 - A + A T / 300), 0 <= A <= 1, at the device temperature, not the local electrothermal one);
+AlloyMobilityParameters::C_mu_hole; a lifetime of 0 is "not given" and a run with SRH on refuses the region by
+name (equilibrium does not need SRH); device-file keys 99, 101, 102; `find_material(name, count)`, since `ingaas`
+names two entries (legacy, no fraction; alloy, one).
+Engineer's rulings under "choose recommended": InAlAs takes the lower of its Gamma and X valleys at 300 K (the
+satellite valley shifting with the fundamental one, so the crossover, x_In = 0.371, does not move with T), not a
+Boltzmann mix; where the InAlAs thermal fit is not positive (x about 0.54-0.74) the set has no thermal data and
+electrothermal refuses it.
+Results: 300 K gaps within 0.5 meV of the owner's (InP 1.3529, InAs 0.3538, GaP 2.2727, AlAs 2.1641, GaSb 0.7267,
+InSb 0.1737 eV); affinities within 3 meV of the owner's table (rounded gaps there). MAC3: ends exact, out-of-range
+refused with the range; In0.53Ga0.47As m_e 0.0430, m_lh 0.0516 (the owner's 0.0237 reduced mass does not follow
+from 0.043 and 0.052; 0.0235 checked). MAC4: the seven binaries equal Sotoodeh's form at 300 and 400 K.
+Owner 2026-11-27: **MAC4 amended**: the binaries are gated; the lattice-matched alloy rows are reported, not
+gated. Reported: In0.53Ga0.47As electrons +2, 0, +4, +22, +58 % at 1e15-1e19; holes +53 to +6 %; In0.52Al0.48As
+electrons -83 to -92 % (the reciprocal rule on the X-valley AlAs end; InAlAs transport is not realistic).
+**MAC11 deferred** (owner, "choose recommended", 2026-11-27): `direct_wkb` is pure generation (Unit 20, no
+occupancy factor), so it has no forward band-to-band current and no Esaki peak; a 1e19 / 1e19 abrupt gaas_2001
+diode at 0.25 nm steps with Fermi-Dirac statistics shows only noise (1e-7 A/cm^2) up to diffusion near 0.7 V.
+An energy-resolved forward tunnelling model is a later tunnelling unit's work; MAC11 waits for it.
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a
@@ -5340,14 +5378,14 @@ applies to `sion` with `sio2` and `si3n4` as its end members.
 | MAC1 | Registry refactor: every existing test passes unchanged; the Unit 59 NG1 trace set, run identities and result files of every bundled deck are byte-identical to those of the `main` commit the branch is rebased onto before slice 0 (amendment 2; `main` has moved past 5a3285b), that commit named in slice 0's commit message. |
 | MAC2 | Each new material reproduces its cited Eg(300 K), Eg(T) at 77 and 400 K where the source gives T dependence, electron affinity or band offset, ε, Nc, Nv and n_i(300 K) within 1e-9 relative of the value computed from the cited parameters, and the cited tabulated value itself within the source's printed precision. |
 | MAC3 | Alloys: at x = 0 and x = 1 each alloy equals its end binaries to 1e-12; at the source's tabulated compositions it matches within the printed precision; out-of-range x is refused with the range in the message. |
-| MAC4 | Mobility: each material's Caughey-Thomas curve at 1e15, 1e16, 1e17, 1e18, 1e19 cm^-3 matches the source's curve or table within 2 % where the source gives one. |
+| MAC4 | (Amended by amendment 7: the binaries gated, the lattice-matched alloy rows reported.) Mobility: each material's Caughey-Thomas curve at 1e15, 1e16, 1e17, 1e18, 1e19 cm^-3 matches the source's curve or table within 2 % where the source gives one. |
 | MAC5 | User materials: a `[material]` copy of `silicon` with no overrides gives a run bit-identical to `material = silicon`; each overridden member path changes exactly that member; `.nitmat` include equals the inline section; every MAD4 refusal names the key or file; a registry-name clash is refused. |
 | MAC6 | Provenance: `nitcad materials` lists every registry entry; every parameter of every new set has a non-empty citation; the run record carries name, x and the parameter hash, and two decks differing only in x differ in identity. |
 | MAC7 | Metal region: the bundled `finfet_bulk_3d.deck` rewritten with a metal region instead of the ε = 1e4 gate gives Id-Vg within 0.5 % at every point and V_th within 2 mV; a planar MOSFET with a metal-region gate equals its electrode-patch version to 1e-9 V in ψ. |
 | MAC8 | Dielectrics: a MOS capacitor C-V with each high-k gives C_ox = ε0 ε_r / t within 0.1 % in accumulation; gate tunnelling (Unit 51) through HfO2 and Al2O3 runs and gives a current between the SiO2 current of the same physical thickness and of the same EOT. |
 | MAC9 | SiGe: the valence-band offset of `sige_strained 0.2` on Si matches M4 within its printed precision; a SiGe-base HBT Gummel plot (library deck) runs to completion and its collector current at V_BE = 0.7 V exceeds the all-Si base deck's by the factor exp(ΔEg/kT) within 20 %. |
 | MAC10 | Polarization: an Al0.25Ga0.75N(25 nm)/GaN HEMT at zero gate bias gives a 2DEG sheet density within 10 % of M3's computed value for the same structure; `polarization = off` gives zero polarization charge and the run equals one with the key absent bit for bit. |
-| MAC11 | Direct-gap tunnelling: a GaAs p++/n++ diode with `direct_wkb` runs, and its I-V shows a current peak followed by a negative-resistance region in forward bias. |
+| MAC11 | (Deferred by amendment 7: needs forward band-to-band tunnelling.) Direct-gap tunnelling: a GaAs p++/n++ diode with `direct_wkb` runs, and its I-V shows a current peak followed by a negative-resistance region in forward bias. |
 | MAC12 | Library: SiGe HBT, GaN HEMT, SiC power MOSFET and high-k/metal-gate MOSFET decks pass the existing library tests (titled, every size a parameter, node limits, one-line edits) and run to completion at their defaults; CFET and forksheet are added only if they run to completion (owner, 2026-11-26: failing devices are not added). |
 | MAC13 | Refusals: unknown material names list the nearest registry names (deck vocabulary suggestion); every invalid composition, missing source-backed parameter or metal-region misuse is refused before solving with the key named. |
 | MAC14 | Suites: Release `/W4 /WX` full suite on the owner's word; Debug only on the owner's word. |

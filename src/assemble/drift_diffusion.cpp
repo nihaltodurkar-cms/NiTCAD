@@ -219,6 +219,18 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             return refuse("gate tunnelling needs a semiconductor region");
         }
     }
+    // Unit 68 slice 3: a lifetime of 0 is not given (no transferable value for the material).
+    if (models.srh) {
+        for (const device::Region& r : device.regions()) {
+            if (device::is_insulator(r)) continue;
+            const auto& lt = std::get<physics::Semiconductor>(r.material).parameters().lifetime;
+            if (lt.tau_n0 == 0.0 || lt.tau_p0 == 0.0) {
+                return std::unexpected(base::Error{base::ErrorCode::invalid_input, "srh: region '" + r.name +
+                              "' has no SRH lifetimes; give lifetime.tau_n0 and lifetime.tau_p0 in a "
+                              "[material] section, or set srh = off", {}});
+            }
+        }
+    }
     if (nonlocal && models.btbt_local) {
         return refuse("btbt_local and btbt_nonlocal would count the same tunnelling twice");
     }
@@ -598,16 +610,16 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
         t.ap = t.mu_p * scaling.V_T / scaling.D0 * e.geometry;
         t.field = scaling.V_T / e.length_cm;
         const physics::Semiconductor& m = device.material(static_cast<mesh::NodeId>(e.i));
-        t.sat_n = physics::saturation(m, physics::Carrier::electron);
-        t.sat_p = physics::saturation(m, physics::Carrier::hole);
+        t.sat_n = physics::saturation(m, physics::Carrier::electron, scaling.temperature_K);
+        t.sat_p = physics::saturation(m, physics::Carrier::hole, scaling.temperature_K);
         t.mixed = e.interface;
         t.mu_n_a = mu_n[e.i];
         t.mu_n_b = mu_n[e.j];
         t.mu_p_a = mu_p[e.i];
         t.mu_p_b = mu_p[e.j];
         const physics::Semiconductor& mb = device.material(static_cast<mesh::NodeId>(e.j));
-        t.sat_n_b = physics::saturation(mb, physics::Carrier::electron);
-        t.sat_p_b = physics::saturation(mb, physics::Carrier::hole);
+        t.sat_n_b = physics::saturation(mb, physics::Carrier::electron, scaling.temperature_K);
+        t.sat_p_b = physics::saturation(mb, physics::Carrier::hole, scaling.temperature_K);
         const double dln = std::log(s.n_ie_[e.j] / s.n_ie_[e.i]);
         const double ds = s.band_shift_[e.j] - s.band_shift_[e.i];
         t.shift_n = ds + dln;
@@ -773,8 +785,8 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
             SystemData::ImpactNode node{i, s.impact_edges_.size(), 0, {}, ii.electron, ii.hole,
                             physics::impact_ionization_temperature_factor(ii.phonon_energy_eV, T),
                             ii.phonon_energy_eV, mu_n[i], mu_p[i],
-                            physics::saturation(mat, physics::Carrier::electron),
-                            physics::saturation(mat, physics::Carrier::hole)};
+                            physics::saturation(mat, physics::Carrier::electron, T),
+                            physics::saturation(mat, physics::Carrier::hole, T)};
             double outer[9] = {};
             for (const std::size_t k : incident[i]) {
                 const detail::ScaledEdge& e = scaled->edges[k];

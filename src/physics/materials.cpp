@@ -1,5 +1,6 @@
 #include "NiTCAD/physics/materials.hpp"
 
+#include "NiTCAD/physics/iii_v.hpp"
 #include "NiTCAD/physics/nitrides.hpp"
 #include "NiTCAD/physics/sige.hpp"
 
@@ -44,7 +45,8 @@ namespace {
     X(alloy_gap.beta_b_K) NITCAD_CT_EXPONENTS(X, electron_mobility)                            \
     NITCAD_CT_EXPONENTS(X, hole_mobility) X(alloy_mobility.fraction)                           \
     X(alloy_mobility.C_mu_electron) NITCAD_CT(X, alloy_mobility.electron_b)                    \
-    NITCAD_CT(X, alloy_mobility.hole_b) NITCAD_THERMAL_PARAMETERS(X)
+    NITCAD_CT(X, alloy_mobility.hole_b) NITCAD_THERMAL_PARAMETERS(X) X(alloy_mobility.C_mu_hole)  \
+    X(electron_saturation.temperature_A) X(hole_saturation.temperature_A)
 
 // Unit 51 (GD5, GD10): an insulator's gate-tunnelling band data after its permittivity and heat.
 #define NITCAD_INSULATOR_PARAMETERS(X)                                                         \
@@ -405,7 +407,109 @@ std::expected<MaterialParameters, base::Error> nitride_alloy(std::span<const dou
     return *p;
 }
 
-constexpr std::array<MaterialEntry, 30> registry{{
+// --- III-V (MAD10; slice 3, amendment 7) ---------------------------------------------------------
+
+constexpr Citation vurgaftman{"I. Vurgaftman, J. R. Meyer, L. R. Ram-Mohan, J. Appl. Phys. 89, 5815 (2001) (M1), "
+                              "as the owner gave the values 2026-11-27",
+                              "gaps and Varshni (GaP, AlAs: X valley), electron and X-valley masses, Luttinger "
+                              "gamma_1 and gamma_2, valence-band offsets, InGaAs and InAlAs bowing"};
+constexpr Citation sotoodeh{"M. Sotoodeh, A. H. Khalid, A. A. Rezazadeh, J. Appl. Phys. 87, 2890 (2000), Table I, "
+                            "as the owner gave it",
+                            "Caughey-Thomas mobility of GaAs, InP, InAs, GaP and AlAs; GaSb and InSb from a "
+                            "temperature-extended fit (InSb exponents provisional)"};
+constexpr Citation palankovski_quay{"V. Palankovski (thesis, TU Wien 2000), Tables 3.30-3.32; R. Quay et al., Mater. "
+                                    "Sci. Semicond. Process. 3, 149 (2000), Table 1",
+                                    "saturation velocities and their temperature coefficient A; alloy C_mu"};
+constexpr Citation iii_v_owner{"owner values and rulings 2026-11-27 (Unit 68 amendment 7)",
+                               "permittivity; SRH lifetimes (representative or placeholder); Auger; radiative; thermal "
+                               "data; GaSb and InSb saturation; alloy thermal fit C_k; rulings: VBO alignment, full "
+                               "ionization, beta 2"};
+constexpr Citation iii_v_none{"NiTCAD: no value given",
+                              "off: band-gap narrowing, impact ionization, Kane band-to-band pair; InSb and alloy "
+                              "lifetimes (SRH refused); GaP and AlAs Auger and radiative"};
+constexpr std::array<Citation, 5> iii_v_sources{{vurgaftman, sotoodeh, palankovski_quay, iii_v_owner, iii_v_none}};
+
+// Rules every III-V set shares, then each set's own (later rules win).
+template <std::size_t N>
+constexpr auto iii_v_rules(const std::array<ParameterCitation, N>& own) {
+    constexpr std::array<ParameterCitation, 23> common{{{"Eg0_eV", 0, "secondary"},
+                                                        {"varshni_alpha_eV_per_K", 0, "secondary"},
+                                                        {"varshni_beta_K", 0, "secondary"},
+                                                        {"Nc300", 0, "derived"},
+                                                        {"Nv300", 0, "derived"},
+                                                        {"electron_affinity_eV", 0, "derived"},
+                                                        {"electron_mobility.", 1, "secondary"},
+                                                        {"hole_mobility.", 1, "secondary"},
+                                                        {"electron_saturation.", 2, "secondary"},
+                                                        {"hole_saturation.", 2, "secondary"},
+                                                        {"electron_saturation.beta", 4, "default"},
+                                                        {"hole_saturation.beta", 4, "default"},
+                                                        {"lifetime.", 3, "approximate"},
+                                                        {"lifetime.N_ref", 4, "default"},
+                                                        {"ionization.", 4, "default"},
+                                                        {"richardson.", 4, "default"},
+                                                        {"bandgap_narrowing.", 4, "default"},
+                                                        {"impact_ionization.", 4, "default"},
+                                                        {"band_to_band.", 4, "default"},
+                                                        {"thermal.thermopower_exponent_n", 4, "default"},
+                                                        {"thermal.thermopower_exponent_p", 4, "default"},
+                                                        {"thermal.conductivity_exponent", 3, "approximate"},
+                                                        {"thermal.heat_capacity_J_cm3K", 3, "derived"}}};
+    std::array<ParameterCitation, 23 + N> out{};
+    for (std::size_t i = 0; i < 23; ++i) out[i] = common[i];
+    for (std::size_t i = 0; i < N; ++i) out[23 + i] = own[i];
+    return out;
+}
+constexpr auto iii_v_tunnelling_cites = semiconductor_cites(
+    {3, "secondary"}, iii_v_rules(std::array<ParameterCitation, 2>{{{"band_to_band.electron_mass", 0, "derived"},
+                                                                     {"band_to_band.hole_mass", 0, "derived"}}}));
+constexpr auto gaas_2001_cites = semiconductor_cites(
+    {3, "secondary"},
+    iii_v_rules(std::array<ParameterCitation, 5>{{{"band_to_band.electron_mass", 0, "derived"},
+                                                  {"band_to_band.hole_mass", 0, "derived"},
+                                                  {"lifetime.tau_n0", 3, "secondary"},
+                                                  {"lifetime.tau_p0", 3, "secondary"},
+                                                  {"thermal.conductivity_exponent", 3, "secondary"}}}));
+constexpr auto iii_v_indirect_cites = semiconductor_cites(
+    {3, "secondary"}, iii_v_rules(std::array<ParameterCitation, 2>{{{"auger.", 4, "default"},
+                                                                     {"radiative_cm3_s", 4, "default"}}}));
+constexpr auto gasb_cites = semiconductor_cites(
+    {3, "secondary"},
+    iii_v_rules(std::array<ParameterCitation, 4>{{{"electron_saturation.", 3, "approximate"},
+                                                  {"hole_saturation.", 3, "approximate"},
+                                                  {"electron_saturation.beta", 4, "default"},
+                                                  {"thermal.conductivity_exponent", 3, "secondary"}}}));
+constexpr auto insb_cites = semiconductor_cites(
+    {3, "secondary"},
+    iii_v_rules(std::array<ParameterCitation, 8>{{{"electron_saturation.", 3, "approximate"},
+                                                  {"hole_saturation.", 3, "approximate"},
+                                                  {"electron_mobility.T_exponent", 3, "approximate"},
+                                                  {"electron_mobility.N_ref_T_exponent", 3, "approximate"},
+                                                  {"hole_mobility.T_exponent", 3, "approximate"},
+                                                  {"hole_mobility.N_ref_T_exponent", 3, "approximate"},
+                                                  {"lifetime.tau_n0", 4, "default"},
+                                                  {"lifetime.tau_p0", 4, "default"}}}));
+constexpr auto iii_v_alloy_cites = semiconductor_cites(
+    {0, "interpolated"},
+    iii_v_rules(std::array<ParameterCitation, 12>{{{"Eg0_eV", 0, "derived"},
+                                                   {"alloy_gap.", 0, "derived"},
+                                                   {"alloy_mobility.", 1, "secondary"},
+                                                   {"alloy_mobility.C_mu_electron", 2, "secondary"},
+                                                   {"alloy_mobility.C_mu_hole", 2, "secondary"},
+                                                   {"alloy_mobility.fraction", 0, "derived"},
+                                                   {"lifetime.tau_n0", 4, "default"},
+                                                   {"lifetime.tau_p0", 4, "default"},
+                                                   {"band_to_band.electron_mass", 0, "derived"},
+                                                   {"band_to_band.hole_mass", 0, "derived"},
+                                                   {"thermal.conductivity_W_cmK", 3, "fit"},
+                                                   {"thermal.conductivity_exponent", 3, "approximate"}}}));
+
+template <SemiconductorParameters (*make)()>
+std::expected<MaterialParameters, base::Error> iii_v_binary(std::span<const double>) {
+    return make();
+}
+
+constexpr std::array<MaterialEntry, 39> registry{{
     {"silicon", MaterialKind::semiconductor, 0, 0, "", "silicon, Couderc band set (default)", silicon_sources,
      fixed_semiconductor<silicon_parameters>},
     {"silicon_legacy", MaterialKind::semiconductor, 0, 0, "", "silicon, the legacy set", legacy_silicon_sources,
@@ -465,6 +569,29 @@ constexpr std::array<MaterialEntry, 30> registry{{
     {"ingan", MaterialKind::semiconductor, 1, 1, "ingan takes the In fraction x, 0 <= x <= 1",
      "In(x)Ga(1-x)N between GaN (x = 0) and InN (x = 1)", nitride_sources, nitride_alloy<ingan_parameters>,
      nitride_alloy_cites, true},
+    {"gaas_2001", MaterialKind::semiconductor, 0, 0, "",
+     "GaAs on Vurgaftman 2001 bands, Sotoodeh mobility (the alloys' GaAs end)", iii_v_sources,
+     iii_v_binary<gaas_2001_parameters>, gaas_2001_cites, true},
+    {"inp", MaterialKind::semiconductor, 0, 0, "", "InP", iii_v_sources, iii_v_binary<inp_parameters>,
+     iii_v_tunnelling_cites, true},
+    {"inas", MaterialKind::semiconductor, 0, 0, "", "InAs", iii_v_sources, iii_v_binary<inas_parameters>,
+     iii_v_tunnelling_cites, true},
+    {"gap", MaterialKind::semiconductor, 0, 0, "", "GaP, indirect (X-valley conduction minimum)", iii_v_sources,
+     iii_v_binary<gap_parameters>, iii_v_indirect_cites, true},
+    {"alas", MaterialKind::semiconductor, 0, 0, "", "AlAs, indirect (X-valley conduction minimum)", iii_v_sources,
+     iii_v_binary<alas_parameters>, iii_v_indirect_cites, true},
+    {"gasb", MaterialKind::semiconductor, 0, 0, "", "GaSb", iii_v_sources, iii_v_binary<gasb_parameters>, gasb_cites,
+     true},
+    {"insb", MaterialKind::semiconductor, 0, 0, "", "InSb (no SRH lifetimes: srh = off, or give them)", iii_v_sources,
+     iii_v_binary<insb_parameters>, insb_cites, true},
+    // Unit 68 slice 3 (MAD10): `ingaas` with no fraction stays the legacy entry above; with one, this.
+    {"ingaas", MaterialKind::semiconductor, 1, 1,
+     "ingaas takes the In fraction x, 0 <= x <= 1, or none (the legacy In0.53 set)",
+     "In(x)Ga(1-x)As between gaas_2001 (x = 0) and InAs (x = 1) (no SRH lifetimes)", iii_v_sources,
+     nitride_alloy<ingaas_parameters>, iii_v_alloy_cites, true},
+    {"inalas", MaterialKind::semiconductor, 1, 1, "inalas takes the In fraction x, 0 <= x <= 1",
+     "In(x)Al(1-x)As between AlAs (x = 0) and InAs (x = 1) (no SRH lifetimes)", iii_v_sources,
+     nitride_alloy<inalas_parameters>, iii_v_alloy_cites, true},
 }};
 
 // --- metal presets (MAD6, MAD14; amendment 4) ---------------------------------------------------
@@ -580,10 +707,10 @@ std::uint64_t parameter_hash(const MaterialParameters& m) {
     bytes(&kind, 1);
     // Paths added after slice 0 enter only when nonzero, so a set's hash does not move when the
     // parameter list grows (MAC1): the alloy gap (slice 1), the alloy mobility and the
-    // Caughey-Thomas exponents (slice 2).
+    // Caughey-Thomas exponents (slice 2), the saturation velocity's temperature law (slice 3).
     const auto added_later = [](std::string_view p) {
         return p.starts_with("alloy_gap.") || p.starts_with("alloy_mobility.") || p.ends_with(".mu_min_T_exponent") ||
-               p.ends_with(".N_ref_T_exponent") || p.ends_with(".alpha_T_exponent");
+               p.ends_with(".N_ref_T_exponent") || p.ends_with(".alpha_T_exponent") || p.ends_with(".temperature_A");
     };
     for (const auto& [path, v] : parameter_values(m)) {
         if (v == 0.0 && added_later(path)) continue;
@@ -615,6 +742,16 @@ const MaterialEntry* find_material(std::string_view name) noexcept {
         if (e.name == name) return &e;
     }
     return nullptr;
+}
+
+const MaterialEntry* find_material(std::string_view name, std::size_t arguments) noexcept {
+    const MaterialEntry* last = nullptr;
+    for (const MaterialEntry& e : registry) {
+        if (e.name != name) continue;
+        if (arguments >= e.arguments_min && arguments <= e.arguments_max) return &e;
+        last = &e;
+    }
+    return last;
 }
 
 }  // namespace NiTCAD::physics

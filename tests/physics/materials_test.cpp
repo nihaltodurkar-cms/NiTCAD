@@ -295,10 +295,12 @@ TEST_CASE("material registry: existing names give the existing sets bit for bit"
 
 TEST_CASE("material registry: names unique, arities and usage consistent", "[materials][unit68]") {
     const auto all = material_registry();
-    REQUIRE(all.size() == 30);  // Unit 68 slice 2: gan, aln, inn, algan, ingan
+    REQUIRE(all.size() == 39);  // Unit 68 slice 2: gan, aln, inn, algan, ingan; slice 3: nine III-V entries
     for (std::size_t i = 0; i < all.size(); ++i) {
         CAPTURE(all[i].name);
-        REQUIRE(find_material(all[i].name) == &all[i]);
+        // Names unique but `ingaas` (slice 3): its legacy set takes no fraction and its alloy one.
+        if (all[i].name != "ingaas") REQUIRE(find_material(all[i].name) == &all[i]);
+        REQUIRE(find_material(all[i].name, all[i].arguments_min) == &all[i]);
         REQUIRE(all[i].arguments_min <= all[i].arguments_max);
         REQUIRE((all[i].arguments_max == 0) == all[i].usage.empty());
         REQUIRE_FALSE(all[i].summary.empty());
@@ -308,7 +310,8 @@ TEST_CASE("material registry: names unique, arities and usage consistent", "[mat
 TEST_CASE("material registry: parameter paths and values agree (DK7)", "[materials][unit68]") {
     SemiconductorParameters s = silicon_parameters;
     const auto sv = parameter_values(MaterialParameters{s});
-    REQUIRE(sv.size() == 89);  // Unit 68: slice 1 the five alloy_gap paths; slice 2 six exponents, 18 alloy_mobility
+    REQUIRE(sv.size() == 92);  // Unit 68: slice 1 the five alloy_gap paths; slice 2 six exponents, 18 alloy_mobility;
+                               // slice 3 C_mu_hole and the two saturation temperature_A
     for (const auto& [path, value] : sv) {
         CAPTURE(path);
         double* target = semiconductor_parameter(s, path);

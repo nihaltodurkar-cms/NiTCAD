@@ -60,7 +60,8 @@ inline void expect_temperature(double temperature_K) {
     if (m.fraction == 0.0) return mu_a;
     const double x = m.fraction;
     const double mu_b = ct_mobility(electron ? m.electron_b : m.hole_b, N, T);
-    const double scatter = electron && m.C_mu_electron > 0.0 ? x * (1.0 - x) / m.C_mu_electron : 0.0;
+    const double C_mu = electron ? m.C_mu_electron : m.C_mu_hole;
+    const double scatter = C_mu > 0.0 ? x * (1.0 - x) / C_mu : 0.0;
     return 1.0 / ((1.0 - x) / mu_a + x / mu_b + scatter);
 }
 [[nodiscard]] inline double alloy_mobility_slope(const CaugheyThomasParameters& a, const AlloyMobilityParameters& m,

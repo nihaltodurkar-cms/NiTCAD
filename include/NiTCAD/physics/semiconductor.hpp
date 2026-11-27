@@ -39,6 +39,7 @@ struct CaugheyThomasParameters {
 };
 
 // Scharfetter doping-dependent SRH lifetimes: tau = tau0 / (1 + N / N_ref) (recombination.hpp).
+// tau_n0 or tau_p0 of 0 (Unit 68 slice 3): not given; a run with SRH refuses the material.
 struct ScharfetterLifetimeParameters {
     double tau_n0;  // [s]
     double tau_p0;  // [s]
@@ -57,8 +58,12 @@ struct AugerParameters {
 
 // Canali velocity saturation for one carrier (field_mobility.hpp).
 struct CanaliParameters {
-    double v_sat_cm_s;  // saturation velocity [cm/s], temperature independent (legacy)
+    double v_sat_cm_s;  // saturation velocity [cm/s] at 300 K
     double beta;        // exponent
+    // Unit 68 slice 3: the temperature law of R. Quay, C. Moglestue, V. Palankovski, S. Selberherr,
+    // Mater. Sci. Semicond. Process. 3, 149 (2000), eq (2): v_sat(T) = v_sat / (1 - A + A T / 300),
+    // 0 <= A <= 1; 0 (every set before it): temperature independent.
+    double temperature_A = 0.0;
 
     bool operator==(const CanaliParameters&) const = default;
 };
@@ -184,10 +189,11 @@ struct EnergyRelaxationParameters {
 // Caughey-Thomas mobility is end member a's; with fraction x != 0 each carrier's mobility is
 //     1 / mu = (1 - x) / mu_a + x / mu_b + x (1 - x) / C_mu,
 // mu_a and mu_b each end member's Caughey-Thomas mobility at the node's doping and temperature;
-// the alloy-scattering term for electrons only, C_mu 0: none. fraction 0 (the default): none.
+// the alloy-scattering term C_mu per carrier (holes from slice 3), 0: none. fraction 0 (the default): none.
 struct AlloyMobilityParameters {
     double fraction = 0.0;
     double C_mu_electron = 0.0;  // [cm^2/(V s)]
+    double C_mu_hole = 0.0;      // [cm^2/(V s)], Unit 68 slice 3; 0: none
     CaugheyThomasParameters electron_b{};
     CaugheyThomasParameters hole_b{};
 

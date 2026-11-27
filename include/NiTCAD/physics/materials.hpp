@@ -69,6 +69,10 @@ struct MaterialEntry {
 
 // The entry named `name`, or nullptr.
 [[nodiscard]] const MaterialEntry* find_material(std::string_view name) noexcept;
+// The entry of that name taking that many composition arguments (Unit 68 slice 3: `ingaas` names
+// two, the legacy set with none and the alloy with one); none matching, the last of that name
+// (its usage then refuses the count); nullptr for an unknown name.
+[[nodiscard]] const MaterialEntry* find_material(std::string_view name, std::size_t arguments) noexcept;
 
 // A parameter of a set by its C++ member path (DK7: eps_r, electron_mobility.mu_max, ...), or
 // nullptr. The density-of-states mass fits are not reachable this way.

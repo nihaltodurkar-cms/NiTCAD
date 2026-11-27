@@ -463,6 +463,7 @@ int materials(int argc, char** argv) {
         if (end == argv[i] || *end != '\0') return usage_error(std::format("'{}' is not a number", argv[i]));
         arguments.push_back(v);
     }
+    e = find_material(argv[2], arguments.size());  // `ingaas`: the legacy set or the alloy
     if (arguments.size() < e->arguments_min || arguments.size() > e->arguments_max) {
         return usage_error(e->arguments_max == 0 ? std::format("'{}' takes no arguments", e->name) : std::string(e->usage));
     }

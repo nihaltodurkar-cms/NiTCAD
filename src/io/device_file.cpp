@@ -150,7 +150,7 @@ auto energy_relaxation_fields(P& p) {
     auto& e = p.electron_mobility;
     auto& h = p.hole_mobility;
     auto& a = p.alloy_mobility;
-    return std::array<std::pair<std::uint16_t, F>, 31>{
+    return std::array<std::pair<std::uint16_t, F>, 34>{
         {{68, &p.energy_relaxation.tau_n_s},
          {69, &p.energy_relaxation.tau_p_s},
          {70, &p.alloy_gap.fraction},
@@ -166,7 +166,9 @@ auto energy_relaxation_fields(P& p) {
          {89, &a.electron_b.N_ref_T_exponent}, {90, &a.electron_b.alpha_T_exponent},
          {91, &a.hole_b.mu_min}, {92, &a.hole_b.mu_max}, {93, &a.hole_b.N_ref},
          {94, &a.hole_b.alpha}, {95, &a.hole_b.T_exponent}, {96, &a.hole_b.mu_min_T_exponent},
-         {97, &a.hole_b.N_ref_T_exponent}, {98, &a.hole_b.alpha_T_exponent}}};
+         {97, &a.hole_b.N_ref_T_exponent}, {98, &a.hole_b.alpha_T_exponent},
+         // Unit 68 slice 3; 100 is the thermal record's key.
+         {99, &a.C_mu_hole}, {101, &p.electron_saturation.temperature_A}, {102, &p.hole_saturation.temperature_A}}};
 }
 
 constexpr std::uint16_t thermal_record_key = 100;
