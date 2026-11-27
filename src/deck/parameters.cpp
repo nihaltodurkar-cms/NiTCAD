@@ -262,11 +262,12 @@ std::expected<Deck, base::Error> substituted(const Deck& deck) {
     for (const Section& s : deck.sections) {
         if (s.kind == "parameters") continue;
         Section c = s;
-        const bool takes = s.kind == "mesh" || s.kind == "region" || s.kind == "contact" || s.kind == "doping";
+        const bool takes = s.kind == "mesh" || s.kind == "region" || s.kind == "contact" || s.kind == "doping" ||
+                           s.kind == "sweep";  // Unit 26p (GU1): a bias as a parameter
         for (Entry& e : c.entries) {
             if (e.value.find('$') == std::string::npos) continue;
             if (!takes) {
-                return std::unexpected(at(source, e.line, "a parameter reference outside [mesh], [region], [contact] and [doping]"));
+                return std::unexpected(at(source, e.line, "a parameter reference outside [mesh], [region], [contact], [doping] and [sweep]"));
             }
             auto v = substitute(e.value, *params);
             if (!v) return std::unexpected(at(source, e.line, v.error()));

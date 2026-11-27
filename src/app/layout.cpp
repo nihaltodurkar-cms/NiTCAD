@@ -13,14 +13,23 @@ int scaled(int pixels_at_96, int dpi) noexcept {
 Panes layout_panes(int client_width, int client_height, int dpi, const Layout& saved, int toolbar_height,
                    int status_height) {
     Panes p;
-    const int w = std::max(client_width, 0), h = std::max(client_height, 0);
-    p.toolbar = {0, 0, w, std::min(toolbar_height, h)};
-    p.status = {0, std::max(h - status_height, p.toolbar.bottom()), w, 0};
+    const int full_w = std::max(client_width, 0), h = std::max(client_height, 0);
+    p.toolbar = {0, 0, full_w, std::min(toolbar_height, h)};
+    p.status = {0, std::max(h - status_height, p.toolbar.bottom()), full_w, 0};
     p.status.height = h - p.status.y;
     const int top = p.toolbar.bottom(), bottom = p.status.y;
     const int body = std::max(bottom - top, 0);
 
     const int split = scaled(splitter_96, dpi);
+    // Unit 26p (GU3): the guide down the right edge, at most a third of the window; the rest laid out in what is
+    // left, as before.
+    int w = full_w;
+    if (saved.guide_shown) {
+        const int guide = std::min(scaled(saved.guide_width > 0 ? saved.guide_width : guide_width_96, dpi), full_w / 3);
+        p.guide = {full_w - guide, top, guide, body};
+        p.guide_splitter = {p.guide.x - split, top, split, body};
+        w = std::max(p.guide_splitter.x, 0);
+    }
     const int min_side = scaled(min_side_96, dpi), min_centre = scaled(min_centre_96, dpi);
     int tree = scaled(saved.tree_width > 0 ? saved.tree_width : tree_width_96, dpi);
     int inspector = scaled(saved.inspector_width > 0 ? saved.inspector_width : inspector_width_96, dpi);

@@ -3358,6 +3358,22 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   along each base line so a split element's half-edges cancel its neighbour's whole edge. That is the device's
   edge, the insulator and hidden-region gaps, and both sides of each step.
 
+**As built, Unit 26p (MOSFET guide; DECISIONS.md GU1–GU6, GUC1–GUC6, GUQ1–GUQ3; on `app/mosfet-guide`):**
+- **Biases as parameters (GU1):** `deck::substituted` takes `$name` in `[sweep]` as in `[mesh]`, `[region]`,
+  `[contact]` and `[doping]`; a deck without `$` there is untouched.
+- **Lessons (GU2):** `app/lesson.hpp`. A lesson is an example deck whose leading comment block carries `# lesson:`,
+  `# track:`, `# order:` and steps (`# step:`, prose, at most one `# do: set | sweep | run | edit [s] k = v`, `# show:`,
+  `# report:`); `parse_lesson` (errors on their line), `list_lessons`, `set_entry` (one deck line). No Win32.
+- **Reports (GU5):** `sweep_report` (one line per figure, the sweep's values in order, "—" for a run without it) and
+  `run_report` (before → after), from Unit 24's figures; the guide extracts nothing itself.
+- **The pane (GU3, GU4):** `src/app/guide_pane.*`, View > Guide (F1, "Guide (&J)"), at the window's right edge
+  (`Panes::guide`, at most a third of the width, saved as `guide_shown`/`guide_width`). `MainWindow` is its host:
+  a lesson opens as a copy (`copy_example`); set and edit go through `GeometryPage::edit_text` (one undo);
+  sweep and run through `start_deck_run`; the report and the step's tab follow the run's end. System colours.
+- **Content (GU6):** thirteen decks in `examples/lessons/` (basics 4, intermediate 4, advanced 5), one planar MOSFET
+  body with `Vd`, `Vg`, `Vmax`, `phi` and `nx` parameters. Each lesson's stated trend is checked in its own results
+  by `[.lessons]` (Release ctest `app_lessons`, 1184 s); the guide's real sweep by `app_window_guide_run` (33 s).
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |

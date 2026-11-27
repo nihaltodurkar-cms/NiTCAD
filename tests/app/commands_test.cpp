@@ -71,3 +71,11 @@ TEST_CASE("app commands: menus, mnemonics and accelerators (WG5)", "[app]") {
         CHECK(app::find_command(c) != nullptr);
     }
 }
+
+TEST_CASE("app commands: View > Guide on F1 (Unit 26p GU3)", "[app]") {
+    const app::CommandInfo* g = app::find_command(app::Command::guide);
+    REQUIRE(g);
+    CHECK(g->menu == "&View");
+    CHECK(g->accelerator.key == 0x70);  // VK_F1
+    CHECK(g->accelerator_text == "F1");
+}

@@ -1,0 +1,105 @@
+# lesson: Oxide thickness and gate control
+# track: basics
+# order: 3
+# step: The oxide as a capacitor
+# The gate controls the channel through the oxide, a capacitor of Cox = εox / tox per area. A thinner
+# oxide means more capacitance: the same gate voltage holds more charge at the surface, so the gate needs
+# less voltage to reach inversion and controls the channel more firmly.
+#
+# This body is doped more heavily (Na = 3×10¹⁷ cm⁻³) so the effect on Vth is large.
+# step: Sweep the oxide
+# Three oxides, one transfer curve each. The Results tab plots each figure against tox.
+# do: sweep tox = 15nm, 10nm, 5nm
+# show: results
+# report: Threshold (max gm), Subthreshold swing
+# step: What to see
+# Vth falls as the oxide thins: the depletion-charge term √(2q·εSi·Na·2φF) / Cox shrinks with
+# tox. The subthreshold swing falls too, towards its 60 mV/dec limit, because the gate's capacitance grows
+# against the depletion layer's.
+#
+# Thinner oxides are why transistors kept improving as they shrank, until tunnelling through oxides of a
+# nanometre or two forced high-k dielectrics.
+
+[parameters]
+# group: Main
+Lg = 1um  # Gate length
+tox = 10nm  # Oxide thickness
+Na = 3e17  # Body acceptors (cm^-3)
+Nsd = 1e20  # Source/drain donors (cm^-3)
+phi = 4.1  # Gate work function (eV)
+# group: Biases
+Vd = 0.05  # Drain bias (V)
+Vg = 1.5  # Gate bias (V)
+Vmax = 2.5  # Last bias of the swept contact (V)
+# group: Body and contacts
+Lsd = 0.5um  # Source/drain length
+xj = 0.1um  # Junction depth
+tsi = 0.99um  # Silicon depth
+ov = 50nm  # Source/drain overlap under the gate
+lat = 20nm  # Lateral spread of the source/drain
+yc = 0.8um  # Contact bottom
+gc = 5nm  # Contact gap below the oxide
+nx = 51  # Mesh lines along the gate
+# group: Positions (derived)
+x_gate = $Lsd + $Lg  # Gate end
+L = $Lsd + $Lg + $Lsd  # Device length
+x_s = $Lsd + $ov  # Source window end
+x_d = $Lsd + $Lg - $ov  # Drain window start
+y_ox = $tsi + $tox  # Oxide top
+y_ct = $tsi - $gc  # Contact top
+
+[mesh]
+type = tensor
+x = linspace(0, $Lsd, 11) + linspace($Lsd, $x_gate, $nx) + linspace($x_gate, $L, 11)
+y = linspace(0, $yc, 17) + linspace($yc, $tsi, 39) + linspace($tsi, $y_ox, 6)
+straddle y = $tsi 0.5nm
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 $L  $tsi $y_ox
+
+[doping]
+profile = acceptor constant $Na
+profile = donor gaussian $Nsd axis=y center=$tsi width=$xj x=0:$x_s lateral=$lat
+profile = donor gaussian $Nsd axis=y center=$tsi width=$xj x=$x_d:$L lateral=$lat
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  $yc $y_ct
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = $L $L  $yc $y_ct
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = $Lsd $x_gate  $y_ox $y_ox
+electrode = metal
+work_function = $phi
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[models]
+field_mobility = on
+surface_mobility = off
+
+[solver]
+line_search = residual
+max_cuts = 6
+
+[sweep]
+contact gate = 0 : $Vmax : 0.05
+contact drain = $Vd
+
+[output]
+sweep = 03_oxide_thickness.nitsweep
+device = 03_oxide_thickness.nitdev
+table = 03_oxide_thickness.csv

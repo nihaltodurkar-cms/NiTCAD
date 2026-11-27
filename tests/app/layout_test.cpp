@@ -119,3 +119,39 @@ TEST_CASE("app layout: the console along the bottom, its height saved, folded to
     check_tiles(e, 600, 150);
     CHECK(e.console.height == 0);
 }
+TEST_CASE("app layout: the guide hidden leaves the panes as before (Unit 26p GU3)", "[app]") {
+    const app::Layout defaults;
+    app::Layout wide;
+    wide.guide_width = 500;  // a saved width, the guide not shown
+    for (const int dpi : {96, 144}) {
+        const Panes a = app::layout_panes(1600, 900, dpi, defaults, 30, 22);
+        const Panes b = app::layout_panes(1600, 900, dpi, wide, 30, 22);
+        CHECK(a.guide.width == 0);
+        CHECK(b.guide.width == 0);
+        CHECK(b.inspector.x == a.inspector.x);
+        CHECK(b.inspector.width == a.inspector.width);
+        CHECK(b.tabs.width == a.tabs.width);
+        CHECK(b.console.width == a.console.width);
+    }
+}
+
+TEST_CASE("app layout: the guide shown takes the right edge (Unit 26p GU3)", "[app]") {
+    app::Layout saved;
+    saved.guide_shown = true;
+    const Panes p = app::layout_panes(1600, 900, 96, saved, 30, 22);
+    CHECK(p.guide.width == app::guide_width_96);
+    CHECK(p.guide.right() == 1600);
+    CHECK(p.guide.y == p.toolbar.bottom());
+    CHECK(p.guide.bottom() == p.status.y);
+    CHECK(p.guide_splitter.right() == p.guide.x);
+    CHECK(p.inspector.right() == p.guide_splitter.x);
+    CHECK(p.console.width == p.guide_splitter.x);
+    CHECK(p.inspector.width == app::inspector_width_96);
+    saved.guide_width = 400;
+    const Panes q = app::layout_panes(3200, 1800, 192, saved, 60, 44);
+    CHECK(q.guide.width == 800);
+    // A narrow window: the guide keeps at most a third of it.
+    const Panes n = app::layout_panes(900, 700, 96, saved, 30, 22);
+    CHECK(n.guide.width == 300);
+    CHECK(n.tabs.width > 0);
+}

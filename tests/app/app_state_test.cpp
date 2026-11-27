@@ -85,3 +85,22 @@ TEST_CASE("app state 26h: the axis box is saved; old files have it on (JD1, JQ3,
     s.axis_box = true;
     CHECK(app::parse_state(app::serialize(s)).axis_box);
 }
+
+TEST_CASE("app state 26p: the guide pane's place is saved; old files have it hidden (GU3)", "[app]") {
+    app::AppState s;
+    s.layout.guide_shown = true;
+    s.layout.guide_width = 340;
+    s.layout.width = 1200;
+    const app::AppState r = app::parse_state(app::serialize(s));
+    CHECK(r.layout.guide_shown);
+    CHECK(r.layout.guide_width == 340);
+    // The window line read after them keeps them.
+    const app::AppState w = app::parse_state("guide_shown = 1\nguide_width = 300\nwindow = 1 2 800 600\n");
+    CHECK(w.layout.guide_shown);
+    CHECK(w.layout.guide_width == 300);
+    CHECK(w.layout.width == 800);
+    const app::AppState old = app::parse_state("window = 1 2 800 600\n");
+    CHECK_FALSE(old.layout.guide_shown);
+    CHECK(old.layout.guide_width == 0);
+    CHECK(app::parse_state("guide_width = -4\n").layout.guide_width == 0);
+}

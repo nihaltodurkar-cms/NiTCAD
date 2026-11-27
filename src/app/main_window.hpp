@@ -41,6 +41,7 @@
 #include "deck_pane.hpp"
 #include "new_device_dialog.hpp"
 #include "sweep_dialog.hpp"
+#include "guide_pane.hpp"
 #include "NiTCAD/app/sweep_results.hpp"
 #include "geometry_page.hpp"
 #include "solid_page.hpp"
@@ -101,7 +102,8 @@ class MainWindow final : public Viewport::Host,
                          public GeometryPage::Host,
                          public SolidPage::Host,
                          public NewDeviceDialog::Host,
-                         public SweepDialog::Host {
+                         public SweepDialog::Host,
+                         public GuidePane::Host {
 public:
     enum Tab : int { tab_start = 0, tab_geometry, tab_view, tab_curves, tab_deck, tab_run, tab_results, tab_count };
 
@@ -148,6 +150,10 @@ public:
     [[nodiscard]] RunPage& run_page() noexcept { return *run_page_; }
     [[nodiscard]] ResultsPage& results_page() noexcept { return *results_; }
     [[nodiscard]] GeometryPage& geometry_page() noexcept { return *geometry_; }
+    // Unit 26p: the guide pane (null until View > Guide first shows it) and its host calls.
+    [[nodiscard]] GuidePane* guide() noexcept { return guide_.get(); }
+    void guide_open(std::size_t lesson) override;
+    void guide_act(const LessonStep& step) override;
     // Unit 26l: the 3D modeller, shown on the Geometry tab for a layered generate3d or an extrude3d deck.
     [[nodiscard]] SolidPage& solid_page() noexcept { return *solid_; }
     [[nodiscard]] bool solid_shown() const noexcept { return solid_shown_; }
@@ -244,7 +250,7 @@ public:
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
         id_tree = 4000, id_tabs, id_viewport, id_deck, id_metrics, id_inspector, id_toolbar, id_status, id_start,
-        id_run_page, id_results, id_console, id_geometry, id_geometry_inspector, id_solid,
+        id_run_page, id_results, id_console, id_geometry, id_geometry_inspector, id_solid, id_guide,
         id_geometry_controls = 7001,  // the Geometry section's controls (GeometryPage::Control from here)
         id_solid_controls = 7101,     // the 3D Geometry section's controls (SolidPage::Control from here)
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
@@ -408,6 +414,10 @@ private:
     void open_sweep_dialog(const std::string& name);
     void sweep_run(const std::string& name, const std::vector<std::string>& values) override;
     void sweep_closed() override;
+
+    // Unit 26p (GU3-GU5): the guide pane.
+    void guide_report();  // a run or sweep the guide started has ended: its report, the step's tab
+    void guide_show(const std::string& tab);  // a step's `show`
     void finish_sweep_dialog();
     void sweep_finished();
     void start_deck_run(const std::pair<std::string, std::vector<std::string>>* sweep);
@@ -448,6 +458,11 @@ private:
     // Unit 26n slice 3: the sweep dialog, the sweep it asked for (started once it has closed), the text swept, the
     // results, their figures and the sweep view shown on the Curves tab (-1: the run's own views).
     std::unique_ptr<SweepDialog> sweep_dialog_;
+    std::unique_ptr<GuidePane> guide_;           // Unit 26p (GU3): made when first shown
+    std::filesystem::path lessons_dir_;          // <examples>/lessons
+    std::vector<Figure> guide_before_;           // the figures before a guide step's run (GU5)
+    std::optional<LessonStep> guide_pending_;    // the step whose run or sweep is under way
+    std::filesystem::path guide_deck_;           // the lesson copy the guide opened: steps act on it only
     std::optional<std::pair<std::string, std::vector<std::string>>> sweep_request_;
     std::string sweep_text_;
     std::optional<SweepResults> sweep_results_;

@@ -22,6 +22,7 @@
 #include <variant>
 
 #include "NiTCAD/app/compare.hpp"
+#include "NiTCAD/deck/dimension_sweep.hpp"
 #include "NiTCAD/app/run_monitor.hpp"
 #include "NiTCAD/app/unlock.hpp"
 #include "NiTCAD/render/compare.hpp"
@@ -610,6 +611,8 @@ void MainWindow::update_command_states() {
     check(Command::cut_line_mode, cut_mode_);
     check(Command::perspective, settings().perspective);
     check(Command::hover_readout, state_.hover_readout);
+    check(Command::guide, state_.layout.guide_shown);
+    if (guide_) guide_->set_busy(runner_.busy());
 }
 
 // --- layout and DPI --------------------------------------------------------------------------------
@@ -634,6 +637,7 @@ void MainWindow::apply_dpi(int dpi) {
     results_->set_dpi(dpi, font_, bold_);
     geometry_->set_dpi(dpi, font_, bold_);
     solid_->set_dpi(dpi, font_, bold_);
+    if (guide_) guide_->set_dpi(dpi, font_, bold_);
     layout();
 }
 
@@ -657,6 +661,10 @@ void MainWindow::layout() {
     place(tabs_, panes_.tabs);
     place(inspector_, panes_.inspector);
     place(console_panel_, panes_.console);
+    if (guide_) {  // Unit 26p (GU3)
+        place(guide_->hwnd(), panes_.guide);
+        ShowWindow(guide_->hwnd(), state_.layout.guide_shown ? SW_SHOW : SW_HIDE);
+    }
     const bool view = tab_ == tab_view || tab_ == tab_curves || geometry_preview();
     Rect page = panes_.page;
     if (tab_ != tab_view) page.height += panes_.metrics.height;  // the metrics strip is the device view's
@@ -1564,6 +1572,95 @@ void MainWindow::sweep_finished() {
     select_tab(tab_curves);
     sync_inspector();
     refresh();
+    guide_report();
+}
+
+// --- the guide (Unit 26p, GU4, GU5) ----------------------------------------------------------------
+
+void MainWindow::guide_open(std::size_t lesson) {
+    if (!guide_ || lesson >= guide_->lessons().size() || runner_.busy() || !confirm_discard()) return;
+    const Lesson& l = guide_->lessons()[lesson];
+    fs::path to = options_.examples_copy_dir;
+    if (to.empty()) to = win32::documents_dir() / L"NiTCAD" / L"lessons";
+    auto copy = copy_example(Example{l.path, l.title, {}}, to);
+    if (!copy) {
+        set_status(status_state, copy.error().message);
+        return;
+    }
+    if (!open_deck(*copy)) return;
+    guide_deck_ = *copy;
+    guide_pending_.reset();
+    guide_->show_lesson(lesson);
+}
+
+void MainWindow::guide_act(const LessonStep& step) {
+    if (!guide_ || runner_.busy()) return;
+    if (guide_deck_.empty() || document_.path() != guide_deck_) {  // never the learner's own deck
+        guide_->set_error("This step acts on the lesson's own deck: pick the lesson in the list to open it.");
+        return;
+    }
+    const LessonAction& a = step.action;
+    const auto apply = [&](const std::expected<std::string, std::string>& text) {
+        if (!text) {
+            guide_->set_error(text.error());
+            return;
+        }
+        if (tab_ != tab_geometry) select_tab(tab_geometry);
+        geometry_->edit_text(*text);  // one undo, as a dimensions-panel edit (DT1)
+        guide_->set_report("Done: " + a.name + " = " + a.value);
+        if (!step.show.empty() && step.show != "geometry") guide_show(step.show);
+    };
+    switch (a.kind) {
+        case LessonAction::Kind::none: return;
+        case LessonAction::Kind::set: apply(dims::set_dimension(deck_->text(), a.name, a.value)); return;
+        case LessonAction::Kind::edit: apply(set_entry(deck_->text(), a.section, a.name, a.value)); return;
+        case LessonAction::Kind::sweep: {
+            const auto rows = dims::read_dimensions(deck_->text());
+            if (!rows) {
+                guide_->set_error(rows.error());
+                return;
+            }
+            const auto row = std::ranges::find(*rows, a.name, &dims::Dimension::name);
+            if (row == rows->end()) {
+                guide_->set_error("the deck has no parameter '" + a.name + "'");
+                return;
+            }
+            auto values = deck::sweep_values(a.value, row->length);
+            if (!values) {
+                guide_->set_error(values.error());
+                return;
+            }
+            guide_pending_ = step;
+            const std::pair<std::string, std::vector<std::string>> sweep{a.name, std::move(*values)};
+            start_deck_run(&sweep);
+            break;
+        }
+        case LessonAction::Kind::run:
+            guide_before_ = workspace_ ? extracted_figures(*workspace_) : std::vector<Figure>{};
+            guide_pending_ = step;
+            start_deck_run(nullptr);
+            break;
+    }
+    if (!runner_.busy()) guide_pending_.reset();  // the run did not start (its reason is in the status bar)
+    update_command_states();
+}
+
+void MainWindow::guide_show(const std::string& tab) {
+    if (tab == "geometry") select_tab(tab_geometry);
+    else if (tab == "fields") select_tab(tab_view);
+    else if (tab == "curves") select_tab(tab_curves);
+    else if (tab == "results") select_tab(tab_results);
+}
+
+void MainWindow::guide_report() {
+    if (!guide_ || !guide_pending_) return;
+    const LessonStep step = *std::exchange(guide_pending_, std::nullopt);
+    if (step.action.kind == LessonAction::Kind::sweep) {
+        if (sweep_results_) guide_->set_report(sweep_report(*sweep_results_, sweep_figures_, step.report));
+    } else if (workspace_) {
+        guide_->set_report(run_report(guide_before_, extracted_figures(*workspace_), step.report));
+    }
+    if (!step.show.empty()) guide_show(step.show);
 }
 
 std::vector<std::string> MainWindow::sweep_views() const {
@@ -2846,7 +2943,20 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
                                    sw.values.size() == 1 ? "" : "s", seconds, sw.stopped ? " (stopped)" : ""),
                        sw.completed == sw.values.size() ? LogLevel::success : LogLevel::warning);
             sweep_finished();
+        } else {
+            guide_report();  // Unit 26p (GU5): a guide step's run
         }
+    }
+    if (s == RunState::failed && guide_ && guide_pending_) {
+        const LessonStep step = *std::exchange(guide_pending_, std::nullopt);
+        std::string text;
+        // A guide sweep that failed part-way: the runs that finished, "—" for the rest, then why (GU5).
+        if (step.action.kind == LessonAction::Kind::sweep && runner_.sweep()) {
+            if (auto r = load_sweep(sweep_text_, document_.path(), runner_.sweep()->name, runner_.sweep()->values)) {
+                text = sweep_report(*r, sweep_figures(*r), step.report) + "\n";
+            }
+        }
+        guide_->set_error(text + (runner_.error() ? runner_.error()->message : std::string("The run failed.")));
     }
     update_command_states();
     update_taskbar(pending == Pending::run);
@@ -3385,6 +3495,16 @@ void MainWindow::execute(Command c) {
     case Command::tab_run: select_tab(tab_run); return;
     case Command::tab_results: select_tab(tab_results); return;
     case Command::tab_geometry: select_tab(tab_geometry); return;
+    case Command::guide:  // Unit 26p (GU3)
+        state_.layout.guide_shown = !state_.layout.guide_shown;
+        if (state_.layout.guide_shown && !guide_) {
+            guide_ = std::make_unique<GuidePane>(hwnd_, *this, id_guide);
+            guide_->set_dpi(dpi_, font_, bold_);
+            guide_->set_lessons(list_lessons(lessons_dir_));
+        }
+        layout();
+        update_command_states();
+        return;
     default: return;
     }
 }
@@ -3818,6 +3938,7 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             devices_dir_ = options_.examples_dir / "devices";
             examples_ = list_examples(options_.examples_dir);
         }
+        lessons_dir_ = devices_dir_.parent_path() / "lessons";  // Unit 26p (GU6)
         refresh();  // the view's placeholder message
         select_tab(tab_start);
         return 0;

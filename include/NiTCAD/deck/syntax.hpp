@@ -89,7 +89,7 @@ struct Parameter {
                                                                  const std::vector<Parameter>& params);
 
 // The deck with every reference replaced and [parameters] removed: what the build reads (deck::build calls it). A
-// reference outside [mesh], [region], [contact] and [doping] is an error on its line.
+// reference outside [mesh], [region], [contact], [doping] and [sweep] is an error on its line.
 [[nodiscard]] std::expected<Deck, base::Error> substituted(const Deck& deck);
 
 // A value's words split at blanks and commas, a sum (`$a + $b`, `$a-5nm`, by the rules above) kept as one word:

@@ -5586,6 +5586,103 @@ Additional refusals beyond TDD3: `dose_oxide_thickness` or `interface_trap_yield
 pass (8 cases). ARCHITECTURE.md: the as-built block after Unit 65's and the radiation row (Unit 65's status there
 corrected to merged, PR #120). TDC6's suites wait for the owner's word.
 
+### Unit 26p — MOSFET guide: an in-app panel of guided lessons, basics to research level (proposed 2026-11-27; on `app/mosfet-guide`)
+
+**Owner request (2026-11-27):** "Create a MOSFET Module where I can learn about how doping, voltage changes, other
+important parameters affect the Device in my NiTCAD"; of a lesson deck using today's panel and sweeps, or a new
+in-app panel with explanations and guided steps, the owner chose **the panel**; the audience "from basic to advanced
+research level"; the three-track syllabus and panel sketch put to them ruled "choose recommended" (standing
+instruction, 2026-11-11).
+
+**Where things stand (found while proposing).**
+- `[parameters]` rows show in the Geometry tab's dimensions panel (26n DT1); each row's Sweep… runs the deck once per
+  value (DT6), and the Results tab's sweep view overlays the curves and plots Unit 24's figures against the value
+  (DT7, `app/sweep_results.hpp`: `sweep_figures` by name). `analysis/dc.hpp` extracts V_th (max g_m, constant
+  current), SS, g_m max, on/off, DIBL and output conductance.
+- `deck::substituted` (`src/deck/parameters.cpp`) takes `$name` in `[mesh]`, `[region]`, `[contact]` and `[doping]`
+  only. A gate work function can be a parameter today; a bias in `[sweep]` cannot, so Id–Vd at several gate voltages,
+  or V_th against drain bias (DIBL), cannot be swept from the panel.
+- The menu bar has no Help menu; View holds the view commands (and, on `app/aurora-theme`, the theme).
+- Nothing in the application explains physics; the example decks' header comments are the only prose.
+
+**Approaches considered.** (A, chosen) lessons written as example decks whose header comments carry the steps
+(`# step:`, `# do:` …, the precedent being `# group:` in `[parameters]`), read by a guide panel that drives the
+existing panel, sweep and tabs: content stays plain text beside the decks, each lesson deck runs on its own, and the
+app gains one parser and one pane. (B) a separate lesson file format referring to a deck: more freedom, but a second
+file kind, its own versioning and a second place for each lesson's numbers. (C) lessons compiled into the
+application: quickest first lesson, but every wording fix is a rebuild and the content is unreadable outside the app.
+
+**Standing conditions:** as Unit 26n. The deck is the only source of truth, edited by minimal edits through the deck
+editor's undo; the guide never writes a file the learner did not ask for (a lesson opens as a copy, as an example
+does). Every deck that builds today builds to the same bits. Win32 + D3D12 + Direct2D only, no new dependency, no
+Python. The models have no Win32 type. Criteria fixed before code. Targeted Release tests per slice; full suites and
+Debug only on the owner's word; builds `-j 6`, runs on 6 threads. No screen automation. Nothing pushed or merged
+without authorization. No material value the repository does not already source (lessons use silicon and SiO2 as
+shipped).
+
+**Left out:** new physics or new figure extraction; equation typesetting (plain text with Unicode, `V_th`, `µ`, `ε`);
+quizzes, scoring or progress tracking across sessions; C–V, breakdown, temperature, SOI, FinFET and GAA lessons (later
+tracks, the same format); a lesson editor (lessons are edited as text); a second language.
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| GU1 | 0 | **Biases as parameters.** `[sweep]` joins the sections that take `$name` (a number parameter, substituted as its text), so `contact gate = $Vg` and `contact drain = 0 : $Vd_max : 0.05` work and the panel can sweep a bias. | A deck without `$` in `[sweep]` is untouched (bit-identical). |
+| GU2 | 0 | **The lesson format.** In a deck's leading comment block: `# lesson: <title>`, `# track: basics \| intermediate \| advanced`, `# order: <n>`, then steps, each `# step: <heading>` followed by its prose (`# ` lines, blank `#` a paragraph break) and at most one action line each of: `# do: set <name> = <value>` (a dimensions-panel edit), `# do: sweep <name> = <values>` (DT6's value syntax), `# do: run`, `# do: edit [<section>] <key> = <value>` (one deck line, as the deck editor writes it), `# show: geometry \| fields \| curves \| results`, `# report: <figure>[, <figure>]` (Unit 24 figure names). Model `app/lesson.hpp`: `parse_lesson(text) -> expected<Lesson, error at line>`, `list_lessons(dir)` ordered by track then order. | A deck without `# lesson:` is not a lesson; the deck parser ignores the comments as today. Errors name the line: an unknown action, an action before the first step, a sweep of a name the deck has no parameter for. |
+| GU3 | 1 | **The guide pane.** View > Guide (toggle) shows a pane at the window's right, beside every tab: a track and lesson picker (the lessons shipped, plus any in the open deck's folder), the step's heading and prose (wrapped, scrollable), the action as a button (`Sweep Na = 1e16 … 1e18`), "What happened" after it, Back / Next and "Step n of m". Choosing a lesson opens a copy of its deck (as Start's examples do). | Both themes; DPI-aware as the other panes; keyboard reachable (Tab order, Enter on the action). |
+| GU4 | 1 | **Actions through what exists.** set → the dimensions panel's row edit; sweep → `RunController::start_sweep`; run → F5's path; edit → one line through the deck editor's undo; show → the tab switch. The guide never solves or extracts on its own. | A step whose action fails shows the existing error text in the pane and stays on the step. |
+| GU5 | 1 | **What happened.** After a step's sweep, the report line lists each `# report:` figure per value from `sweep_figures` (`V_th: 0.31 → 0.58 → 0.92 V`); after a run, the figure against the step's previous run (`SS: 88 → 71 mV/dec`). Numbers only from the run's files. | A figure a run lacks shows "—" with the reason the extractor gave. |
+| GU6 | 2 | **The lessons.** `examples/lessons/`, shipped by the installer beside `examples/`. Basics: 1 the gate and the channel (Id–Vg, threshold), 2 body doping and V_th, 3 oxide thickness and gate control, 4 drain bias: linear and saturation (Id–Vd at several Vg). Intermediate: 5 subthreshold swing and the 60 mV/dec limit, 6 gate work function, 7 source/drain doping and series resistance, 8 mobility and the vertical field. Advanced: 9 short channels and V_th roll-off (Lg), 10 DIBL (V_th against Vd), 11 output conductance, 12 velocity saturation (`field_mobility` on/off), 13 what the mesh and the models change. Each lesson's prose states the expected trend and the textbook relation behind it; the trend is the one the lesson's deck actually gives. | Two meshes per lesson at most; each lesson's runs finish in under a minute on 6 threads. |
+
+**Criteria (fixed before code):**
+
+| # | Criterion |
+|---|---|
+| GUC1 | Every shipped deck and test deck builds to the same bits with GU1 in (the existing deck/build tests pass unchanged); new tests: a `$` bias in `[sweep]` substitutes, a length parameter there is refused naming the line, a missing parameter is refused. |
+| GUC2 | Lesson parser tests: every action form, prose paragraphs, track/order sorting, each error naming its line; a non-lesson deck yields "not a lesson"; every file in `examples/lessons/` parses. |
+| GUC3 | Pane tests through the existing window test harness (no screen automation): toggling, picking a lesson opens a copy, Back/Next bounds, each action reaching its host call (a recording host), a failing action keeping the step. |
+| GUC4 | Lesson physics test (Release, targeted): each lesson deck runs, and the trend its prose claims holds in its own results (e.g. V_th rises with Na; SS ≥ 60 mV/dec; V_th falls as Lg shrinks; DIBL > 0). A lesson whose claim fails is not shipped. |
+| GUC5 | Report formatting tests: per-value lists, before → after, a missing figure. |
+| GUC6 | Mutants: at least 8 per slice caught (e.g. `[sweep]` substitution reaching `[solver]`; an action parsed into the previous step; Next past the last step; a report reading the wrong figure; a lesson opened in place instead of a copy). |
+
+**Owner questions (ruled under the standing instruction, 2026-11-27):**
+- **GUQ1 — where the guide lives.** (a, ruled) a right-side pane toggled from View, beside every tab; (b) a new tab
+  (it would hide the Curves and Results the steps point at).
+- **GUQ2 — where lessons live.** (a, ruled) `examples/lessons/`, shipped by the installer (a new directory, named here
+  for the owner's tree); (b) compiled in (approach C).
+- **GUQ3 — syllabus.** (a, ruled) the thirteen lessons of GU6; C–V, breakdown, temperature, SOI and FinFET tracks later.
+
+**Slice 0 (2026-11-27; GU1, GU2, GU5).** `[sweep]` takes `$name` (`src/deck/parameters.cpp`); `deck.parameters`
+and all 28 deck tests pass. `app/lesson.hpp`: `parse_lesson`, `list_lessons`, `set_entry`, `sweep_report`,
+`run_report`; `app.lesson` 9 cases. A comment line that is not a key is prose, not an error (a typo'd key reads as
+prose). Mutants 10/10 caught.
+
+**Slice 1 (2026-11-27; GU3, GU4, GU5).** `Panes::guide` and `Layout::guide_shown`/`guide_width` (the saved `window`
+line no longer rebuilds `Layout` positionally); View > Guide on F1, "Guide (&J)" (every letter of "Guide" is taken
+in View). `src/app/guide_pane.*`; `MainWindow` hosts it; set and edit go through the new `GeometryPage::edit_text`
+(one undo, on the Geometry tab). `app.layout`, `app.app_state`, `app.commands`, `app_window.guide_window` (12
+cases) and Release `app_window_guide_run` (a real two-run sweep, 33 s) pass; `dimensions_window`, `sweep_window`,
+`geometry_window` and `window` unchanged. Not tested: the discard prompt on switching lessons (a modal box; the
+same `confirm_discard` as Start's examples). The pane uses system colours (the Aurora theme is not on this branch).
+Mutants 13/13 caught.
+
+**Slice 2 (2026-11-27; GU6).** Thirteen decks in `examples/lessons/` from one planar MOSFET body (parameters `Vd`,
+`Vg`, `Vmax`, `phi`, `nx` added). `app.lessons` (they parse: 4/4/5, orders 1–13, prose in every step, figure names
+known) and Release `app_lessons` (`[.lessons]`, 1184 s): every claim holds in the lesson's own results — V_th and SS
+rise with Na; both fall as tox thins; Id at the last drain bias rises with Vg; SS ≥ 60 mV/dec and rising with Na;
+V_th steps 0.25–0.35 V per 0.3 eV with SS within 3 mV/dec; g_m max rises with Nsd; Lombardi lowers g_m and moves V_th
+under 0.1 V; V_th rolls off with Lg and falls with Vd; the short gate's current exceeds the long one's; the field
+mobility lowers g_m; the 51/101 meshes agree within 0.01 V and closer than 26/51. Textbook statements not checked
+(no g_ds figure in the app): lesson 11's output conductance, the long-channel square law (4, 12); lesson 11 asks the
+learner to compare the curves. Mutants 10/10 caught. Full suites and Debug wait for the owner's word.
+
+**Final review (2026-11-27).** Fixed: the pane opens with no lesson chosen and a step refuses on any deck but the
+lesson copy the guide opened (it could otherwise sweep or edit the learner's own deck); a guide sweep that fails
+part-way reports the finished runs ("—" for the rest) and then the error. Not built, against GU5 and GU3: the
+extractor's reason beside a missing figure (the app keeps no reason, only "—"), and lessons from the open deck's
+folder in the picker (that folder holds the learner's copies; every lesson would show twice).
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

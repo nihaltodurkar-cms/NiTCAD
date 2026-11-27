@@ -82,6 +82,8 @@ public:
 
     // Reads the deck again (the tab shown, the deck edited elsewhere); `fit` frames the domain.
     void reload(bool fit = false, bool force = false);
+    // Unit 26p (GU4): the deck replaced by an edit made elsewhere (the guide), as one undo, the dimensions read again.
+    void edit_text(const std::string& text);
     void fit();
     void set_tool(Tool t);
     void set_view(const geo::View& v);  // the tests: a known zoom and origin

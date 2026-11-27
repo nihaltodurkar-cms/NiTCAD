@@ -1140,6 +1140,7 @@ add_library(nitcad_app STATIC
   src/app/dimensions.cpp
   src/app/new_device.cpp
   src/app/sweep_results.cpp
+  src/app/lesson.cpp
   src/app/document.cpp
   src/app/run_controller.cpp
   src/app/workspace.cpp
@@ -1188,6 +1189,8 @@ add_executable(nitcad_app_test
   tests/app/library_test.cpp
   tests/app/new_device_test.cpp
   tests/app/sweep_results_test.cpp
+  tests/app/lesson_test.cpp
+  tests/app/lessons_test.cpp
   tests/app/unlock_test.cpp
   tests/app/guardrails_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
@@ -1217,7 +1220,8 @@ add_library(nitcad_app_window STATIC
   src/app/modeller_bar.cpp
   src/app/dimensions_panel.cpp
   src/app/new_device_dialog.cpp
-  src/app/sweep_dialog.cpp)
+  src/app/sweep_dialog.cpp
+  src/app/guide_pane.cpp)
 target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid dwmapi advapi32 d2d1 dwrite)
 # The start page lists the examples beside the executable, else the source tree's (26-3, VQ11).
 target_compile_definitions(nitcad_app_window PRIVATE NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
@@ -1231,6 +1235,7 @@ add_executable(nitcad_app_window_test tests/app/window_test.cpp tests/app/self_t
   tests/app/dimensions_window_test.cpp
   tests/app/new_device_window_test.cpp
   tests/app/sweep_window_test.cpp
+  tests/app/guide_window_test.cpp
   tests/app/unlock_window_test.cpp
   tests/app/guardrails_window_test.cpp)
 target_link_libraries(nitcad_app_window_test PRIVATE nitcad_app_window Catch2::Catch2WithMain dxgi dxguid)
@@ -1249,6 +1254,9 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME app_examples_3d COMMAND nitcad_app_test "[examples3d]")
   add_test(NAME app_window_3d COMMAND nitcad_app_window_test "[selftest3d]")
+  # Unit 26p (GU5): a guide step's sweep of the planar MOSFET and its report.
+  add_test(NAME app_window_guide_run COMMAND nitcad_app_window_test "[.guide_run]")
+  add_test(NAME app_lessons COMMAND nitcad_app_test "[.lessons]")  # every lesson's claim, about 10 minutes
 endif()
 # WG1 measures the UI thread's message loop against 100 ms, so these files run with no other test beside
 # them: under ctest -j the self-test's loop stalled 494 and 611 ms and its solve ran at half speed.

@@ -19,6 +19,7 @@ struct Rect {
 struct Panes {
     Rect toolbar, tree, tabs, page, metrics, inspector, console, status;
     Rect left_splitter, right_splitter, console_splitter;
+    Rect guide, guide_splitter;  // Unit 26p (GU3): empty while the guide is hidden
 };
 
 // Pixels at 96 DPI to the monitor's (rounded to nearest).
@@ -27,7 +28,7 @@ struct Panes {
 // Default and minimum sizes at 96 DPI.
 inline constexpr int tree_width_96 = 215, inspector_width_96 = 260, splitter_96 = 4, metrics_height_96 = 46,
                      tab_strip_96 = 28, min_side_96 = 120, min_centre_96 = 200,
-                     console_height_96 = 200, console_strip_96 = 30, min_page_96 = 80;
+                     console_height_96 = 200, console_strip_96 = 30, min_page_96 = 80, guide_width_96 = 320;
 
 // The panes for a client area at a DPI. toolbar_height and status_height are the controls' own heights
 // (in pixels at this DPI); the tree and inspector widths come from the saved layout (96-DPI pixels, 0 the
