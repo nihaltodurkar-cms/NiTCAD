@@ -221,9 +221,44 @@ TEST_CASE("parameters: errors on the referring line (MC7)", "[deck][parameters]"
     CHECK(has(failure("[parameters]\na = 1um\na = 2um\n" + body), "t.deck:3: parameter 'a' given twice (first on line 2)"));
     CHECK(has(failure("[parameters]\na = 1um\n[parameters]\nb = 1um\n" + body), "t.deck:3: a second [parameters] section"));
     CHECK(has(failure("[parameters p]\na = 1um\n" + body), "t.deck:1: [parameters] takes no name"));
-    // outside [mesh], [region], [contact], [doping]
-    CHECK(has(failure("[parameters]\nT = 300\n\n[device]\ntemperature = $T\n"), "t.deck:5: a parameter reference outside"));
+    // outside [mesh], [region], [contact], [doping] and [sweep]
+    CHECK(has(failure("[parameters]\nT = 300\n\n[device]\ntemperature = $T\n"), "t.deck:5: a parameter reference outside [mesh], [region], [contact], [doping] and [sweep]"));
     // a '$' not starting a reference
     CHECK(has(failure(body + "y = 1um$a\n"), "t.deck:8: "));
     CHECK(has(failure(body + "y = $ 1um\n"), "a '$' not starting a reference"));
+}
+
+// Unit 26p (GU1): [sweep] takes $name, so a bias can be a parameter.
+namespace {
+std::string sweep_value(const std::string& text, const std::string& key) {
+    const auto d = deck::parse(text, "t.deck");
+    REQUIRE(d);
+    const auto s = deck::substituted(*d);
+    REQUIRE(s);
+    for (const auto& sec : s->sections) {
+        if (sec.kind != "sweep") continue;
+        for (const auto& e : sec.entries) {
+            if (e.key == key) return e.value;
+        }
+    }
+    FAIL("no such [sweep] entry");
+    return {};
+}
+}  // namespace
+
+TEST_CASE("parameters: a number parameter substitutes in [sweep] (GU1)", "[deck][parameters]") {
+    CHECK(sweep_value("[parameters]\nVg = 0.8\n\n[sweep]\ncontact gate = $Vg\n", "contact gate") == "0.8");
+}
+
+TEST_CASE("parameters: a range in [sweep] takes parameters (GU1)", "[deck][parameters]") {
+    CHECK(sweep_value("[parameters]\nVd = 1.2\n\n[sweep]\ncontact drain = 0 : $Vd : 0.05\n", "contact drain") ==
+          "0 : 1.2 : 0.05");
+}
+
+TEST_CASE("parameters: a missing parameter in [sweep] is refused on its line (GU1)", "[deck][parameters]") {
+    const auto d = deck::parse("[parameters]\nVd = 1.2\n\n[sweep]\ncontact drain = $nope\n", "t.deck");
+    REQUIRE(d);
+    const auto s = deck::substituted(*d);
+    REQUIRE_FALSE(s);
+    CHECK(has(s.error().message, "t.deck:5: undefined parameter '$nope'"));
 }
