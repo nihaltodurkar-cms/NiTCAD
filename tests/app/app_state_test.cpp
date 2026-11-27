@@ -85,3 +85,14 @@ TEST_CASE("app state 26h: the axis box is saved; old files have it on (JD1, JQ3,
     s.axis_box = true;
     CHECK(app::parse_state(app::serialize(s)).axis_box);
 }
+
+TEST_CASE("app state: the Aurora theme is saved; old files have it off", "[app]") {
+    CHECK_FALSE(app::parse_state("# NiTCAD application state\nrecent = a.deck\n").aurora);
+    app::AppState s;
+    CHECK_FALSE(s.aurora);
+    s.aurora = true;
+    CHECK(app::serialize(s).find("aurora = 1\n") != std::string::npos);
+    CHECK(app::parse_state(app::serialize(s)).aurora);
+    s.aurora = false;
+    CHECK_FALSE(app::parse_state(app::serialize(s)).aurora);
+}

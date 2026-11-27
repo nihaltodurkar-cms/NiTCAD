@@ -1419,6 +1419,29 @@ TEST_CASE("app window 26d: files dropped on the window (ZD4, ZG4)", "[app]") {
     CHECK(w->document().modified());
 }
 
+TEST_CASE("app window: View > Aurora theme turns the light futuristic look on and back off", "[app]") {
+    auto w = window();
+    const HWND h = w->hwnd();
+    const auto background = [&] { return reinterpret_cast<HBRUSH>(GetClassLongPtrW(h, GCLP_HBRBACKGROUND)); };
+    HWND tree = FindWindowExW(h, nullptr, WC_TREEVIEWW, nullptr);
+    REQUIRE(tree);
+    // Off by default: the classic look, as before the theme.
+    CHECK_FALSE(w->aurora_on());
+    CHECK(background() == GetSysColorBrush(COLOR_BTNFACE));
+    CHECK(TreeView_GetBkColor(tree) == static_cast<COLORREF>(-1));
+    const int updates = w->title_theme_updates();
+    w->execute(app::Command::aurora_theme);
+    CHECK(w->aurora_on());
+    CHECK(background() != GetSysColorBrush(COLOR_BTNFACE));
+    CHECK(TreeView_GetBkColor(tree) == RGB(255, 255, 255));
+    CHECK(w->title_theme_updates() == updates + 1);
+    CHECK(GetMenuState(GetMenu(h), static_cast<UINT>(app::Command::aurora_theme), MF_BYCOMMAND) & MF_CHECKED);
+    w->execute(app::Command::aurora_theme);
+    CHECK_FALSE(w->aurora_on());
+    CHECK(background() == GetSysColorBrush(COLOR_BTNFACE));
+    CHECK(TreeView_GetBkColor(tree) == static_cast<COLORREF>(-1));
+}
+
 TEST_CASE("app window 26d: the taskbar's progress and the title bar's theme (ZD5, ZD6, ZG5, ZG6)", "[app]") {
     const fs::path dir = app_test::scratch("window_shell");
     const fs::path deck = app_test::write(dir, "diode.deck", app_test::diode_sweep());

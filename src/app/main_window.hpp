@@ -197,6 +197,7 @@ public:
     [[nodiscard]] const TaskbarProgress& taskbar_progress() const noexcept { return taskbar_; }
     [[nodiscard]] bool dark_title() const noexcept { return dark_title_; }
     [[nodiscard]] int title_theme_updates() const noexcept { return title_theme_updates_; }
+    [[nodiscard]] bool aurora_on() const noexcept { return state_.aurora; }  // View > Aurora theme
     // Unit 26e (HD1-HD3): the hover readout, whether it is shown and its text (kept while the window is hidden,
     // when the tooltip itself is not activated); View > Hover readout.
     [[nodiscard]] bool readout_shown() const noexcept { return readout_shown_; }
@@ -284,6 +285,10 @@ private:
     void layout_inspector();
     void draw_section_header(const DRAWITEMSTRUCT& d);
     void make_icons();
+    // The Aurora theme (View > Aurora theme) or the classic look, on every part the window paints.
+    void apply_theme();
+    LRESULT draw_toolbar(NMTBCUSTOMDRAW& cd);
+    static LRESULT CALLBACK tabs_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR self);
     void update_status_progress();
     void update_title();
     // The state part's messages also go to the console, at the level given (Unit 26j); show_status only shows
@@ -455,6 +460,8 @@ private:
     int sweep_view_ = -1;
     HACCEL accelerators_ = nullptr;
     HFONT font_ = nullptr, bold_ = nullptr;
+    HBRUSH canvas_brush_ = nullptr, field_brush_ = nullptr;  // the Aurora theme's canvas and boxes
+    bool aurora_title_ = false;  // the title bar coloured by the Aurora theme (reset when it is turned off)
     int dpi_ = 96;
     int tab_ = tab_start;
     Panes panes_;
