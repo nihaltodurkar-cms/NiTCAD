@@ -1140,6 +1140,7 @@ add_library(nitcad_app STATIC
   src/app/dimensions.cpp
   src/app/new_device.cpp
   src/app/sweep_results.cpp
+  src/app/lesson.cpp
   src/app/document.cpp
   src/app/run_controller.cpp
   src/app/workspace.cpp
@@ -1188,6 +1189,7 @@ add_executable(nitcad_app_test
   tests/app/library_test.cpp
   tests/app/new_device_test.cpp
   tests/app/sweep_results_test.cpp
+  tests/app/lesson_test.cpp
   tests/app/unlock_test.cpp
   tests/app/guardrails_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
