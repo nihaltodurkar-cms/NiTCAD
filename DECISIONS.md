@@ -5653,6 +5653,30 @@ tracks, the same format); a lesson editor (lessons are edited as text); a second
   for the owner's tree); (b) compiled in (approach C).
 - **GUQ3 — syllabus.** (a, ruled) the thirteen lessons of GU6; C–V, breakdown, temperature, SOI and FinFET tracks later.
 
+**Slice 0 (2026-11-27; GU1, GU2, GU5).** `[sweep]` takes `$name` (`src/deck/parameters.cpp`); `deck.parameters`
+and all 28 deck tests pass. `app/lesson.hpp`: `parse_lesson`, `list_lessons`, `set_entry`, `sweep_report`,
+`run_report`; `app.lesson` 9 cases. A comment line that is not a key is prose, not an error (a typo'd key reads as
+prose). Mutants 10/10 caught.
+
+**Slice 1 (2026-11-27; GU3, GU4, GU5).** `Panes::guide` and `Layout::guide_shown`/`guide_width` (the saved `window`
+line no longer rebuilds `Layout` positionally); View > Guide on F1, "Guide (&J)" (every letter of "Guide" is taken
+in View). `src/app/guide_pane.*`; `MainWindow` hosts it; set and edit go through the new `GeometryPage::edit_text`
+(one undo, on the Geometry tab). `app.layout`, `app.app_state`, `app.commands`, `app_window.guide_window` (12
+cases) and Release `app_window_guide_run` (a real two-run sweep, 33 s) pass; `dimensions_window`, `sweep_window`,
+`geometry_window` and `window` unchanged. Not tested: the discard prompt on switching lessons (a modal box; the
+same `confirm_discard` as Start's examples). The pane uses system colours (the Aurora theme is not on this branch).
+Mutants 13/13 caught.
+
+**Slice 2 (2026-11-27; GU6).** Thirteen decks in `examples/lessons/` from one planar MOSFET body (parameters `Vd`,
+`Vg`, `Vmax`, `phi`, `nx` added). `app.lessons` (they parse: 4/4/5, orders 1–13, prose in every step, figure names
+known) and Release `app_lessons` (`[.lessons]`, 1184 s): every claim holds in the lesson's own results — V_th and SS
+rise with Na; both fall as tox thins; Id at the last drain bias rises with Vg; SS ≥ 60 mV/dec and rising with Na;
+V_th steps 0.25–0.35 V per 0.3 eV with SS within 3 mV/dec; g_m max rises with Nsd; Lombardi lowers g_m and moves V_th
+under 0.1 V; V_th rolls off with Lg and falls with Vd; the short gate's current exceeds the long one's; the field
+mobility lowers g_m; the 51/101 meshes agree within 0.01 V and closer than 26/51. Textbook statements not checked
+(no g_ds figure in the app): lesson 11's output conductance, the long-channel square law (4, 12); lesson 11 asks the
+learner to compare the curves. Mutants 10/10 caught. Full suites and Debug wait for the owner's word.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
