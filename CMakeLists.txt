@@ -1288,3 +1288,13 @@ if(NITCAD_FUZZ)
   target_compile_options(nitcad_deck_syntax_fuzz PRIVATE /fsanitize=fuzzer)
   target_link_libraries(nitcad_deck_syntax_fuzz PRIVATE NiTCAD::deck)
 endif()
+
+# --- Install layout (packaging/nitcad.iss) ------------------------------------------
+# Everything flat in one folder: the app finds its examples beside the executable (VQ11).
+# The vcpkg libraries are static (x64-windows-static-md); the MSVC runtime is copied app-local.
+install(TARGETS nitcad nitcad-app RUNTIME DESTINATION .)
+install(DIRECTORY examples/ DESTINATION examples)
+install(FILES LICENSE README.md DESTINATION .)
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION .)
+set(CMAKE_INSTALL_UCRT_LIBRARIES OFF)  # the UCRT ships with Windows 10 and later
+include(InstallRequiredSystemLibraries)
