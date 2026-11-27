@@ -509,7 +509,37 @@ std::expected<MaterialParameters, base::Error> iii_v_binary(std::span<const doub
     return make();
 }
 
-constexpr std::array<MaterialEntry, 39> registry{{
+// --- 4H-SiC with impact ionization (MAD11; slice 4a, amendment 8) ------------------------------
+
+// `sic_4h` and the <0001> Chynoweth law of Hatakeyama et al. (owner rulings 2026-11-27): one law
+// over all fields (the switch field, which must be positive, changes nothing); no phonon
+// temperature factor (the paper gives none: the 300 K coefficients at every temperature).
+constexpr SemiconductorParameters silicon_carbide_4h_2004_parameters = [] {
+    SemiconductorParameters p = silicon_carbide_4h_parameters;
+    p.impact_ionization = {.electron = {.A_low_per_cm = 1.76e8, .B_low_V_per_cm = 3.30e7, .A_high_per_cm = 1.76e8,
+                                        .B_high_V_per_cm = 3.30e7, .switch_V_per_cm = 1.0},
+                           .hole = {.A_low_per_cm = 3.41e8, .B_low_V_per_cm = 2.50e7, .A_high_per_cm = 3.41e8,
+                                    .B_high_V_per_cm = 2.50e7, .switch_V_per_cm = 1.0},
+                           .phonon_energy_eV = 0.0};
+    return p;
+}();
+constexpr std::array<Citation, 4> sic_2004_sources{{
+    {"legacy materials.py (Baliga), as `sic_4h`", "every value but impact ionization, carried unchanged"},
+    {"Ioffe NSM archive, as `sic_4h`", "radiative coefficient, heat capacity"},
+    {"T. Hatakeyama, T. Watanabe, T. Shinohe, K. Kojima, K. Arai, N. Sano, Appl. Phys. Lett. 85, 1380 (2004), "
+     "Table I",
+     "impact ionization along <0001> (c-axis), alpha = A exp(-B / F), fitted over about 2-5 MV/cm"},
+    {"NiTCAD: no value given", "impact-ionization temperature factor (300 K coefficients at every temperature)"},
+}};
+constexpr auto sic_2004_cites = semiconductor_cites(
+    {0, "default"}, std::array<ParameterCitation, 6>{{{"radiative_cm3_s", 1, "secondary"},
+                                                      {"thermal.heat_capacity_J_cm3K", 1, "secondary"},
+                                                      {"impact_ionization.", 2, "fit"},
+                                                      {"impact_ionization.electron.switch_V_per_cm", 3, "default"},
+                                                      {"impact_ionization.hole.switch_V_per_cm", 3, "default"},
+                                                      {"impact_ionization.phonon_energy_eV", 3, "default"}}});
+
+constexpr std::array<MaterialEntry, 40> registry{{
     {"silicon", MaterialKind::semiconductor, 0, 0, "", "silicon, Couderc band set (default)", silicon_sources,
      fixed_semiconductor<silicon_parameters>},
     {"silicon_legacy", MaterialKind::semiconductor, 0, 0, "", "silicon, the legacy set", legacy_silicon_sources,
@@ -592,6 +622,9 @@ constexpr std::array<MaterialEntry, 39> registry{{
     {"inalas", MaterialKind::semiconductor, 1, 1, "inalas takes the In fraction x, 0 <= x <= 1",
      "In(x)Al(1-x)As between AlAs (x = 0) and InAs (x = 1) (no SRH lifetimes)", iii_v_sources,
      nitride_alloy<inalas_parameters>, iii_v_alloy_cites, true},
+    {"sic_4h_2004", MaterialKind::semiconductor, 0, 0, "",
+     "4H-SiC with Hatakeyama 2004 impact ionization along <0001> (c-axis; 300 K coefficients)", sic_2004_sources,
+     fixed_semiconductor<silicon_carbide_4h_2004_parameters>, sic_2004_cites, true},
 }};
 
 // --- metal presets (MAD6, MAD14; amendment 4) ---------------------------------------------------
