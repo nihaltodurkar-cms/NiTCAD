@@ -5270,6 +5270,27 @@ stops at 20 V: the hole density in the depletion region (n_i about 1e-18 cm^-3) 
 singular, as with `sic_4h_2004` and impact ionization (amendment 8). No tolerance loosened; the check is the
 hidden test `[.ga2o3_mac18]` until the engine handles ultrawide-gap minority carriers.
 
+**Amendment 10 (2026-11-27): slice 4c infrastructure (diamond transport laws; no material).** Owner rulings of
+2026-11-27 ("for 4c"): build the shared laws now; do not register `diamond` until Cheng 2023 (gap), Pernot and
+Koizumi 2008 (electron mobility) and Rashid 2008 (hole mobility) are read. Source read by the engineer:
+Is-haqzai, Deniz, Kroeninger, Weingarten, Diamond Relat. Mater. 164, 113558 (2026) (arXiv 2601.10807), Eqs. (5),
+(10), (11), (30), Tables 10 and 11. `physics/drift_velocity.hpp`: the Caughey-Thomas law in velocity form for any
+beta > 0, with dv/dE = mu0 (1 + x^beta)^(-1 - 1/beta) returned directly (mu0 at E = 0, where d mu / dE is
+singular for beta < 1; the beta >= 1 check on Canali laws is unchanged); the piecewise electron law, its switch
+field where the two branches meet, E_t = E_c [(v_s / (E_c mu01))^beta - 1]^(1/beta) (0.0852 V/um for Table 11,
+in place of the paper's fixed 0.08, where they differ by 2 %): a continuity-corrected form of the published
+model, not its exact reproduction; the low-field mobility is the caller's (doping dependent: the electron
+mu01, the hole mu0 = v_s / E_c,eff), v_s, E_c and beta the published ones, an engineering extension not
+validated by Table 11; Table 11 at 300 K only (Table 10's scaling covers 0.009-0.41 V/um and disagrees with
+Table 11 at 300 K). Rashid's hole law (review Eqs. (10)-(11)) maps onto the existing Caughey-Thomas
+parameters (alpha = gamma2, N_ref(T) = C0 (T / 300)^(-m1 / gamma2)): `rashid_mobility`, no Masetti law. Not
+wired into the assembler: no material carries the laws yet.
+Checks: Table 11 at 0.009, 0.08, 0.56, 1 and 12 V/um to four digits (the owner's regression points; the 0.56
+row recomputed by the engineer, electrons 4.903e6 and holes 6.927e6 cm/s, the owner's 4.859e6 and 6.865e6
+being about 0.9 % off: 6.865e6 is the hole value at E_c = 0.55 V/um); mu0,2 = v_s / E_c gives 4748 and 2744;
+E_t and continuity there, also for other mu01; dv/dE against differences for beta 0.41-2 and mu0 at E = 0;
+saturation to v_s; the Rashid mapping against its direct formula over T and N (synthetic coefficients).
+
 **Why.** A deck can name seven semiconductors (`silicon`, `silicon_legacy`, `germanium`, `gaas`, `algaas <x>`,
 `ingaas` fixed at In0.53, `sic_4h`), `sio2` and a generic `insulator` with an `eps_r`. They are chosen by an if-chain
 in `src/deck/build.cpp`. Gate tunnelling band data exists for `sio2` only, and there is no metal: gate metal inside a
